@@ -107,7 +107,9 @@ function legacyRejectionCode(status, error) {
 }
 
 // The PIN step refused a scan sent with a PIN: nothing was recorded, and the member sees why at the kiosk.
-export const pinScanRefusals = new Set(["pin_required", "invalid_pin", "pin_not_set", "pin_locked", "pin_incorrect"]);
+// pin_throttled: too many wrong PINs online, so the member waits before the next try. It must never fall back to the
+// cached hash.
+export const pinScanRefusals = new Set(["pin_required", "invalid_pin", "pin_not_set", "pin_locked", "pin_incorrect", "pin_throttled"]);
 
 /** A Worker answer other than 2xx to kioskApiRequest, with its status, code and body. */
 export class KioskApiError extends Error {

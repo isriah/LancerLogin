@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { scryptAsync } from "@noble/hashes/scrypt.js";
+import { clientPasswordHash, minimumPasswordLength } from "../packages/shared/src/password-hash.mjs";
+import { derivePasswordKey, newPasswordSalt } from "../packages/shared/src/password-key.mjs";
 import { verifyCloudflareAccountToken } from "./select-cloudflare-account.mjs";
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, value, index, all) => value.startsWith("--") ? [...pairs, [value.slice(2), all[index + 1]]] : pairs, []));
@@ -25,11 +26,12 @@ function readHidden(prompt) {
 }
 const password = await readHidden("New local password (at least 12 characters): ");
 const confirmation = await readHidden("Confirm new local password: ");
-if (password !== confirmation || password.length < 12) { console.error("Passwords must match and contain at least 12 characters."); process.exit(2); }
+// The Worker no longer sees passwords, so this script, like the dashboard, is where the minimum length is enforced.
+if (password !== confirmation || password.length < minimumPasswordLength) { console.error("Passwords must match and contain at least 12 characters."); process.exit(2); }
 
-const salt = crypto.getRandomValues(new Uint8Array(16)); const options = { N: 32_768, r: 8, p: 1, dkLen: 32, maxmem: 64 * 1024 * 1024, asyncTick: 5 };
-const encoded = (value) => Buffer.from(value).toString("base64url");
-const hash = `scrypt$${options.N}$${options.r}$${options.p}$${encoded(salt)}$${encoded(await scryptAsync(password, salt, options))}`;
+// The same `scrypt-c` row the dashboard produces: scrypt runs here, and D1 stores only SHA-256("lancerlogin:password:v2" + K).
+const salt = newPasswordSalt();
+const hash = await clientPasswordHash(salt, await derivePasswordKey(password, salt));
 const command = `UPDATE users SET password_hash = '${hash}', failed_login_count = 0, locked_until = NULL WHERE installation_id = 'primary' AND local_username = '${username}'; SELECT changes() AS passwords_reset;`;
 const executable = process.platform === "win32" ? "npx.cmd" : "npx";
 const child = spawn(executable, ["wrangler", "d1", "execute", database, "--remote", "--command", command], { stdio: "inherit", shell: false, env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: accountId } });

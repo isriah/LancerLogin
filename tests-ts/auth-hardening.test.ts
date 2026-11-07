@@ -5,10 +5,11 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import worker, { type Env } from "../apps/api/src/index.ts";
-import { createSessionCodec, createSignedStateCodec, hashPassword } from "../apps/api/src/runtime-security.ts";
+import { createSessionCodec, createSignedStateCodec } from "../apps/api/src/runtime-security.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
 import type { D1Database } from "../apps/api/src/d1-usage.ts";
 import { TestD1Database } from "./fixtures/d1-database.ts";
+import { legacyPassword, localSignIn, passwordCredential, randomKey, storedPassword } from "./fixtures/passwords.ts";
 
 class Database extends TestD1Database {
   constructor(installation = true) {
@@ -37,6 +38,8 @@ function call(env: Env, path: string, options: { method?: string; body?: unknown
   if (options.ip) headers["cf-connecting-ip"] = options.ip;
   return worker.fetch(new Request(`https://api.example.test${path}`, { method: options.method ?? (options.body === undefined ? "GET" : "POST"), headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) }), env);
 }
+/** Signs in the way the dashboard does: the salt endpoint, then K. */
+const signIn = (env: Env, username: string, password: string, ip?: string) => localSignIn((path, body) => call(env, path, { body, ip }), username, password);
 const setCookie = (response: Response, name: string) => response.headers.getSetCookie().map((value) => value.split(";")[0]!).find((value) => value.startsWith(`${name}=`));
 const quietErrors = (context: TestContext) => context.mock.method(console, "error", (...values: unknown[]) => { if (process.env.AUTH_TEST_DEBUG) console.log(...values); });
 
@@ -93,26 +96,26 @@ test("the Calendar OAuth state can never be used as a session, and a session can
 
 test("parallel wrong passwords lock the account after exactly five failures and refuse further guesses", async () => {
   const db = new Database(); const env = environment(db);
-  db.sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = 'admin'").run(await hashPassword("correct horse battery staple"));
+  db.sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = 'admin'").run(await storedPassword("correct horse battery staple"));
   const existing = await sessionFor("admin", "admin");
-  const results = await Promise.all(Array.from({ length: 8 }, (_, index) => call(env, "/auth/local", { body: { username: "admin", password: `wrong password ${index}` } })));
+  const results = await Promise.all(Array.from({ length: 8 }, (_, index) => call(env, "/auth/local", { body: { username: "admin", key: randomKey() } })));
   assert.deepEqual(results.map((result) => result.status), Array(8).fill(401));
   const state = db.value<{ failures: number; lockedUntil: string | null; epoch: number }>("SELECT failed_login_count AS failures, locked_until AS lockedUntil, session_epoch AS epoch FROM users WHERE id = 'admin'")!;
   assert.equal(state.failures, 5, "every concurrent failure is counted, and none after the lock");
   assert.ok(state.lockedUntil && Date.parse(state.lockedUntil) > Date.now());
   assert.equal(state.epoch, 0, "a lock blocks new sign-ins but never revokes sessions, so guessing cannot sign the owner out");
   assert.equal((await call(env, "/auth/session", { cookie: existing })).status, 200);
-  const correct = await call(env, "/auth/local", { body: { username: "admin", password: "correct horse battery staple" } });
+  const correct = await signIn(env, "admin", "correct horse battery staple");
   assert.equal(correct.status, 401);
   assert.equal(setCookie(correct, "lancerlogin_session"), undefined);
 
   // An Admin password reset clears the lock and revokes the account's sessions.
   db.sqlite.exec("INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin-2','primary','second','admin','2026-10-18')");
-  const reset = await call(env, "/admin/users/admin", { method: "PATCH", body: { localPassword: "a new correct horse battery" }, cookie: await sessionFor("admin-2", "admin") });
+  const reset = await call(env, "/admin/users/admin", { method: "PATCH", body: { localPasswordKey: await passwordCredential("a new correct horse battery") }, cookie: await sessionFor("admin-2", "admin") });
   assert.equal(reset.status, 200, await reset.clone().text());
   assert.deepEqual({ ...db.value("SELECT failed_login_count AS failures, locked_until AS lockedUntil, session_epoch AS epoch FROM users WHERE id = 'admin'") }, { failures: 0, lockedUntil: null, epoch: 1 });
   assert.equal((await call(env, "/auth/session", { cookie: existing })).status, 401, "the reset revokes the session the lock left alone");
-  const login = await call(env, "/auth/local", { body: { username: "admin", password: "a new correct horse battery" } });
+  const login = await signIn(env, "admin", "a new correct horse battery");
   assert.equal(login.status, 200);
   assert.equal((await call(env, "/auth/session", { cookie: setCookie(login, "lancerlogin_session") })).status, 200);
 });
@@ -144,12 +147,12 @@ test("public authentication routes are throttled per client address without new 
 test("a setup code cannot claim the installation again after DELETE INSTALLATION, except from the deleting browser", async (context) => {
   quietErrors(context);
   const db = new Database(false); const env = environment(db, { APP_MODE: "unconfigured" });
-  const input = { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple" };
+  const input = { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPasswordKey: await passwordCredential("correct horse battery staple") };
   const first = await call(env, "/setup/bootstrap", { body: input });
   assert.equal(first.status, 201, await first.clone().text());
   assert.equal(db.value<{ n: number }>("SELECT COUNT(*) AS n FROM bootstrap_code_claims")?.n, 1);
   assert.equal(JSON.stringify(db.sqlite.prepare("SELECT * FROM bootstrap_code_claims").all()).includes(setupCodeHash), false, "the Worker secret value is not stored");
-  const login = await call(env, "/auth/local", { body: { username: "director", password: "correct horse battery staple" } });
+  const login = await signIn(env, "director", "correct horse battery staple");
   const adminCookie = setCookie(login, "lancerlogin_session")!;
 
   const deleted = await call(env, "/admin/data", { method: "DELETE", body: { scope: "installation", confirmation: "DELETE INSTALLATION" }, cookie: adminCookie });
@@ -175,13 +178,13 @@ test("a setup code cannot claim the installation again after DELETE INSTALLATION
   // Authority epochs survive deletion by design; the new installation continues them and its module platform works.
   assert.deepEqual({ ...db.value("SELECT a.revision AS administration, e.revision AS epoch FROM platform_module_administration a JOIN platform_module_administration_epochs e USING(installation_id)") }, { administration: 1, epoch: 1 });
   assert.equal(db.value<{ generation: number }>("SELECT m.generation FROM platform_modules m JOIN platform_module_epochs e USING(installation_id, module_id) WHERE m.module_id = 'attendance' AND e.generation = m.generation")?.generation, 2);
-  const secondAdmin = setCookie(await call(env, "/auth/local", { body: { username: "director", password: "correct horse battery staple" } }), "lancerlogin_session");
+  const secondAdmin = setCookie(await signIn(env, "director", "correct horse battery staple"), "lancerlogin_session");
   assert.equal((await call(env, "/platform/modules", { cookie: secondAdmin })).status, 200);
 
   // A rotated setup code works for anyone, and an installation created before claims existed is recorded on deletion.
   const rotated = "rotated synthetic setup code";
   const rotatedEnv = environment(db, { APP_MODE: "unconfigured", BOOTSTRAP_CODE_HASH: createHash("sha256").update(rotated).digest("base64url") });
-  const relogin = await call(env, "/auth/local", { body: { username: "director", password: "correct horse battery staple" } });
+  const relogin = await signIn(env, "director", "correct horse battery staple");
   db.sqlite.exec("DELETE FROM bootstrap_code_claims");
   assert.equal((await call(rotatedEnv, "/admin/data", { method: "DELETE", body: { scope: "installation", confirmation: "DELETE INSTALLATION" }, cookie: setCookie(relogin, "lancerlogin_session") })).status, 200);
   assert.equal((await call(rotatedEnv, "/setup/bootstrap", { body: { ...input, setupCode: rotated } })).status, 409, "the code in use at deletion is now claimed");
@@ -192,7 +195,7 @@ test("a setup code cannot claim the installation again after DELETE INSTALLATION
 test("first-Admin setup with a local password signs the Admin in with the local sign-in session cookie", async (context) => {
   quietErrors(context);
   const db = new Database(false); const env = environment(db, { APP_MODE: "unconfigured" });
-  const input = { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple" };
+  const input = { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPasswordKey: await passwordCredential("correct horse battery staple") };
   const created = await call(env, "/setup/bootstrap", { body: input });
   assert.equal(created.status, 201, await created.clone().text());
   const body = await created.json() as { signedIn: boolean; user?: { id: string; role: string }; admin: { id: string } };
@@ -202,7 +205,7 @@ test("first-Admin setup with a local password signs the Admin in with the local 
   assert.equal(others.length, 0, "a first setup without a reset grant sets only the session cookie");
   assert.match(issued!, /^lancerlogin_session=[^;]+; HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=28800$/);
   // The same cookie attributes as /auth/local, so first setup grants no weaker or longer-lived session than signing in.
-  const login = await call(env, "/auth/local", { body: { username: "director", password: "correct horse battery staple" } });
+  const login = await signIn(env, "director", "correct horse battery staple");
   assert.equal(login.status, 200);
   const attributes = (value: string) => value.split(";").slice(1).map((part) => part.trim());
   assert.deepEqual(attributes(issued!), attributes(login.headers.getSetCookie()[0]!));
@@ -216,7 +219,7 @@ test("first-Admin setup with a local password signs the Admin in with the local 
 
 test("first-Admin setup stores the release colors, or the development colors when DEFAULT_THEME is development", async (context) => {
   quietErrors(context);
-  const input = { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple" };
+  const input = { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPasswordKey: await passwordCredential("correct horse battery staple") };
   for (const [extra, expected] of [
     [{}, { primaryColor: "#b80100", secondaryColor: "#eeb822" }],
     [{ DEFAULT_THEME: "production" }, { primaryColor: "#b80100", secondaryColor: "#eeb822" }],
@@ -244,7 +247,7 @@ test("first-Admin setup issues no session for Google-only setup or a Worker with
   assert.equal(setCookie(googleSetup, "lancerlogin_session"), undefined);
 
   const keyless = new Database(false);
-  const keylessSetup = await call(environment(keyless, { APP_MODE: "unconfigured", SESSION_KEY: undefined }), "/setup/bootstrap", { body: { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple" } });
+  const keylessSetup = await call(environment(keyless, { APP_MODE: "unconfigured", SESSION_KEY: undefined }), "/setup/bootstrap", { body: { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPasswordKey: await passwordCredential("correct horse battery staple") } });
   assert.equal(keylessSetup.status, 201, await keylessSetup.clone().text());
   assert.equal((await keylessSetup.json() as { signedIn: boolean }).signedIn, false);
   assert.equal(setCookie(keylessSetup, "lancerlogin_session"), undefined);
@@ -252,11 +255,11 @@ test("first-Admin setup issues no session for Google-only setup or a Worker with
 
 test("logout, password reset and deactivation revoke sessions; tokens from before epochs stay valid", async () => {
   const db = new Database(); const env = environment(db);
-  db.sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = 'operator'").run(await hashPassword("operator horse battery staple"));
+  db.sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = 'operator'").run(await storedPassword("operator horse battery staple"));
   const legacy = await sessionFor("operator", "operator");
   assert.equal((await call(env, "/auth/session", { cookie: legacy })).status, 200, "a deploy does not sign anyone out");
 
-  const login = await call(env, "/auth/local", { body: { username: "operator", password: "operator horse battery staple" } });
+  const login = await signIn(env, "operator", "operator horse battery staple");
   const current = setCookie(login, "lancerlogin_session")!;
   const logout = await call(env, "/auth/logout", { method: "POST", body: {}, cookie: current });
   assert.equal(logout.status, 200);
@@ -268,14 +271,14 @@ test("logout, password reset and deactivation revoke sessions; tokens from befor
   assert.equal(db.value<{ epoch: number }>("SELECT session_epoch AS epoch FROM users WHERE id = 'operator'")?.epoch, 1);
 
   const admin = await sessionFor("admin", "admin");
-  const fresh = setCookie(await call(env, "/auth/local", { body: { username: "operator", password: "operator horse battery staple" } }), "lancerlogin_session")!;
+  const fresh = setCookie(await signIn(env, "operator", "operator horse battery staple"), "lancerlogin_session")!;
   assert.equal((await call(env, "/auth/session", { cookie: fresh })).status, 200);
   assert.equal((await call(env, "/admin/users/operator", { method: "PATCH", body: { role: "operator" }, cookie: admin })).status, 200);
   assert.equal((await call(env, "/auth/session", { cookie: fresh })).status, 200, "an ordinary edit keeps sessions");
-  assert.equal((await call(env, "/admin/users/operator", { method: "PATCH", body: { localPassword: "reset horse battery staple" }, cookie: admin })).status, 200);
+  assert.equal((await call(env, "/admin/users/operator", { method: "PATCH", body: { localPasswordKey: await passwordCredential("reset horse battery staple") }, cookie: admin })).status, 200);
   assert.equal((await call(env, "/auth/session", { cookie: fresh })).status, 401);
 
-  const afterReset = setCookie(await call(env, "/auth/local", { body: { username: "operator", password: "reset horse battery staple" } }), "lancerlogin_session")!;
+  const afterReset = setCookie(await signIn(env, "operator", "reset horse battery staple"), "lancerlogin_session")!;
   assert.equal((await call(env, "/admin/users/operator", { method: "PATCH", body: { active: false }, cookie: admin })).status, 200);
   assert.equal((await call(env, "/admin/users/operator", { method: "PATCH", body: { active: true }, cookie: admin })).status, 200);
   assert.equal((await call(env, "/auth/session", { cookie: afterReset })).status, 401, "reactivation does not revive old sessions");
@@ -295,4 +298,166 @@ test("unexpected errors reach unauthenticated callers only as a correlation ID",
     assert.equal(JSON.stringify(body).includes("synthetic_internal_table"), false);
     assert.ok(logged.some((line) => line.includes(body.errorId!) && line.includes("synthetic_internal_table")), "the message stays in Worker logs");
   }
+});
+
+// Server relief: the browser runs scrypt and the Worker stores and compares only SHA-256(label + K).
+
+test("sign-in end to end stores scrypt-c, never sees the password, and refuses an outdated tab's plain password", async (context) => {
+  quietErrors(context);
+  const db = new Database(false); const env = environment(db, { APP_MODE: "unconfigured" });
+  const created = await call(env, "/setup/bootstrap", { body: { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director", localPasswordKey: await passwordCredential("correct horse battery staple") } });
+  assert.equal(created.status, 201, await created.clone().text());
+  const stored = db.value<{ hash: string }>("SELECT password_hash AS hash FROM users WHERE local_username = 'director'")!.hash;
+  assert.match(stored, /^scrypt-c\$32768\$8\$1\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}$/);
+
+  const posted: string[] = [];
+  const recordingSignIn = (username: string, password: string) => localSignIn(async (path, body) => { posted.push(JSON.stringify(body)); return call(env, path, { body }); }, username, password);
+  const login = await recordingSignIn("Director", "correct horse battery staple");
+  assert.equal(login.status, 200, await login.clone().text());
+  assert.ok(setCookie(login, "lancerlogin_session"));
+  assert.equal(posted.some((body) => body.includes("correct horse battery staple")), false, "a scrypt-c account never sends its password");
+  assert.equal((await recordingSignIn("director", "incorrect horse battery staple")).status, 401);
+  assert.equal(db.value<{ hash: string }>("SELECT password_hash AS hash FROM users WHERE local_username = 'director'")!.hash, stored, "sign-in never rewrites a scrypt-c row");
+
+  // A tab loaded before the update posts the plain password. The Worker asks for a reload and runs no scrypt on it.
+  for (const [path, body] of [["/auth/local", { username: "director", password: "correct horse battery staple" }]] as const) {
+    const stale = await call(env, path, { body });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json() as { code: string }).code, "reload_required");
+  }
+  assert.equal(db.value<{ failures: number }>("SELECT failed_login_count AS failures FROM users WHERE local_username = 'director'")?.failures, 1, "only the wrong K counted, not the outdated request");
+  for (const body of [{ username: "director" }, { username: "director", key: "short" }, { username: "director", key: randomKey().slice(0, -1) }])
+    assert.equal((await call(env, "/auth/local", { body })).status, 400, JSON.stringify(body));
+});
+
+test("the salt endpoint answers unknown, inactive and Google-only usernames with the same shape and a deterministic fake salt", async () => {
+  const db = new Database(); const env = environment(db);
+  db.sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = 'admin'").run(await storedPassword("correct horse battery staple"));
+  db.sqlite.exec(`INSERT INTO users(id,installation_id,email,local_username,role,created_at) VALUES('google','primary','google@example.test','googleonly','operator','2026-10-18');
+    INSERT INTO users(id,installation_id,local_username,role,active,created_at) VALUES('gone','primary','gone','operator',0,'2026-10-18')`);
+  db.sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = 'gone'").run(await storedPassword("inactive horse battery staple"));
+  const params = async (username: string) => { const result = await call(env, "/auth/local/params", { body: { username } }); assert.equal(result.status, 200, username); return result.json() as Promise<Record<string, unknown>>; };
+  const real = await params("admin");
+  const stored = db.value<{ hash: string }>("SELECT password_hash AS hash FROM users WHERE id = 'admin'")!.hash;
+  assert.deepEqual(real, { algorithm: "scrypt", N: 32768, r: 8, p: 1, dkLen: 32, salt: stored.split("$")[4], legacy: false });
+  for (const username of ["nobody", "googleonly", "gone"]) {
+    const fake = await params(username);
+    assert.deepEqual(Object.keys(fake), Object.keys(real), username);
+    assert.deepEqual({ ...fake, salt: "" }, { ...real, salt: "" }, username);
+    assert.match(String(fake.salt), /^[A-Za-z0-9_-]{22}$/);
+    assert.deepEqual(await params(username), fake, "the fake salt is the same on every request");
+    assert.notEqual(fake.salt, real.salt);
+  }
+  assert.notEqual((await params("nobody")).salt, (await params("somebody")).salt);
+  assert.deepEqual(await params("  NoBody "), await params("nobody"), "usernames are normalized as sign-in normalizes them");
+  // An unknown username's sign-in fails the same way a wrong K does, and counts against nobody.
+  assert.equal((await signIn(env, "nobody", "correct horse battery staple")).status, 401);
+  assert.equal((await signIn(env, "googleonly", "correct horse battery staple")).status, 401);
+  assert.equal(db.value<{ failures: number }>("SELECT failed_login_count AS failures FROM users WHERE id = 'google'")?.failures, 1);
+  for (const body of [{}, { username: "" }, { username: 7 }, { username: "x".repeat(257) }]) assert.equal((await call(env, "/auth/local/params", { body })).status, 400, JSON.stringify(body));
+  // The salt endpoint shares the sign-in throttle's limits, per client address.
+  for (let attempt = 0; attempt < 30; attempt += 1) await call(env, "/auth/local/params", { body: { username: "nobody" }, ip: "192.0.2.50" });
+  assert.equal((await call(env, "/auth/local/params", { body: { username: "nobody" }, ip: "192.0.2.50" })).status, 429);
+  assert.equal((await call(env, "/auth/local/params", { body: { username: "nobody" }, ip: "192.0.2.51" })).status, 200);
+});
+
+test("a legacy scrypt$ row is checked with the password once, re-salted to scrypt-c, and never converted without it", async () => {
+  const db = new Database(); const env = environment(db);
+  const legacy = await legacyPassword("legacy horse battery staple");
+  db.sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = 'admin'").run(legacy);
+  const row = () => db.value<{ hash: string; failures: number }>("SELECT password_hash AS hash, failed_login_count AS failures FROM users WHERE id = 'admin'")!;
+  const params = await (await call(env, "/auth/local/params", { body: { username: "admin" } })).json() as { salt: string; legacy: boolean };
+  assert.equal(params.legacy, true, "the accepted migration leak: a legacy row says so");
+  assert.notEqual(params.salt, legacy.split("$")[4], "a legacy row gets a fresh salt for its new K");
+  // The old K alone, as a leaked pre-update backup would hold it, never signs in, and the row stays legacy.
+  const oldKey = legacy.split("$")[5];
+  assert.equal((await call(env, "/auth/local", { body: { username: "admin", key: oldKey } })).status, 401);
+  assert.equal((await call(env, "/auth/local", { body: { username: "admin", key: oldKey, salt: legacy.split("$")[4] } })).status, 401);
+  assert.equal(row().hash, legacy);
+  // A wrong password with a legacy proof is a normal failure and converts nothing.
+  assert.equal((await signIn(env, "admin", "wrong horse battery staple")).status, 401);
+  assert.deepEqual({ ...row() }, { hash: legacy, failures: 3 });
+  // The right password converts the row to scrypt-c under the new salt and clears the failures.
+  const upgraded = await signIn(env, "admin", "legacy horse battery staple");
+  assert.equal(upgraded.status, 200, await upgraded.clone().text());
+  assert.match(row().hash, /^scrypt-c\$32768\$8\$1\$/);
+  assert.equal(row().failures, 0);
+  const after = await (await call(env, "/auth/local/params", { body: { username: "admin" } })).json() as { salt: string; legacy: boolean };
+  assert.deepEqual([after.legacy, after.salt], [false, row().hash.split("$")[4]]);
+  // From now on the old K is worthless and the password is never sent again.
+  assert.equal((await call(env, "/auth/local", { body: { username: "admin", key: oldKey } })).status, 401);
+  assert.equal((await signIn(env, "admin", "legacy horse battery staple")).status, 200);
+});
+
+test("a wrong new K sent with the right legacy password locks out only that account", async () => {
+  const db = new Database(); const env = environment(db);
+  db.sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = 'admin'").run(await legacyPassword("legacy horse battery staple"));
+  db.sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = 'operator'").run(await legacyPassword("operator horse battery staple"));
+  const params = await (await call(env, "/auth/local/params", { body: { username: "admin" } })).json() as { salt: string };
+  const forged = await call(env, "/auth/local", { body: { username: "admin", key: randomKey(), salt: params.salt, password: "legacy horse battery staple" } });
+  assert.equal(forged.status, 200, "the password check is what authenticates, so the request itself succeeds");
+  assert.equal((await signIn(env, "admin", "legacy horse battery staple")).status, 401, "the account now holds a K nobody can derive");
+  assert.equal((await signIn(env, "operator", "operator horse battery staple")).status, 200, "other accounts are unaffected");
+});
+
+test("the account lock is checked before any work, including a legacy row's server-side scrypt", async (context) => {
+  const db = new Database(); const env = environment(db);
+  const legacy = await legacyPassword("legacy horse battery staple");
+  db.sqlite.prepare("UPDATE users SET password_hash = ?, locked_until = ? WHERE id = 'admin'").run(legacy, new Date(Date.now() + 60_000).toISOString());
+  const params = await (await call(env, "/auth/local/params", { body: { username: "admin" } })).json() as { salt: string };
+  const digest = context.mock.method(crypto.subtle, "digest");
+  const locked = await call(env, "/auth/local", { body: { username: "admin", key: randomKey(), salt: params.salt, password: "legacy horse battery staple" } });
+  assert.equal(locked.status, 401);
+  assert.equal(db.value<{ hash: string }>("SELECT password_hash AS hash FROM users WHERE id = 'admin'")!.hash, legacy);
+  const comparisons = () => digest.mock.calls.filter((call) => new Uint8Array(call.arguments[1] as ArrayBuffer).length === "lancerlogin:password:v2".length + 32).length;
+  assert.equal(comparisons(), 0, "no password work ran");
+  // The same request once the lock has expired does the work, which shows the probe above would have seen it.
+  db.sqlite.exec("UPDATE users SET locked_until = NULL WHERE id = 'admin'");
+  assert.equal((await call(env, "/auth/local", { body: { username: "admin", key: randomKey(), salt: params.salt, password: "legacy horse battery staple" } })).status, 200);
+  assert.ok(comparisons() > 0);
+});
+
+test("every password setter stores scrypt-c and refuses a plain password", async (context) => {
+  quietErrors(context);
+  const db = new Database(); const env = environment(db);
+  const admin = await sessionFor("admin", "admin");
+  const hash = (id: string) => db.value<{ hash: string | null }>("SELECT password_hash AS hash FROM users WHERE id = ?", id)?.hash;
+  const created = await call(env, "/admin/users", { body: { localUsername: "front-desk", localPasswordKey: await passwordCredential("front desk horse battery"), role: "operator" }, cookie: admin });
+  assert.equal(created.status, 201, await created.clone().text());
+  const createdId = (await created.json() as { user: { id: string } }).user.id;
+  assert.match(hash(createdId)!, /^scrypt-c\$/);
+  assert.equal((await signIn(env, "front-desk", "front desk horse battery")).status, 200);
+  const reset = await call(env, `/admin/users/${createdId}`, { method: "PATCH", body: { localPasswordKey: await passwordCredential("reset desk horse battery") }, cookie: admin });
+  assert.equal(reset.status, 200, await reset.clone().text());
+  assert.match(hash(createdId)!, /^scrypt-c\$/);
+  assert.equal((await signIn(env, "front-desk", "reset desk horse battery")).status, 200);
+  assert.equal(db.value<{ metadata: string }>("SELECT metadata_json AS metadata FROM audit_log WHERE action = 'user.updated' ORDER BY created_at DESC LIMIT 1")?.metadata.includes('"passwordReset":true'), true);
+
+  // Outdated tabs that post localPassword get a reload request; malformed credentials are refused with the old messages.
+  for (const [path, method, body] of [
+    ["/admin/users", "POST", { localUsername: "stale-desk", localPassword: "stale desk horse battery", role: "operator" }],
+    [`/admin/users/${createdId}`, "PATCH", { localPassword: "stale desk horse battery" }],
+  ] as const) {
+    const stale = await call(env, path, { method, body, cookie: admin });
+    assert.equal(stale.status, 409, path);
+    assert.equal((await stale.json() as { code: string }).code, "reload_required");
+  }
+  for (const localPasswordKey of [{}, { salt: "AAAA", key: randomKey() }, { salt: "AAAAAAAAAAAAAAAAAAAAAA", key: randomKey(), password: "extra" }, "text"]) {
+    const result = await call(env, "/admin/users", { body: { localUsername: "bad-desk", localPasswordKey, role: "operator" }, cookie: admin });
+    assert.equal(result.status, 400);
+    assert.match((await result.json() as { error: string }).error, /at least 12 characters/);
+    assert.equal((await call(env, `/admin/users/${createdId}`, { method: "PATCH", body: { localPasswordKey }, cookie: admin })).status, 400);
+  }
+  assert.match(hash(createdId)!, /^scrypt-c\$/);
+
+  // First-Admin setup: the same format, and the same reload request for an outdated setup page.
+  const fresh = new Database(false); const setupEnv = environment(fresh, { APP_MODE: "unconfigured" });
+  const base = { setupCode, organizationName: "Synthetic Club", timeZone: "UTC", authMode: "local", localUsername: "director" };
+  const staleSetup = await call(setupEnv, "/setup/bootstrap", { body: { ...base, localPassword: "correct horse battery staple" } });
+  assert.equal(staleSetup.status, 409);
+  assert.equal((await staleSetup.json() as { code: string }).code, "reload_required");
+  const badSetup = await call(setupEnv, "/setup/bootstrap", { body: { ...base, localPasswordKey: { salt: "AAAAAAAAAAAAAAAAAAAAAA" } } });
+  assert.equal(badSetup.status, 400);
+  assert.equal((await call(setupEnv, "/setup/bootstrap", { body: { ...base, localPasswordKey: await passwordCredential("correct horse battery staple") } })).status, 201);
+  assert.match(fresh.value<{ hash: string }>("SELECT password_hash AS hash FROM users WHERE local_username = 'director'")!.hash, /^scrypt-c\$/);
 });

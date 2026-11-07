@@ -38,6 +38,11 @@ export function omitContestResubmissionFields(backup: any) {
   const extracted = extractedModuleOwnership(backup.scope, backup.schemaVersion);
   if (backup.ownership?.modules) for (const module of extracted) if (!backup.ownership.modules.some((item: { id: string }) => item.id === module.id)) backup.ownership.modules.push(module);
   if (backup.tables) for (const table of extractedModuleTables(backup.scope, backup.schemaVersion)) backup.tables[table] ??= [];
+  // Each module's own reporting start date travels in entire-installation backups from schema 50 (migration 0096).
+  if (backup.schemaVersion < 50) {
+    if (backup.tables) delete backup.tables.module_report_baselines;
+    if (Array.isArray(backup.ownership?.core?.tables)) backup.ownership.core.tables = backup.ownership.core.tables.filter((table: string) => table !== "module_report_baselines");
+  }
   // Core's FIRST credentials travel in entire-installation backups from schema 49 (migration 0093).
   if (backup.schemaVersion < 49) {
     if (backup.tables) delete backup.tables.first_credentials;

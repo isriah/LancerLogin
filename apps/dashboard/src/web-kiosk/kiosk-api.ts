@@ -94,6 +94,8 @@ const retryStatuses = new Set([408, 425, 429]);
 const rescanCodes = new Set(["possible_wrong_match"]);
 /** A wrong PIN is a 403 with this code. Only a 401 without a code is a refused credential. */
 const wrongPinCode = "pin_incorrect";
+/** The member's online PIN tries are throttled: a 429 that answers this scan, unlike a busy server's 429. */
+const pinThrottledCode = "pin_throttled";
 function lockedUntilFrom(value: unknown) { return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : undefined; }
 
 /** Sends one scan and says what became of it. It never throws: every answer, or no answer, is a SendOutcome. */
@@ -110,7 +112,8 @@ export async function deliverScan(options: KioskApiOptions, scan: AttendanceScan
     const settles = body && typeof body === "object" && (body.eventId === undefined || body.eventId === scan.eventId) && (body.accepted === true || body.duplicate === true);
     return settles ? { kind: "accepted", result: { ...body, eventId: scan.eventId } } : { kind: "retry", status: reply.status };
   }
-  if (reply.status >= 400 && reply.status < 500 && !retryStatuses.has(reply.status) && body && typeof body === "object" && (typeof body.error === "string" || typeof body.code === "string")) {
+  const throttled = reply.status === 429 && body && typeof body === "object" && body.code === pinThrottledCode;
+  if (reply.status >= 400 && reply.status < 500 && (!retryStatuses.has(reply.status) || throttled) && body && typeof body === "object" && (typeof body.error === "string" || typeof body.code === "string")) {
     const code = typeof body.code === "string" && body.code ? body.code : undefined;
     const message = typeof body.error === "string" ? body.error.slice(0, 300) : "";
     if (code && rescanCodes.has(code)) return { kind: "rescan", status: reply.status, code, message };

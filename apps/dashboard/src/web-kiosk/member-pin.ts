@@ -163,7 +163,11 @@ export function lockedUntilText(iso: string, locale?: string) {
 export type PinOutcome =
   | { kind: "wrong"; lockedUntil?: string; attemptsLeft?: number }
   | { kind: "locked"; lockedUntil?: string }
+  | { kind: "throttled"; message: string }
   | { kind: "not_set" };
+
+/** What the kiosk says when the server's message for a throttled try is missing. */
+export const pinThrottledFallback = "Too many wrong PINs. Try again in a few minutes.";
 
 /** The PIN screen a refused scan leads to, or undefined when the refusal isn't about the PIN. */
 export function pinOutcomeFor(answer: SendOutcome | KioskApiError): PinOutcome | undefined {
@@ -177,6 +181,8 @@ export function pinOutcomeFor(answer: SendOutcome | KioskApiError): PinOutcome |
     }
     case "pin_locked": return { kind: "locked", ...(lockedUntil ? { lockedUntil } : {}) };
     case "pin_not_set": return { kind: "not_set" };
+    // The server's message says when to try again, and nothing about whether this PIN was right.
+    case "pin_throttled": return { kind: "throttled", message: refusal.message || pinThrottledFallback };
     default: return undefined;
   }
 }

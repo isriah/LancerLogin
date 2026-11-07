@@ -1,6 +1,7 @@
 // Fake D1 database and request helpers shared by Worker runtime tests. Statements return configured rows by SQL fragment and record
 // every call and batch, so tests can assert which statements ran.
 import { createHash } from "node:crypto";
+import { bundledModuleRegistry } from "../../packages/shared/src/module-platform.ts";
 import { createSessionCodec } from "../../apps/api/src/runtime-security.ts";
 
 /** The SQL fragment of the Worker's per-request session user lookup (id, role and the /auth/session profile columns). */
@@ -29,7 +30,9 @@ export class FakeDatabase {
   async batch(statements: FakeStatement[]) {
     const product = statements.filter((statement) => !statement.sql.includes("AS module_authority"));
     if (this.denyProviderPreflight && product.some((statement) => statement.sql.trim() === "SELECT 1")) throw new Error("module-authority-denied");
-    if (product.length === 1) this.calls.push(product[0]!);
+    // Reads the Worker coalesces into one batch (see d1-coalesce.ts) are recorded as the separate reads they are, so
+    // `batches` keeps only batches that write.
+    if (product.length === 1 || product.every((statement) => /^\s*(?:SELECT|WITH)\b/i.test(statement.sql))) this.calls.push(...product);
     else if (product.length > 1) this.batches.push(product);
     return statements.map((statement) => {
       const readsRows = /^\s*(?:SELECT|PRAGMA|EXPLAIN)\b/i.test(statement.sql);
@@ -70,6 +73,13 @@ export class FakeDatabase {
     if (sql.includes("JOIN platform_module_administration") && sql.includes("ORDER BY m.module_id")) {
       const userId = String(values[1]); const role = userId.startsWith("operator") ? "operator" : "admin";
       return [{ role, revision: 0, selectionCompleted: 1, administrationEpoch: 0, moduleId: "attendance", contractVersion: 1, generation: 1, moduleEpoch: 1, phase: "enabled", setupVersion: 2, setupComplete: 1, disabledAt: null, deleteAfter: null, deletionCursor: 0, cleanupFailure: null, assignmentRevision: 0, assignmentEpoch: 0, capabilitiesJson: role === "operator" ? '["attendance.manage"]' : null }];
+    }
+    // A scheduled pass reads every runnable module at once: answer as the one-module service check would for each.
+    if (sql.includes("SELECT m.module_id AS moduleId, m.generation FROM platform_modules m")) {
+      return bundledModuleRegistry.modules.flatMap((module) => {
+        const row = this.firstResult("SELECT m.generation FROM platform_modules m JOIN platform_module_administration", ["primary", module.id]) as { generation?: number } | null | undefined;
+        return row?.generation === undefined ? [] : [{ moduleId: module.id, generation: row.generation }];
+      });
     }
     return undefined;
   }

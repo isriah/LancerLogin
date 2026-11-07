@@ -43,6 +43,19 @@ export { useModalFocus } from "../../../apps/dashboard/src/modal-focus.ts";
 export { AppLink, followInApp, followRowInApp, isModifiedClick, RouteLink, routeWillChangeEvent, usePath } from "../../../apps/dashboard/src/router.tsx";
 /** Section links (with a narrow-screen picker) for a module settings page that has several sections, as Core settings pages use. */
 export { SettingsSectionNavigation, settingsSectionHref } from "../../../apps/dashboard/src/settings-section-navigation.tsx";
+/**
+ * The module's reporting start date (operational baseline) for an Admin-only settings section, stored by Core. The
+ * module's report datasets use it for the Operational baseline period. Since module SDK 1.5.0.
+ */
+export { ReportingStartDateField } from "../../../apps/dashboard/src/reporting-start-date-field.tsx";
+
+/**
+ * The CSV import kit Core's roster and meeting imports use (SDK 1.4.0): delimited parsing (comma or tab, quotes, byte order
+ * mark), loose header matching with aliases, MM/DD/YYYY or ISO dates shown as MM/DD/YYYY, 24-hour or AM/PM times,
+ * durations, and the template download. Style previews with the dashboard's import classes (see MODULE-AUTHORING.md).
+ */
+export { csvFieldFor, csvText, delimiterFor, downloadCsvTemplate, formatCsvDate, formatCsvTime, formatCsvTimeRange, mapCsvHeader, normaliseCsvHeader, parseCsvDate, parseCsvDuration, parseCsvTime, parseDelimited } from "../../../apps/dashboard/src/csv-import.ts";
+export type { CsvHeaderMapping, CsvHeaderSpec, CsvValue } from "../../../apps/dashboard/src/csv-import.ts";
 
 import type { DashboardModuleContribution } from "../../../apps/dashboard/src/module-contributions.ts";
 

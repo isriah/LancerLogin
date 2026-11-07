@@ -54,7 +54,7 @@ export function DiscordLabelReconciliation({ preview, onConfirm, onCancel, busy 
   const summary = summaryParts.length ? `This will ${summaryParts.join(", ")}.` : "No changes chosen yet.";
   const undecided = rows.length - decided;
   const blocked = busy || saving ? "Working…" : undecided ? `Choose the correct side for ${count(undecided, "more person", "more people")}` : attendance.affectsAttendance && !acknowledged ? "Confirm that you understand the attendance warning" : "";
-  const usage = list([attendance.attendanceRules && count(attendance.attendanceRules, "attendance rule"), attendance.weeklyTargets && count(attendance.weeklyTargets, "weekly target"), attendance.meetingAudiences && count(attendance.meetingAudiences, "meeting audience")].filter(Boolean) as string[]);
+  const usage = list([attendance.attendanceRules && count(attendance.attendanceRules, "attendance policy", "attendance policies"), attendance.weeklyTargets && count(attendance.weeklyTargets, "weekly target"), attendance.meetingAudiences && count(attendance.meetingAudiences, "meeting audience")].filter(Boolean) as string[]);
   async function confirm() {
     if (blocked) return;
     setSaving(true); setState(undefined);

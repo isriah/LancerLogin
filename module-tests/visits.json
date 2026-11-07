@@ -7,6 +7,7 @@
     "javascript": [],
     "typescript": [
       "tests-ts/visits-composed.test.ts",
+      "tests-ts/report-query-budget-composed.test.ts",
       "tests-ts/module-interfaces.test.ts"
     ],
     "browser": [],
@@ -17,6 +18,7 @@
     "javascript": [],
     "typescript": [
       "tests-ts/visits-composed.test.ts",
+      "tests-ts/report-query-budget-composed.test.ts",
       "tests-ts/module-interfaces.test.ts",
       "tests-ts/module-interface-worker.test.ts",
       "tests-ts/module-composition.test.ts",

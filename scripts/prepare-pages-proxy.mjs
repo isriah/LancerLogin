@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { parseReleaseVersion } from "../packages/shared/src/release-policy.mjs";
 
 export function buildPagesProxy(apiUrl, releaseVersion) {
@@ -22,6 +22,8 @@ export default {
       if (target.origin !== API_ORIGIN) return badRequest();
       return fetch(new Request(target, request));
     }
+    // _routes.json sends only the paths above to this function on Pages; static files and deep links are served by Pages
+    // itself, with _headers. The asset handling below matches that, for local runs and a deployment without _routes.json.
     const asset = await env.ASSETS.fetch(request);
     if (asset.status !== 404 || request.method !== "GET" || !request.headers.get("accept")?.includes("text/html")) return cacheHashedAsset(incoming.pathname, request.method, denyFraming(asset));
     const shell = new URL("/index.html", incoming.origin);
@@ -49,12 +51,50 @@ function denyFraming(response) {
 `;
 }
 
+// Pages runs _worker.js for every path that _routes.json includes, and each run counts against the Workers Free plan's
+// daily request allowance, so it includes only the paths the proxy answers itself. Everything else is a static request:
+// free, and handled by Pages, including its single-page fallback to index.html for dashboard deep links.
+export const PAGES_FUNCTION_ROUTES = Object.freeze(["/api", "/api/*", "/__lancerlogin-release"]);
+
+export function buildPagesRoutes() {
+  return `${JSON.stringify({ version: 1, include: PAGES_FUNCTION_ROUTES, exclude: [] }, null, 2)}\n`;
+}
+
+// Pages applies _headers only to the static responses that bypass _worker.js; they get the same framing denial and
+// caching as the proxy gives them. Pages replaces Cache-Control with no-store on a 404.
+export function buildPagesHeaders() {
+  return `/*
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+/kiosk-sw.js
+  Cache-Control: no-cache
+/kiosk.webmanifest
+  Cache-Control: no-cache
+`;
+}
+
+// Pages serves the nearest 404.html for a missing file, else index.html. This one makes a missing build asset a 404,
+// so a stale chunk name never gets the app shell cached as an immutable asset. index.html still answers deep links.
+export const MISSING_ASSET_PAGE = "<!doctype html><meta charset=utf-8><title>Not found</title><p>Not found</p>\n";
+
+/** Writes _worker.js and the Pages files beside it: _routes.json, _headers and assets/404.html. */
+export async function writePagesOutput(directory, apiUrl, releaseVersion) {
+  const proxy = buildPagesProxy(apiUrl, releaseVersion);
+  await mkdir(join(directory, "assets"), { recursive: true });
+  await writeFile(join(directory, "_worker.js"), proxy, { mode: 0o600 });
+  await writeFile(join(directory, "_routes.json"), buildPagesRoutes(), { mode: 0o600 });
+  await writeFile(join(directory, "_headers"), buildPagesHeaders(), { mode: 0o600 });
+  await writeFile(join(directory, "assets", "404.html"), MISSING_ASSET_PAGE, { mode: 0o600 });
+}
+
 async function main() {
   const [apiUrl, output = "apps/dashboard/dist/_worker.js"] = process.argv.slice(2);
   if (!apiUrl) throw new Error("Usage: prepare-pages-proxy.mjs <worker-api-origin> [output]");
-  await mkdir(dirname(output), { recursive: true });
+  if (!output.endsWith("_worker.js")) throw new Error("The output must be a _worker.js file in the Pages output directory");
   const packageVersion = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version;
-  await writeFile(output, buildPagesProxy(apiUrl, packageVersion), { mode: 0o600 });
+  await writePagesOutput(dirname(output), apiUrl, packageVersion);
 }
 
 if (process.argv[1]?.endsWith("prepare-pages-proxy.mjs")) main().catch((error) => { console.error(error.message); process.exitCode = 1; });

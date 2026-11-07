@@ -1,12 +1,14 @@
 import { inactiveAt, inactivePeriodsUpdateSql, validateInactivePeriods } from "./member-participation.ts";
 import { meetingDeletion, restoreMeetingDeletion } from "./meeting-deletion.ts";
+import { runMeetingImport } from "./meeting-import.ts";
 import { initialWalkthroughProgress, removedWalkthroughPages, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough.ts";
-import { createSessionCodec, createSignedStateCodec, hashPassword, verifyPassword } from "./runtime-security.ts";
+import { createSessionCodec, createSignedStateCodec, fakePasswordSalt, parsePasswordKey, parsePasswordSalt, passwordFormat, passwordHashFromCredential, passwordSaltBytes, passwordScrypt, storedPasswordSalt, verifyLegacyPassword, verifyPasswordKey } from "./runtime-security.ts";
+import { encodeBase64Url as encodeBytes } from "../../../packages/shared/src/password-hash.mjs";
 import { authRateLimits, bootstrapClaimKey, clearFailedLogins, consumeAuthRateLimit, lockActive, pruneAuthProtection, recordFailedLogin, setupResetCookie, setupResetGrantKey, setupResetGrantMs } from "./auth-protection.ts";
 import { decryptIntegration, encryptIntegration, moduleCredentials } from "./integration-crypto.ts";
 import { moduleEmailIdempotencyKey, moduleEmailMessage, resendModuleEmailPayload } from "./module-email.ts";
 import { clearFirstCache, firstDataService, firstIntegrationStatus, firstVisitorKey, removeFirstCredential, saveFirstCredential, type FirstDataDeps } from "./first-data.ts";
-import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance, updateRepositoryFiles, recheckUpdateSetup } from "./web-updates.ts";
+import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance, webUpdateMaintenanceStatement, updateRepositoryFiles, recheckUpdateSetup } from "./web-updates.ts";
 import { commitPluginChange, currentSelectionSha, freshUntil, lookupPluginRelease, pluginManagementState, requiredModuleMigrations, requireNoModuleMigration, reviewPluginChange, selectionCredentialState } from "./plugin-selection.ts";
 import { discoveryForChannel, releaseRequestHeaders, resolveOfficialRelease } from "./release-discovery.ts";
 import { readUpdateChannel, changeUpdateChannel } from "./update-channel.ts";
@@ -14,15 +16,19 @@ import { checkScanPin, dashboardKioskPinRequests, dashboardMemberPin, decidePinR
 import { kioskReleaseTransition } from "../../../packages/shared/src/release-policy.mjs";
 import { formatPairingCode, generateWebPairingCode, normalizePairingCode, validWebPairingCode } from "../../../packages/shared/src/pairing-code.mjs";
 import { resolveDefaultTheme } from "../../../packages/shared/src/product.ts";
+import { attendanceStatusText, withRecentWindow } from "../../../packages/shared/src/attendance-terms.ts";
+import { type LabelPolicySummary } from "../../../packages/shared/src/attendance-label-sets.ts";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, DEFAULT_ANOMALY_THRESHOLD_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
-import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
-import { buildReportRows, combinedMemberDataset, defaultReportDefinition, filterAndSortReportRows, reportColumnCatalog, reportColumnId, reportColumnLabel, reportDatasetCatalog, reportDatasetDefinition, reportFieldSourceDataset, reportFilterSourceDataset, reportLabelsMatch, reportModuleFilters, resolveReportPeriod, validateReportDefinition, type NormalizedReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
+import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, ruleOn as policyRuleOn, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
+import { labelSetResult, reportColumnCsvLabel, reportHasLabelSets, buildReportRows, combinedMemberDataset, defaultReportDefinition, displayedReportRows, reportComputationDefinition, reportBaselineFor, reportBaselineModuleIds, reportBaselineModuleLabel, reportBaselineStarted, type ReportBaselines, filterAndSortReportRows, reportColumnCatalog, reportColumnId, reportColumnLabel, reportDatasetCatalog, reportDatasetDefinition, reportFieldSourceDataset, reportFilterSourceDataset, reportLabelsMatch, reportModuleFilters, resolveReportPeriod, validateReportDefinition, type NormalizedReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
 import { createModuleReportDispatcher, projectCoreMembers, type ReportProjectionContext } from "./module-reporting.ts";
 
 import { databaseIdentity, measureD1, usageCategory, type D1Database, type D1Statement } from "./d1-usage.ts";
+import { SchedulerBudget, passSlot, rotateJobs, scheduledJobStartCost, scheduledPassLimits, scheduledSliceLimits, type PassCost, type PassLimits } from "./scheduler-budget.ts";
 import { acceptContestBatch, rejectContestBatch, resolveContestBatch, submitContest } from "./contest-review.ts";
 import { ReportDataCache } from "./report-data-cache.ts";
 import { HttpError } from "./http-error.ts";
+import { DiscordRateLimitError, discordRateLimitFailsFast, discordRateLimitOperation } from "./discord-rate-limit.ts";
 import { fingerprintVaultRoute } from "./fingerprint-vault.ts";
 import { kioskPoll } from "./kiosk-poll.ts";
 import { syncKioskScanReviews, listKioskScanReviews, markKioskScanReviewed, markKioskScansReviewed } from "./kiosk-scan-reviews.ts";
@@ -31,8 +37,9 @@ import { acceptedScanStatements, dismissReenrollSuggestion, findImpossibleScan, 
 import { readKioskEnrollment, startKioskEnrollment, selectEnrollmentMember, cancelKioskEnrollment, progressKioskEnrollment } from "./kiosk-enrollment.ts";
 import { fingerprintResetRoute } from "./fingerprint-reset.ts";
 import { bundledModuleRegistry } from "../../../packages/shared/src/module-platform.ts";
-import { ModuleRegistrationIncomplete, configureModulePlatform, readModuleAssignments, readModulePlatformSnapshot, readModuleSetup, requireModuleEnabled, requireModuleService, requireModuleSetup, requireModuleWorkspace, setModuleAssignments, updateModuleSetup } from "./module-platform.ts";
-import { captureModuleEnabledDatabase, captureModuleServiceDatabase, captureModuleSetupDatabase, captureModuleWorkspaceDatabase } from "./module-database-scope.ts";
+import { ModuleRegistrationIncomplete, moduleServiceGenerations, moduleServiceGenerationsStatement, configureModulePlatform, readModuleAssignments, readModulePlatformSnapshot, readModuleSetup, requireModuleEnabled, requireModuleService, requireModuleSetup, requireModuleWorkspace, setModuleAssignments, updateModuleSetup } from "./module-platform.ts";
+import { captureModuleEnabledDatabase, captureModuleServiceDatabase, captureModuleSetupDatabase, captureModuleWorkspaceDatabase, isModuleAuthorityDenied } from "./module-database-scope.ts";
+import { coalescingDatabase } from "./d1-coalesce.ts";
 import { attendanceSetupRoute } from "./attendance-module-setup.ts";
 import { confirmTwoWay, disableTwoWay, forgetTwoWayStatements, hasTwoWayLabels, isTwoWayPaused, pauseRestoredTwoWayStatements, pollTwoWayLabels, previewTwoWay, sortRolesByName, twoWayPausedMessage, twoWayRestorePaused, unmatchedRoleMembers, type TwoWayDependencies, type TwoWayServer } from "./discord-label-two-way.ts";
 import { dispatchModuleDiscordCommand } from "./module-discord.ts";
@@ -47,18 +54,28 @@ import { runModuleCleanup } from "./module-cleanup.ts";
 import { extractedModuleOwnership, extractedModuleTables, extractedModules, liftExtractedModules, unavailableExtractedWalkthroughPages } from "./extracted-modules.ts";
 import type { ModuleDefinition } from "../../../packages/shared/src/module-platform.ts";
 import { clearExternalModuleStatements, exportExternalModules, externalBackupModules, externalModuleBackupSchema, firstPartyBackupRegistry, freshExternalModuleStatements, insertExternalModuleStatements, moduleKeyedTables, ModuleRestoreRefusal, parseExternalModuleSection, planExternalModuleRestore, prepareIncludedModule, removeExcludedModuleRows, requireConfirmedExclusions, type ExcludedModuleSummary, type PreparedExternalModule } from "./module-backup.ts";
-import { moduleSchedulerJobs, schedulerClass, type SchedulerJob, type SchedulerNamespace } from "./platform-scheduler.ts";
+import { SCHEDULER_STOP_MS, SLICE_CONTINUE_MS, SLICE_IDLE_MAX_MS, SLICE_RETRY_MS, dueJobs, moduleSchedulerJobs, nextWake, parseJobStates, runCursor, schedulerClass, schedulerRequest, type JobRunResult, type JobStates, type Pokes, type SchedulerJob, type SchedulerNamespace, type SliceHooks, type SliceResult } from "./platform-scheduler.ts";
 type ModuleProviderAuthority = () => Promise<void>;
 const moduleProviderAuthority = Symbol("module-provider-authority");
 type ProviderConfiguration = Record<string, string> & { [moduleProviderAuthority]?: ModuleProviderAuthority };
-export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; FINGERPRINT_VAULT_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; DEPLOYMENT_MARKER?: string; DEFAULT_THEME?: string; DB?: D1Database; PLATFORM_SCHEDULER_MODE?: string; PLATFORM_SCHEDULER?: SchedulerNamespace; moduleProviderAuthority?: ModuleProviderAuthority; }
+export interface Env { APP_MODE: "unconfigured" | "configured"; ALLOWED_ORIGIN: string; SESSION_KEY?: string; INTEGRATION_KEY?: string; FINGERPRINT_VAULT_KEY?: string; BOOTSTRAP_CODE_HASH?: string; UPDATE_WORKFLOW_URL?: string; UPDATE_REPOSITORY?: string; WEB_UPDATE_TOKEN?: string; WEB_UPDATE_TOKEN_EXPIRES_AT?: string; MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string; RELEASE_VERSION?: string; DEPLOYMENT_MARKER?: string; DEFAULT_THEME?: string; DB?: D1Database; PLATFORM_SCHEDULER_MODE?: string; PLATFORM_SCHEDULER?: SchedulerNamespace; moduleProviderAuthority?: ModuleProviderAuthority; schedulerPass?: SchedulerPass; }
+/** What a scheduled pass reads once and shares with every job: its budget, which modules may run, and integration records. */
+type SchedulerPass = { readonly budget: SchedulerBudget; readonly moduleGenerations: ReadonlyMap<string, number>; readonly integrations: Map<IntegrationProvider, Promise<IntegrationRecord | null>>; readonly pausedUntil: number | null;
+  /** Whether jobs may split their work into one step per slice (Durable Object slices); the cron fallback runs every step at once. */
+  readonly steps?: boolean;
+  /** The step the running job asked to continue from. */
+  cursor?: string };
+/** Whether a scheduled pass can afford one more item of a job's batch. Outside a pass there is no shared budget. */
+const passAllows = (env: Env, cost: PassCost) => env.schedulerPass?.budget.allows(cost) ?? true;
+/** A scheduler job stopped at its own per-slice cap with new work left, so the scheduler runs it again within seconds. */
+const passMore = (env: Env) => env.schedulerPass?.budget.more();
 type WorkerContext = { waitUntil(promise: Promise<unknown>): void };
-type ScheduledController = { cron?: string };
+type ScheduledController = { cron?: string; scheduledTime?: number };
 
 type Role = "admin" | "operator";
 type Principal = { userId: string; role: Role; expiresAt: number; authenticatedAt?: number; epoch?: number };
 type AuthMode = "google" | "local" | "both";
-type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPassword?: string; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
+type BootstrapInput = { setupCode?: string; organizationName?: string; timeZone?: string; authMode?: AuthMode; adminEmail?: string; localUsername?: string; localPasswordKey?: unknown; localPassword?: unknown; googleClientId?: string; googleClientSecret?: string; telemetryAccepted?: boolean };
 type BrandingInput = { organizationName?: string; subtitle?: string | null; logoData?: string | null; primaryColor?: string; secondaryColor?: string; appearance?: "system" | "themed" | "light" | "dark"; logoBackdrop?: "auto" | "light" | "dark" | "none"; lateScanMinutes?: number; discordContestWindowHours?: number; attendanceReportingStartsOn?: string | null; anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number };
 type DiscordChannelManagerInput = { enabled?: boolean; contestWindowHours?: number; blockRecontestsAfterRejection?: boolean };
 type DiscordAnomalyReportsInput = { enabled?: boolean; channelId?: string | null };
@@ -96,8 +113,6 @@ const validTimeZone = (value: string) => { try { new Intl.DateTimeFormat("en-US"
 const validEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const validColor = (value: string) => /^#[0-9a-f]{6}$/i.test(value);
 const validLogoData = (value: string) => value.length <= 180_000 && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value);
-let dummyPasswordHash: Promise<string> | undefined;
-const timingEqualizerHash = () => dummyPasswordHash ??= hashPassword("LancerLogin timing equalizer", new Uint8Array(16));
 
 function response(body: unknown, status = 200, extraHeaders?: HeadersInit): Response {
   const headers = new Headers(baseHeaders);
@@ -112,10 +127,6 @@ function withCors(result: Response, request: Request, env: Env): Response {
 }
 class DiscordPermissionError extends HttpError {
   constructor(kind: "calendar" | "pin" | "commands" | "channel" | "roles" | "members" = "channel") { super(502, kind === "calendar" ? "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has the Create Events permission, which Discord requires to create scheduled events, before syncing the calendar." : kind === "pin" ? "Discord denied this request because the bot is missing Pin Messages permission in the configured attendance channel." : kind === "commands" ? "Discord denied command management. Confirm the saved application ID belongs to this bot and install the bot in the selected server before trying command setup again." : kind === "roles" ? "Discord denied a role change. Confirm the bot has Manage Roles and its highest role is above the mapped role." : kind === "members" ? "Discord denied the full server member list. Enable the privileged Server Members Intent for this bot in the Discord Developer Portal before syncing roles." : "Discord denied this request because the bot is missing a required permission. Confirm the bot can access the selected server and channel."); }
-}
-class DiscordRateLimitError extends HttpError {
-  readonly retryAfterMs: number;
-  constructor(retryAfterMs: number, operation = "calendar sync") { super(503, `Discord is rate limiting ${operation}. Wait ${Math.ceil(retryAfterMs / 1000)} seconds before trying again.`); this.retryAfterMs = retryAfterMs; }
 }
 class DiscordResponseError extends HttpError {
   readonly discordStatus: number;
@@ -155,7 +166,7 @@ function providerConfiguration(value: Record<string, string>, env: Env): Provide
 // page does waits for setup to finish.
 const attendanceSetupPairingPaths: ReadonlySet<string> = new Set(["/admin/pairing-codes", "/kiosk/pair", "/kiosk/heartbeat"]);
 function moduleScopedEnvironment(env: Env, db: D1Database): Env {
-  return { ...env, DB: db, moduleProviderAuthority: async () => { await db.prepare("SELECT 1").first(); } };
+  return { ...env, DB: db, moduleProviderAuthority: async () => { env.schedulerPass?.budget.chargeExternal(); await db.prepare("SELECT 1").first(); } };
 }
 function cookie(request: Request, name: string): string | undefined { return request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1); }
 type SessionUser = { id: string; role: Role; email?: string | null; localUsername?: string | null };
@@ -262,7 +273,8 @@ function validateBootstrap(input: BootstrapInput): string[] {
   if (!input.authMode || !["google", "local", "both"].includes(input.authMode)) errors.push("Authentication mode must be google, local, or both");
   if ((input.authMode === "google" || input.authMode === "both") && (!input.adminEmail || !validEmail(input.adminEmail))) errors.push("A valid first-Admin email is required for Google sign-in");
   if ((input.authMode === "google" || input.authMode === "both") && (!input.googleClientId?.trim() || !input.googleClientSecret?.trim() || input.googleClientId.length > 500 || input.googleClientSecret.length > 500)) errors.push("Google sign-in requires an OAuth client ID and client secret");
-  if ((input.authMode === "local" || input.authMode === "both") && (!input.localUsername?.trim() || (input.localPassword?.length ?? 0) < 12)) errors.push("Local sign-in requires a username and a password of at least 12 characters");
+  // The browser sends a salt and K, never the password, so the 12-character minimum is enforced by the setup form.
+  if ((input.authMode === "local" || input.authMode === "both") && (!input.localUsername?.trim() || !validPasswordCredential(input.localPasswordKey))) errors.push("Local sign-in requires a username and a password of at least 12 characters");
   return errors;
 }
 async function bootstrap(request: Request, env: Env): Promise<Response> {
@@ -279,11 +291,12 @@ async function bootstrap(request: Request, env: Env): Promise<Response> {
   if (await db.prepare("SELECT 1 AS claimed FROM bootstrap_code_claims WHERE claim_key = ?").bind(claimKey).first()
     && !(resetGrantKey && await db.prepare("SELECT 1 AS granted FROM bootstrap_reset_grants WHERE grant_key = ? AND expires_at > ?").bind(resetGrantKey, new Date().toISOString()).first()))
     throw new HttpError(409, "This setup code was already used. Rotate the BOOTSTRAP_CODE_HASH Worker secret to a new setup code before creating the installation again.");
+  if (input.localPasswordKey === undefined && input.localPassword !== undefined) throw reloadRequired();
   const errors = validateBootstrap(input);
   if (errors.length) throw new HttpError(400, "Invalid setup", errors);
   if ((input.authMode === "google" || input.authMode === "both") && !env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
   const now = new Date().toISOString(); const adminId = crypto.randomUUID(); const mode = input.authMode!;
-  const passwordHash = mode === "local" || mode === "both" ? await hashPassword(input.localPassword!) : null;
+  const passwordHash = mode === "local" || mode === "both" ? await passwordHashFromCredential(input.localPasswordKey) ?? null : null;
   const telemetryAcceptedAt = null; // Historical columns remain inert for backup compatibility.
   // Column defaults keep the original development palette; new installations store the resolved theme explicitly.
   const theme = resolveDefaultTheme(env.DEFAULT_THEME);
@@ -431,7 +444,7 @@ const sessionCookie = (token: string) => `lancerlogin_session=${token}; HttpOnly
 async function localSessionCookie(sessionKey: string, user: { id: string; role: Role; sessionEpoch?: number }): Promise<string> {
   return sessionCookie(await createSessionCodec(sessionKey).issue({ userId: user.id, role: user.role, epoch: Number(user.sessionEpoch ?? 0) }));
 }
-async function pluginManagement(request: Request, env: Env, action: "state" | "review" | "change" | "reauthenticate" | "release"): Promise<Response> {
+async function pluginManagement(request: Request, env: Env, action: "state" | "review" | "change" | "reauthenticate" | "reauthenticate/params" | "release"): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (action === "state") {
     const [user, installation] = await Promise.all([
@@ -445,17 +458,22 @@ async function pluginManagement(request: Request, env: Env, action: "state" | "r
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "Invalid plugin request");
   if (action === "review") return response(await reviewPluginChange(env, input));
   if (action === "release") return response(await lookupPluginRelease(input));
+  if (action === "reauthenticate/params") return response(await reauthenticationParams(env, principal.userId, input));
   if (action === "change") return response(await commitPluginChange(env, principal, input), 201);
   // Fresh re-authentication with the Admin's own local password replaces the session with a newly authenticated one.
   // The same confirmation covers plugin changes and module access grants in Settings > Modules; `purpose` only labels the audit entry.
-  if (Object.keys(input).some((key) => key !== "password" && key !== "purpose") || typeof input.password !== "string" || !input.password || input.password.length > 1_024 || input.purpose !== undefined && input.purpose !== "module_access") throw new HttpError(400, "Enter your password");
+  // The browser proves the password with K from /admin/plugins/reauthenticate/params, plus the password once for a legacy row.
+  if (Object.keys(input).some((key) => !["key", "salt", "password", "purpose"].includes(key)) || input.purpose !== undefined && input.purpose !== "module_access") throw new HttpError(400, "Enter your password");
+  const key = passwordProofKey(input, "Enter your password");
   if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
   const user = await db.prepare("SELECT id, role, password_hash AS passwordHash, locked_until AS lockedUntil, session_epoch AS sessionEpoch FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(principal.userId).first<{ id: string; role: Role; passwordHash: string | null; lockedUntil?: string; sessionEpoch?: number }>();
   if (!user?.passwordHash) throw new WebUpdateError(409, "password_unavailable", "This account has no LancerLogin password. Sign in with Google again instead.");
   // Check the lock before the expensive hash, and count failures atomically so parallel guesses cannot share one count.
   if (lockActive(user.lockedUntil)) throw new WebUpdateError(401, "reauthentication_failed", "Too many attempts. Try again later.");
-  if (!await verifyPassword(input.password, user.passwordHash)) { await recordFailedLogin(db, user.id); throw new WebUpdateError(401, "reauthentication_failed", "The password is incorrect."); }
+  const checked = await checkPasswordProof(user.passwordHash, input, key);
+  if (!checked.valid) { await recordFailedLogin(db, user.id); throw new WebUpdateError(401, "reauthentication_failed", "The password is incorrect."); }
   if (!await clearFailedLogins(db, user.id)) throw new WebUpdateError(401, "reauthentication_failed", "Too many attempts. Try again later.");
+  if (checked.upgradedHash) await storeUpgradedPassword(db, user.id, user.passwordHash, checked.upgradedHash);
   await writeAudit(db, principal, "auth.reauthenticated", "user", user.id, { method: "password", purpose: input.purpose ?? "plugin_management" });
   const token = await createSessionCodec(env.SESSION_KEY).issue({ userId: user.id, role: user.role, epoch: Number(user.sessionEpoch ?? 0) });
   const fresh = await createSessionCodec(env.SESSION_KEY).verify(token);
@@ -480,20 +498,89 @@ async function moduleInterfaceGrants(request: Request, env: Env, action: "list" 
   ]);
   return response({ ...state, reauthentication: { freshUntil: freshUntil(principal), password: Boolean(user?.password), google: Boolean(user?.email) && ["google", "both"].includes(installation?.authMode ?? "") } }, action === "grant" ? 201 : 200);
 }
+/**
+ * A dashboard tab loaded before server relief posts the plain password. The Worker no longer hashes passwords, so rather
+ * than run scrypt on it, it asks for a reload, which loads the dashboard that sends K.
+ */
+const reloadRequired = () => new HttpError(409, "This page is out of date. Reload the page and try again.", undefined, "reload_required");
+/** `{ salt, key }` from setup, account creation or a reset, with nothing else in it (the same check the stored row is built with). */
+const validPasswordCredential = (value: unknown) => Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every((key) => key === "salt" || key === "key") && parsePasswordSalt((value as { salt?: unknown }).salt) && parsePasswordKey((value as { key?: unknown }).key));
+type PasswordProofInput = { key?: unknown; salt?: unknown; password?: unknown };
+/** K from a sign-in or identity confirmation body. A body with a password but no K comes from an outdated tab. */
+function passwordProofKey(input: PasswordProofInput, invalidMessage: string): Uint8Array {
+  if (input.key === undefined && input.password !== undefined) throw reloadRequired();
+  const key = parsePasswordKey(input.key);
+  if (!key) throw new HttpError(400, invalidMessage);
+  return key;
+}
+/**
+ * Checks a sign-in or identity confirmation proof against the stored row.
+ * - A `scrypt-c` row compares SHA-256(label + K) in constant time: well under 1 ms of CPU.
+ * - A legacy `scrypt$` row needs the password too. It is checked with server-side scrypt once, then the client's new K
+ *   under its new salt becomes the row's value. The password check is what authenticates the new K, so a client that
+ *   sends a wrong K with the right password only locks itself out. A legacy row is never converted without the password.
+ * - Any other row (none, Google-only, malformed) runs the same cheap comparison and fails.
+ */
+async function checkPasswordProof(stored: string | null | undefined, input: PasswordProofInput, key: Uint8Array): Promise<{ valid: boolean; upgradedHash?: string }> {
+  const format = passwordFormat(stored);
+  if (format === "scrypt-c") return { valid: await verifyPasswordKey(key, stored) };
+  if (format === "legacy" && typeof input.password === "string" && input.password && input.password.length <= 1_024 && parsePasswordSalt(input.salt)) {
+    if (!await verifyLegacyPassword(input.password, stored!)) return { valid: false };
+    return { valid: true, upgradedHash: await passwordHashFromCredential({ salt: input.salt, key: input.key }) };
+  }
+  await verifyPasswordKey(key, undefined);
+  return { valid: false };
+}
+/** Re-salts a legacy row after its password was checked. Only the row that was checked is replaced, so a concurrent reset wins. */
+async function storeUpgradedPassword(db: D1Database, userId: string, previous: string, upgraded: string): Promise<void> {
+  await db.prepare("UPDATE users SET password_hash = ? WHERE installation_id = 'primary' AND id = ? AND password_hash = ?").bind(upgraded, userId, previous).run();
+}
+/**
+ * The salt and scrypt parameters for a stored row. Every answer has the same shape. A `scrypt-c` row gives its stored salt;
+ * a username with no usable password (unknown, inactive or Google-only) gives a deterministic fake salt, so the answer
+ * doesn't reveal which usernames exist.
+ * Migration leak, accepted: until every row is migrated, a legacy row answers `legacy: true` with a fresh salt for its new
+ * K. That reveals that the account exists and hasn't signed in since the update. It ends once the row is re-salted.
+ */
+async function passwordParams(sessionKey: string, stored: string | null | undefined, username: string) {
+  const format = passwordFormat(stored);
+  const salt = format === "scrypt-c" ? storedPasswordSalt(stored!)! : format === "legacy" ? encodeBytes(crypto.getRandomValues(new Uint8Array(passwordSaltBytes))) : await fakePasswordSalt(sessionKey, username);
+  return { algorithm: "scrypt" as const, ...passwordScrypt, salt, legacy: format === "legacy" };
+}
+/** POST /auth/local/params {username}: the salt and parameters the browser needs to compute K before POST /auth/local. */
+async function localPasswordParams(request: Request, env: Env): Promise<Response> {
+  const db = requireDatabase(env); if (!env.SESSION_KEY) throw new HttpError(503, "Local authentication is not configured");
+  const input = await parseJson<{ username?: unknown }>(request, 4_096);
+  if (!input || typeof input !== "object" || typeof input.username !== "string" || !input.username.trim() || input.username.length > 256) throw new HttpError(400, "Username and password are required");
+  const username = input.username.trim().toLowerCase();
+  const user = await db.prepare("SELECT password_hash AS passwordHash FROM users WHERE installation_id = 'primary' AND local_username = ? AND active = 1").bind(username).first<{ passwordHash: string | null }>();
+  return response(await passwordParams(env.SESSION_KEY, user?.passwordHash, username));
+}
+/** POST /admin/plugins/reauthenticate/params: the signed-in Admin's own salt, for identity confirmation. */
+async function reauthenticationParams(env: Env, userId: string, input: Record<string, unknown>) {
+  if (Object.keys(input).length) throw new HttpError(400, "Invalid plugin request");
+  if (!env.SESSION_KEY) throw new HttpError(503, "Authentication is not configured");
+  const user = await requireDatabase(env).prepare("SELECT password_hash AS passwordHash FROM users WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(userId).first<{ passwordHash: string | null }>();
+  if (!passwordFormat(user?.passwordHash)) throw new WebUpdateError(409, "password_unavailable", "This account has no LancerLogin password. Sign in with Google again instead.");
+  return passwordParams(env.SESSION_KEY, user!.passwordHash, userId);
+}
 async function localLogin(request: Request, env: Env): Promise<Response> {
   const db = requireDatabase(env); if (!env.SESSION_KEY) throw new HttpError(503, "Local authentication is not configured");
-  const input = await parseJson<{ username?: string; password?: string }>(request);
-  if (!input.username || !input.password) throw new HttpError(400, "Username and password are required");
+  const input = await parseJson<{ username?: string } & PasswordProofInput>(request);
+  if (typeof input.username !== "string" || !input.username) throw new HttpError(400, "Username and password are required");
+  const key = passwordProofKey(input, "Username and password are required");
   const user = await db.prepare("SELECT id, role, password_hash AS passwordHash, locked_until AS lockedUntil, session_epoch AS sessionEpoch FROM users WHERE installation_id = ? AND local_username = ? AND active = 1").bind("primary", input.username.trim().toLowerCase()).first<{ id: string; role: Role; passwordHash: string | null; lockedUntil?: string; sessionEpoch?: number }>();
-  // A locked account is refused before the expensive hash. Failures are counted atomically in D1, so parallel guesses
-  // cannot all read the same count; a concurrent lock also refuses a correct password that was still being checked.
+  // A locked account is refused before any work, including a legacy row's one server-side scrypt. Failures are counted
+  // atomically in D1, so parallel guesses cannot all read the same count; a concurrent lock also refuses a correct
+  // password that was still being checked. Unknown usernames need no timing equalizer: every check is one cheap SHA-256.
   if (lockActive(user?.lockedUntil)) throw new HttpError(401, "Invalid username or password");
-  const passwordValid = await verifyPassword(input.password, user?.passwordHash ?? await timingEqualizerHash());
-  if (!user?.passwordHash || !passwordValid) {
+  const checked = await checkPasswordProof(user?.passwordHash, input, key);
+  if (!user?.passwordHash || !checked.valid) {
     if (user) await recordFailedLogin(db, user.id);
     throw new HttpError(401, "Invalid username or password");
   }
   if (!await clearFailedLogins(db, user.id)) throw new HttpError(401, "Invalid username or password");
+  if (checked.upgradedHash) await storeUpgradedPassword(db, user.id, user.passwordHash, checked.upgradedHash);
   return response({ ok: true, user: { id: user.id, role: user.role } }, 200, { "set-cookie": await localSessionCookie(env.SESSION_KEY, user) });
 }
 async function authSession(request: Request, env: Env): Promise<Response> {
@@ -611,14 +698,18 @@ async function reorderMeetingWeightCategories(request: Request, env: Env): Promi
   await db.batch(statements); return response({ orderedIds });
 }
 type MeetingWeightAssignment = { id: string; name: string; weight: number };
-async function resolveMeetingWeightAssignment(db: D1Database, categoryId: string | null | undefined, startsAt: string, endsAt: string): Promise<MeetingWeightAssignment | null> {
+export type MeetingWeightCatalogEntry = MeetingWeightAssignment & { active: number; minimumDurationMinutes: number | null; position: number };
+// `categories`, when given, is every category already read (CSV import reads them once for all rows) instead of a read per call.
+async function resolveMeetingWeightAssignment(db: D1Database, categoryId: string | null | undefined, startsAt: string, endsAt: string, categories?: MeetingWeightCatalogEntry[]): Promise<MeetingWeightAssignment | null> {
   if (categoryId === null) return null;
+  const assignment = (category?: MeetingWeightCatalogEntry) => category ? { id: category.id, name: category.name, weight: category.weight } : null;
   if (categoryId !== undefined) {
-    const category = await db.prepare("SELECT id, name, weight FROM meeting_weight_categories WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(categoryId).first<MeetingWeightAssignment>();
+    const category = categories ? assignment(categories.find((item) => item.id === categoryId && item.active)) : await db.prepare("SELECT id, name, weight FROM meeting_weight_categories WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(categoryId).first<MeetingWeightAssignment>();
     if (!category) throw new HttpError(400, "Choose an active meeting weight category or the default weight");
     return category;
   }
   const durationMinutes = Math.round((Date.parse(endsAt) - Date.parse(startsAt)) / 60_000);
+  if (categories) return assignment(categories.filter((item) => item.active && item.minimumDurationMinutes !== null && item.minimumDurationMinutes <= durationMinutes).sort((left, right) => left.position - right.position || left.name.localeCompare(right.name, undefined, { sensitivity: "accent" }))[0]);
   return await db.prepare("SELECT id, name, weight FROM meeting_weight_categories WHERE installation_id = 'primary' AND active = 1 AND minimum_duration_minutes IS NOT NULL AND minimum_duration_minutes <= ? ORDER BY position, name COLLATE NOCASE LIMIT 1").bind(durationMinutes).first<MeetingWeightAssignment>();
 }
 type LabelMutation = { memberId: string; label: string; action?: "add" | "remove"; effectiveDate?: string };
@@ -1189,13 +1280,14 @@ async function assertNoMeetingOverlap(db: D1Database, proposed: MeetingWindowLik
   const label = (meeting: MeetingWindowLike) => `${meeting.title?.trim() || "Meeting"} (${new Date(meeting.startsAt).toISOString()})`;
   throw new HttpError(409, `Meeting attendance windows cannot overlap. ${label(conflict[0])} conflicts with ${label(conflict[1])}.`);
 }
-async function resolveAudience(db: D1Database, input: MeetingInput, currentIds: string[] = []): Promise<{ mode: "all" | "labels"; labelIds: string[] }> {
+// `catalog`, when given, is every label already read (CSV import reads them once for all rows) instead of a read per call.
+async function resolveAudience(db: D1Database, input: MeetingInput, currentIds: string[] = [], catalog?: { id: string; active: number }[]): Promise<{ mode: "all" | "labels"; labelIds: string[] }> {
   const mode = input.audienceMode ?? (input.audienceLabelIds?.length ? "labels" : "all");
   if (mode !== "all" && mode !== "labels") throw new HttpError(400, "Meeting audience must be All or selected labels");
   if (mode === "all") return { mode, labelIds: [] };
   const ids = input.audienceLabelIds;
   if (!Array.isArray(ids) || ids.length < 1 || ids.length > 30 || ids.some((id) => typeof id !== "string" || !id) || new Set(ids).size !== ids.length) throw new HttpError(400, "Select 1 to 30 distinct audience labels");
-  const result = await db.prepare(`SELECT id, active FROM member_labels WHERE installation_id = 'primary' AND id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all<{ id: string; active: number }>();
+  const result = catalog ? { results: catalog.filter((label) => ids.includes(label.id)) } : await db.prepare(`SELECT id, active FROM member_labels WHERE installation_id = 'primary' AND id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all<{ id: string; active: number }>();
   if ((result.results ?? []).length !== ids.length || (result.results ?? []).some((label) => !label.active && !currentIds.includes(label.id))) throw new HttpError(400, "Meeting audience contains an unknown or retired label");
   return { mode, labelIds: ids };
 }
@@ -1259,6 +1351,16 @@ async function meetingImpact(request: Request, env: Env, meetingId: string): Pro
   const audience = await resolveAudience(db, { audienceMode: input.audienceMode ?? current.audienceMode, audienceLabelIds: input.audienceLabelIds ?? currentIds }, currentIds);
   return response(await meetingImpactPreview(db, meetingId, input.required === undefined ? Boolean(current.required) : input.required, audience));
 }
+/**
+ * The writes that save one meeting edit, shared by the meeting editor and CSV import so both store the same row, audience
+ * and audit. `assignment` undefined keeps the current weight. Callers then retract stale Discord notices and sync calendars.
+ */
+function meetingUpdateStatements(db: D1Database, actorUserId: string, meetingId: string, input: MeetingInput & { title: string; startsAt: string; endsAt: string }, audience: { mode: "all" | "labels"; labelIds: string[] }, assignment: MeetingWeightAssignment | null | undefined, audit: Record<string, unknown>): D1Statement[] {
+  const update = assignment === undefined
+    ? db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, audience_mode = ?, is_test = 0 WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, audience.mode, meetingId)
+    : db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, audience_mode = ?, is_test = 0, weight_category_id = ?, weight_category_name = ?, attendance_weight = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, audience.mode, assignment?.id ?? null, assignment?.name ?? null, assignment?.weight ?? 1, meetingId);
+  return [update, db.prepare("DELETE FROM meeting_audience_labels WHERE installation_id = 'primary' AND meeting_id = ?").bind(meetingId), ...audience.labelIds.map((labelId) => db.prepare("INSERT INTO meeting_audience_labels (installation_id, meeting_id, label_id) VALUES ('primary', ?, ?)").bind(meetingId, labelId)), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.updated', 'meeting', ?, ?, ?)").bind(crypto.randomUUID(), actorUserId, meetingId, JSON.stringify({ audience, ...audit, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1 }) }), new Date().toISOString())];
+}
 async function updateMeeting(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const input = await parseJson<MeetingInput>(request); validateMeetingInput(input);
@@ -1272,15 +1374,23 @@ async function updateMeeting(request: Request, env: Env, meetingId: string): Pro
   const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes?: number }>();
   await assertNoMeetingOverlap(db, [{ id: meetingId, title: input.title, startsAt: input.startsAt, endsAt: input.endsAt }], settings?.lateScanMinutes ?? 30, [meetingId]);
   const assignment = input.weightCategoryId === undefined ? undefined : await resolveMeetingWeightAssignment(db, input.weightCategoryId, input.startsAt, input.endsAt);
-  const update = assignment === undefined
-    ? db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, audience_mode = ?, is_test = 0 WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, audience.mode, meetingId)
-    : db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, audience_mode = ?, is_test = 0, weight_category_id = ?, weight_category_name = ?, attendance_weight = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, audience.mode, assignment?.id ?? null, assignment?.name ?? null, assignment?.weight ?? 1, meetingId);
-  const now = new Date().toISOString(); const statements = [update, db.prepare("DELETE FROM meeting_audience_labels WHERE installation_id = 'primary' AND meeting_id = ?").bind(meetingId), ...audience.labelIds.map((labelId) => db.prepare("INSERT INTO meeting_audience_labels (installation_id, meeting_id, label_id) VALUES ('primary', ?, ?)").bind(meetingId, labelId)), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.updated', 'meeting', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, meetingId, JSON.stringify({ audience, historicalImpact: impact.completed && impact.changed ? impact.impact : [], ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1 }) }), now)];
-  await db.batch(statements);
+  await db.batch(meetingUpdateStatements(db, principal.userId, meetingId, input, audience, assignment, { historicalImpact: impact.completed && impact.changed ? impact.impact : [] }));
   const rescheduled = Date.parse(current.startsAt) !== Date.parse(input.startsAt) || Date.parse(current.endsAt) !== Date.parse(input.endsAt);
   const discordNotices = historicalChange || rescheduled ? await retractDiscordAttendanceNotices(env, principal, [meetingId]) : [];
   const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "sync", [meetingId]);
   return response({ discordNotices, meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, notes: input.notes?.trim() || null, audienceMode: audience.mode, audienceLabelIds: audience.labelIds, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, weightCategoryName: assignment?.name ?? null, attendanceWeight: assignment?.weight ?? 1 }) }, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
+}
+// CSV import (meeting-import.ts) with the editor's validation, audience, weight and update helpers.
+async function meetingImport(request: Request, env: Env): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
+  return response(await runMeetingImport(await parseJson(request), {
+    db, actorUserId: principal.userId, validateMeeting: validateMeetingInput, validTimeZone,
+    resolveAudience: (input, currentIds, catalog) => resolveAudience(db, input, currentIds, catalog),
+    resolveWeight: (categoryId, startsAt, endsAt, categories) => resolveMeetingWeightAssignment(db, categoryId, startsAt, endsAt, categories),
+    updateStatements: (meetingId, input, audience, assignment) => meetingUpdateStatements(db, principal.userId, meetingId, input, audience, assignment, { import: true }),
+    calendarReady: async () => ({ google: await googleCalendarIsReady(env), discord: await discordCalendarIsReady(env) }), googleEventId: googleCalendarEventId,
+    retractNotices: (meetingIds) => retractDiscordAttendanceNotices(env, principal, meetingIds),
+  }));
 }
 async function updateMeetingSeries(request: Request, env: Env, seriesId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<MeetingInput & { meetingId?: string }>(request); validateMeetingInput(input);
@@ -1510,13 +1620,14 @@ function reportFilters(url: URL): ReportFilters {
   if (useBaseline !== null && useBaseline !== "true" && useBaseline !== "false") throw new HttpError(400, "Invalid report baseline option");
   return { from, to, meetingType: meetingType as ReportFilters["meetingType"], roster: roster as ReportFilters["roster"], labelId: url.searchParams.get("labelId") || undefined, membership: membership as ReportFilters["membership"], memberId: url.searchParams.get("memberId") || undefined, useBaseline: useBaseline === "true" };
 }
-async function policyReport(db: D1Database, filters: ReportFilters): Promise<{ meetings: PolicyMeeting[]; members: PolicyMemberResult[]; labels: PolicyLabel[]; baseline: string | null; timeZone: string }> {
+/** With `rankLabelId`, each member also carries `labelResult`: their result under that label's policy for the period. */
+async function policyReport(db: D1Database, filters: ReportFilters, { rankLabelId }: { rankLabelId?: string } = {}): Promise<{ meetings: PolicyMeeting[]; members: (PolicyMemberResult & { labelResult?: ReturnType<typeof labelSetResult> })[]; labels: PolicyLabel[]; baseline: string | null; timeZone: string }> {
   const data = await policyData(db, filters.memberId ? { memberId: filters.memberId } : {});
   if (filters.labelId && !data.labels.some((label) => label.id === filters.labelId)) throw new HttpError(400, "Unknown label filter");
   const meetings = data.meetings.filter((meeting) => filters.meetingType === "all" || Boolean(meeting.required) === (filters.meetingType === "required"));
   const from = filters.from ?? (filters.useBaseline ? data.baseline ?? undefined : undefined);
   const full = new Map(evaluateAttendance(data).map((item) => [item.member.id, item]));
-  const members = evaluateAttendance({ ...data, meetings, from, to: filters.to, historicalLabelId: filters.labelId && filters.membership === "historical" ? filters.labelId : undefined }).map((item) => ({ ...item, currentCompliances: full.get(item.member.id)?.currentCompliances ?? item.currentCompliances, currentCompliance: full.get(item.member.id)?.currentCompliance ?? item.currentCompliance, historySummaries: full.get(item.member.id)?.historySummaries ?? item.historySummaries })).filter((item) => (filters.roster === "all" || Boolean(item.member.active)) && (!filters.memberId || item.member.id === filters.memberId) && (!filters.labelId || (filters.membership === "historical" ? item.rows.length > 0 : item.currentLabelIds.includes(filters.labelId))));
+  const members = evaluateAttendance({ ...data, meetings, from, to: filters.to, historicalLabelId: filters.labelId && filters.membership === "historical" ? filters.labelId : undefined, ...(rankLabelId ? { summaryLabelIds: [rankLabelId] } : {}) }).map((item) => ({ ...item, ...(rankLabelId ? { labelResult: labelSetResult(item, rankLabelId) } : {}), currentCompliances: full.get(item.member.id)?.currentCompliances ?? item.currentCompliances, currentCompliance: full.get(item.member.id)?.currentCompliance ?? item.currentCompliance, historySummaries: full.get(item.member.id)?.historySummaries ?? item.historySummaries })).filter((item) => (filters.roster === "all" || Boolean(item.member.active)) && (!filters.memberId || item.member.id === filters.memberId) && (!filters.labelId || (filters.membership === "historical" ? item.rows.length > 0 : item.currentLabelIds.includes(filters.labelId))));
   return { meetings: meetings.filter((meeting) => !meeting.isTest && Date.parse(meeting.attendanceClosesAt) <= Date.now() && (!from || policyLocalDate(meeting.startsAt, data.timeZone) >= from) && (!filters.to || policyLocalDate(meeting.startsAt, data.timeZone) <= filters.to)), members, labels: data.labels, baseline: data.baseline, timeZone: data.timeZone };
 }
 async function attendanceReport(request: Request, env: Env): Promise<Response> {
@@ -1525,13 +1636,13 @@ async function attendanceReport(request: Request, env: Env): Promise<Response> {
 }
 type SavedReportRow = { id: string; ownerUserId: string; scope: ReportScope; name: string; definitionJson: string; revision: number; createdBy: string; updatedBy: string; createdAt: string; updatedAt: string; pinnedPosition?: number | null };
 type ReportQueryInput = { definition?: unknown; page?: unknown; pageSize?: unknown };
-type ReportRun = { state: "ready" | "paused"; pausedReasons: string[]; definition: NormalizedReportDefinition; warnings: string[]; resolvedPeriod: { from?: string; to: string }; columns: { id: string; key: string; label: string; labelId?: string; available: boolean; sourceDataset: string; explanation?: string }[]; rows: ReportResultRow[]; periodMembers: PolicyMemberResult[]; officialMembers: PolicyMemberResult[]; meetings: PolicyMeeting[]; labels: PolicyLabel[]; rules: AttendanceRule[]; timeZone: string };
+type ReportRun = { state: "ready" | "paused"; pausedReasons: string[]; definition: NormalizedReportDefinition; warnings: string[]; resolvedPeriod: { from?: string; to: string; baselineModule?: string }; columns: { id: string; key: string; label: string; labelId?: string; available: boolean; sourceDataset: string; explanation?: string }[]; rows: ReportResultRow[]; periodMembers: PolicyMemberResult[]; officialMembers: PolicyMemberResult[]; meetings: PolicyMeeting[]; labels: PolicyLabel[]; rules: AttendanceRule[]; timeZone: string };
 function reportName(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.trim().length > 80 || /[\u0000-\u001f\u007f]/.test(value)) throw new HttpError(400, "Report name is required and must be at most 80 characters");
   return value.trim();
 }
 function reportScope(value: unknown): ReportScope {
-  if (value !== "personal" && value !== "shared") throw new HttpError(400, "Report scope must be personal or shared");
+  if (value !== "personal" && value !== "shared") throw new HttpError(400, "Report scope must be personal (private) or shared");
   return value;
 }
 function parseStoredReportDefinition(value: string): unknown {
@@ -1541,7 +1652,7 @@ async function ensureUniqueReportName(db: D1Database, scope: ReportScope, name: 
   const existing = scope === "shared"
     ? await db.prepare("SELECT id FROM saved_report_views WHERE installation_id = 'primary' AND scope = 'shared' AND name = ? COLLATE NOCASE AND (? IS NULL OR id <> ?)").bind(name, exceptId ?? null, exceptId ?? null).first<{ id: string }>()
     : await db.prepare("SELECT id FROM saved_report_views WHERE installation_id = 'primary' AND scope = 'personal' AND owner_user_id = ? AND name = ? COLLATE NOCASE AND (? IS NULL OR id <> ?)").bind(ownerUserId, name, exceptId ?? null, exceptId ?? null).first<{ id: string }>();
-  if (existing) throw new HttpError(409, scope === "shared" ? "A shared report already uses that name" : "You already have a personal report with that name");
+  if (existing) throw new HttpError(409, scope === "shared" ? "A shared report already uses that name" : "You already have a private report with that name");
 }
 async function accessibleReport(db: D1Database, principal: Principal, id: string): Promise<SavedReportRow> {
   const item = await db.prepare("SELECT id, owner_user_id AS ownerUserId, scope, name, definition_json AS definitionJson, revision, created_by AS createdBy, updated_by AS updatedBy, created_at AS createdAt, updated_at AS updatedAt FROM saved_report_views WHERE installation_id = 'primary' AND id = ? AND (scope = 'shared' OR owner_user_id = ?)").bind(id, principal.userId).first<SavedReportRow>();
@@ -1559,33 +1670,97 @@ async function moduleReportFilterOptions(db: D1Database): Promise<Record<string,
   }));
   return Object.fromEntries(entries.flat());
 }
-async function reportMetadata(db: D1Database): Promise<{ labels: PolicyLabel[]; moduleFilterOptions: Record<string, readonly ModuleReportFilterOption[]>; baseline: string | null; timeZone: string }> {
+/** Every module's reporting start date, Attendance's from organization_settings and the others' from module_report_baselines. */
+function reportBaselines(attendance: string | null, moduleBaselines: unknown): ReportBaselines {
+  let stored: Record<string, unknown> = {};
+  try { const parsed = typeof moduleBaselines === "string" ? JSON.parse(moduleBaselines) as unknown : undefined; if (isObject(parsed)) stored = parsed; } catch { /* No module rows. */ }
+  return Object.fromEntries(reportBaselineModuleIds.map((id) => [id, id === "attendance" ? attendance : typeof stored[id] === "string" ? stored[id] as string : null]));
+}
+async function reportMetadata(db: D1Database): Promise<{ labels: PolicyLabel[]; moduleFilterOptions: Record<string, readonly ModuleReportFilterOption[]>; baseline: string | null; baselines: ReportBaselines; timeZone: string; recentDays: number }> {
   const [labels, moduleFilterOptions, settings] = await Promise.all([
     db.prepare("SELECT id, name, active, formula_enabled AS formulaEnabled FROM member_labels WHERE installation_id = 'primary' ORDER BY name COLLATE NOCASE").all<PolicyLabel>(),
     moduleReportFilterOptions(db),
-    db.prepare("SELECT attendance_reporting_starts_on AS baseline, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ baseline: string | null; timeZone: string }>(),
+    // One query for every baseline and the current-standing window keeps report runs within the Free plan's per-request query budget.
+    db.prepare("SELECT attendance_reporting_starts_on AS baseline, time_zone AS timeZone, (SELECT json_group_object(module_id, starts_on) FROM module_report_baselines WHERE installation_id = 'primary') AS moduleBaselines, attendance_recent_days AS recentDays FROM organization_settings WHERE installation_id = 'primary'").first<{ baseline: string | null; timeZone: string; moduleBaselines?: string | null; recentDays?: number | null }>(),
   ]);
-  return { labels: labels.results ?? [], moduleFilterOptions, baseline: settings?.baseline ?? null, timeZone: settings?.timeZone ?? "UTC" };
+  const baseline = settings?.baseline ?? null;
+  return { labels: labels.results ?? [], moduleFilterOptions, baseline, baselines: reportBaselines(baseline, settings?.moduleBaselines), timeZone: settings?.timeZone ?? "UTC", recentDays: Number(settings?.recentDays) || 30 };
 }
-async function accessibleReportDatasets(db: D1Database, principal: Principal): Promise<Set<string>> {
-  const accessible = new Set(["core.members", combinedMemberDataset.id]);
-  for (const module of bundledModuleRegistry.modules) {
-    try { await requireModuleWorkspace(db, principal.userId, module.id); for (const dataset of module.reportDatasets ?? []) accessible.add(dataset.id); }
-    catch (error) { if (!(error instanceof HttpError) || ![403, 409, 503].includes(error.status)) throw error; }
-  }
-  return accessible;
+/**
+ * Each label's attendance policy in effect today, in one query. A percentage policy is "weighted" when a required meeting
+ * its label can attend has a weight other than 1, so the label's counts and rate can differ.
+ */
+async function labelPolicySummaries(db: D1Database, today: string): Promise<LabelPolicySummary[]> {
+  const result = await db.prepare("SELECT r.id, r.label_id AS labelId, r.starts_on AS startsOn, r.ends_on AS endsOn, r.rule_type AS ruleType, r.threshold_percent AS thresholdPercent, r.meetings_per_week AS meetingsPerWeek, r.excused_handling AS excusedHandling, EXISTS (SELECT 1 FROM meetings m WHERE m.installation_id = r.installation_id AND m.deleted_at IS NULL AND m.required = 1 AND COALESCE(m.is_test, 0) = 0 AND m.attendance_weight <> 1 AND (m.audience_mode = 'all' OR EXISTS (SELECT 1 FROM meeting_audience_labels a WHERE a.installation_id = m.installation_id AND a.meeting_id = m.id AND a.label_id = r.label_id))) AS weighted FROM label_attendance_rules r WHERE r.installation_id = 'primary' ORDER BY r.label_id, r.starts_on").all<AttendanceRule & { weighted: number }>();
+  const rules = result.results ?? [];
+  return [...new Set(rules.map((rule) => rule.labelId))].flatMap((labelId) => {
+    const rule = policyRuleOn(rules, labelId, today) as (AttendanceRule & { weighted: number }) | undefined;
+    if (!rule) return [];
+    const weekly = rule.ruleType === "weekly_count";
+    return [{ labelId, ruleType: rule.ruleType, target: Number(weekly ? rule.meetingsPerWeek : rule.thresholdPercent), excusedHandling: weekly ? null : rule.excusedHandling ?? "exclude", weighted: !weekly && Boolean(rule.weighted) }];
+  });
+}
+/** The report datasets a user can open, and each accessible module's generation for moduleReportDatabase to reuse. */
+type ReportAccess = Set<string> & { readonly generations?: ReadonlyMap<string, number> };
+async function accessibleReportDatasets(db: D1Database, principal: Principal): Promise<ReportAccess> {
+  const accessible = new Set(["core.members", combinedMemberDataset.id]); const generations = new Map<string, number>();
+  // Every module's check starts at once, so a coalescing database sends them as one batch.
+  const checks = await Promise.all(bundledModuleRegistry.modules.map(async (module) => {
+    try { return { module, generation: await requireModuleWorkspace(db, principal.userId, module.id) }; }
+    catch (error) { if (!(error instanceof HttpError) || ![403, 409, 503].includes(error.status)) throw error; return { module, generation: undefined }; }
+  }));
+  for (const { module, generation } of checks) if (generation !== undefined) { generations.set(module.id, generation); for (const dataset of module.reportDatasets ?? []) accessible.add(dataset.id); }
+  return Object.assign(accessible, { generations });
 }
 function reportSourceExplanation(datasetId: string): string {
   const owner = bundledModuleRegistry.reportDatasetOwner(datasetId);
   return `${owner?.label ?? reportDatasetDefinition(datasetId)?.label ?? "This report source"} is unavailable for your current module access. It will return when access is restored.`;
 }
+/**
+ * A module's reporting start date (operational baseline), for the SDK's ReportingStartDateField on its settings page. Admins
+ * only. Attendance keeps its date in Meeting configuration. GET is one query; PUT is one batch whose revision check refuses
+ * a stale edit, so each request stays well inside the Free plan's limits.
+ */
+async function moduleReportBaseline(request: Request, env: Env, moduleId: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  if (moduleId === "attendance" || !reportBaselineModuleIds.includes(moduleId)) throw new HttpError(404, "This module has no reporting start date");
+  const read = async () => {
+    const row = await db.prepare("SELECT s.time_zone AS timeZone, b.starts_on AS startsOn, COALESCE(b.revision, 0) AS revision FROM organization_settings s LEFT JOIN module_report_baselines b ON b.installation_id = s.installation_id AND b.module_id = ? WHERE s.installation_id = 'primary'").bind(moduleId).first<{ timeZone: string | null; startsOn: string | null; revision: number }>();
+    if (!row) throw new HttpError(409, "Save organization setup before choosing a reporting start date");
+    const timeZone = row.timeZone ?? "UTC";
+    return { moduleId, label: reportBaselineModuleLabel(moduleId), startsOn: row.startsOn ?? null, revision: Number(row.revision), timeZone, today: policyLocalDate(new Date().toISOString(), timeZone) };
+  };
+  if (request.method === "GET") return response(await read());
+  if (request.method !== "PUT") throw new HttpError(405, "Use GET or PUT for a reporting start date");
+  const input = await parseJson<{ startsOn?: unknown; revision?: unknown }>(request, 1024);
+  const startsOn = input.startsOn === null || input.startsOn === "" ? null : input.startsOn;
+  if (startsOn !== null && (typeof startsOn !== "string" || !validDate(startsOn))) throw new HttpError(400, "Reporting start date must be YYYY-MM-DD");
+  if (!Number.isSafeInteger(input.revision) || Number(input.revision) < 0) throw new HttpError(400, "Provide the reporting start date's revision");
+  const now = new Date().toISOString();
+  const [, audit] = await db.batch([
+    db.prepare(`INSERT INTO module_report_baselines (installation_id, module_id, starts_on, revision, updated_at) VALUES ('primary', ?, ?, 1, ?)
+      ON CONFLICT(installation_id, module_id) DO UPDATE SET starts_on = excluded.starts_on, revision = module_report_baselines.revision + 1, updated_at = excluded.updated_at
+      WHERE module_report_baselines.revision = ?`).bind(moduleId, startsOn, now, Number(input.revision)),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', ?, 'reports.baseline_updated', 'platform_module', ?, ?, ? WHERE changes() = 1")
+      .bind(crypto.randomUUID(), principal.userId, moduleId, JSON.stringify({ startsOn }), now),
+  ]);
+  if (audit?.meta?.changes !== 1) throw new HttpError(409, "The reporting start date changed; reload before saving again");
+  return response(await read());
+}
 async function reportCatalog(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const [data, accessible] = await Promise.all([reportMetadata(db), accessibleReportDatasets(db, principal)]);
-  const datasets = reportDatasetCatalog.map((dataset) => ({ ...dataset, available: accessible.has(dataset.id), fields: dataset.fields.map((field) => { const sourceDataset = reportFieldSourceDataset(dataset.id, field.id) ?? dataset.id; const available = accessible.has(sourceDataset); return { ...field, sourceDataset, available, explanation: available ? undefined : reportSourceExplanation(sourceDataset) }; }) })); // Attendance members first, then the first accessible member-level module dataset, then Core members.
+  const principal = await requireRole(request, env, ["admin", "operator"]); const db = coalescingDatabase(requireDatabase(env)); const [data, accessible] = await Promise.all([reportMetadata(db), accessibleReportDatasets(db, principal)]);
+  const today = policyLocalDate(new Date().toISOString(), data.timeZone);
+  const baselineModule = (datasetId: string) => datasetId === combinedMemberDataset.id ? undefined : reportBaselineFor({ dataset: datasetId, columns: [], period: { type: "all" } }, data.baselines, today).moduleId;
+  const datasets = reportDatasetCatalog.map((dataset) => ({ ...dataset, baselineModule: baselineModule(dataset.id), available: accessible.has(dataset.id), fields: dataset.fields.map((field) => { const sourceDataset = reportFieldSourceDataset(dataset.id, field.id) ?? dataset.id; const available = accessible.has(sourceDataset); return { ...field, label: withRecentWindow(field.label, data.recentDays), sourceDataset, available, explanation: available ? undefined : reportSourceExplanation(sourceDataset) }; }) })); // Attendance members first, then the first accessible member-level module dataset, then Core members.
   const defaultDataset = accessible.has("attendance.members") ? "attendance.members" : reportDatasetCatalog.find((dataset) => dataset.rowIdentity === "core.member.identity" && bundledModuleRegistry.reportDatasetOwner(dataset.id) && accessible.has(dataset.id))?.id ?? "core.members";
   // Module filter options are listed only for Users who can open one of the owning module's datasets.
   const reportFilters = reportModuleFilters.map((filter) => { const owner = bundledModuleRegistry.reportFilterOwner(filter.id); const visible = Boolean(owner?.reportDatasets?.some((dataset) => accessible.has(dataset.id))); return { ...filter, options: visible ? data.moduleFilterOptions[filter.id] ?? [] : [] }; });
-  return response({ datasets, columns: reportColumnCatalog, labels: data.labels, reportFilters, baseline: data.baseline, timeZone: data.timeZone, defaultDefinition: defaultReportDefinition(Boolean(data.baseline), defaultDataset), role: principal.role, attendanceAvailable: accessible.has("attendance.members") });
+  // baseline stays Attendance's for older dashboards; baselines lists each module's reporting start date.
+  const baselines = reportBaselineModuleIds.map((moduleId) => ({ moduleId, label: reportBaselineModuleLabel(moduleId), startsOn: data.baselines[moduleId] ?? null }));
+  const defaultBaseline = reportBaselineFor({ dataset: defaultDataset, columns: [], period: { type: "all" } }, data.baselines, today).baseline;
+  // Each label's policy today, for label column sets, the Attendance by label preset and the Leaderboard's label ranking.
+  const labelPolicies = accessible.has("attendance.members") ? await labelPolicySummaries(db, today) : [];
+  return response({ datasets, labelPolicies, columns: reportColumnCatalog.map((column) => ({ ...column, label: withRecentWindow(column.label, data.recentDays) })), recentDays: data.recentDays, labels: data.labels, reportFilters, baseline: data.baseline, baselines, today, timeZone: data.timeZone, defaultDefinition: defaultReportDefinition(reportBaselineStarted(defaultBaseline, today), defaultDataset), role: principal.role, attendanceAvailable: accessible.has("attendance.members") });
 }
 function savedReportResponse(item: SavedReportRow, labels: PolicyLabel[], moduleFilterOptions: Readonly<Record<string, readonly { id: string }[]>>) {
   const validation = validateReportDefinition(parseStoredReportDefinition(item.definitionJson), labels, { allowMissingLabels: true, moduleFilterOptions });
@@ -1620,7 +1795,7 @@ async function manageSavedReport(request: Request, env: Env, id: string): Promis
   const input = await parseJson<{ name?: unknown; scope?: unknown; definition?: unknown; revision?: unknown }>(request); const revision = Number(input.revision);
   if (!Number.isInteger(revision) || revision !== Number(current.revision)) throw new HttpError(409, "This report changed after you opened it. Reload and reapply your changes.");
   const name = reportName(input.name); const scope = reportScope(input.scope);
-  if (current.scope === "shared" && scope === "personal" && current.ownerUserId !== principal.userId) throw new HttpError(403, "Save a personal copy instead of converting another user's shared report");
+  if (current.scope === "shared" && scope === "personal" && current.ownerUserId !== principal.userId) throw new HttpError(403, "Save a private copy instead of converting another user's shared report");
   const data = await reportMetadata(db); const validation = validateReportDefinition(input.definition, data.labels, { moduleFilterOptions: data.moduleFilterOptions });
   if (!validation.definition || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
   await ensureUniqueReportName(db, scope, name, current.ownerUserId, id); const now = new Date().toISOString();
@@ -1663,6 +1838,10 @@ async function attendanceReportProjection(db: D1Database, definition: Normalized
   return { rows, periodMembers: periodMembers.filter((member) => matchingMemberIds.has(member.member.id)), officialMembers, meetings, labels: data.labels, rules: data.rules, timeZone: data.timeZone };
 }
 
+// Each registered job runs one small batch per scheduler slice (see platform-scheduler.ts), which on the Workers Free plan
+// must fit 10 ms CPU, 50 external requests and 50 D1 queries. It leaves the rest queued in D1 and reports more work, so
+// the scheduler runs it again within seconds; nothing expects one slice to drain a queue. A module job's provider call
+// also costs one D1 check. While an Admin's Stop is active, every delivery path leaves its work queued.
 /** Attendance delivery jobs and its report projection are implemented in the Worker, so they are bound here. */
 const attendanceRuntime = {
   jobs: {
@@ -1680,16 +1859,27 @@ const attendanceRuntime = {
 const apiModules = createApiModuleSet<Env>(bundledModuleRegistry, installedApiModules.map((module) => module === attendanceApiModule ? { ...module, ...attendanceRuntime } : module));
 const moduleReportDispatcher = createModuleReportDispatcher(bundledModuleRegistry, apiModules.all.flatMap((module) => module.reports ? [{ moduleId: module.moduleId, handlers: module.reports }] : []));
 
-async function moduleReportDatabase(db: D1Database, principal: Principal, datasetId: string): Promise<D1Database | undefined> {
+/**
+ * The owning module's database for a report source, or undefined when the user can't open it. A generation the request's
+ * access check already read is reused: the scoped database's guard rechecks it with every read, and a projection whose
+ * guard finds access gone counts as unavailable (see projectModuleReport).
+ */
+async function moduleReportDatabase(db: D1Database, principal: Principal, datasetId: string, access?: ReportAccess): Promise<D1Database | undefined> {
   const owner = moduleReportDispatcher.owner(datasetId); const dataset = reportDatasetDefinition(datasetId);
   if (!owner || !dataset) return;
   try {
-    const generation = await requireModuleWorkspace(db, principal.userId, owner.id);
+    const generation = access?.generations?.get(owner.id) ?? await requireModuleWorkspace(db, principal.userId, owner.id);
     return captureModuleWorkspaceDatabase(db, owner.id, generation, principal.userId, dataset.capability);
   } catch (error) {
     if (error instanceof HttpError && [403, 409, 503].includes(error.status)) return;
     throw error;
   }
+}
+
+/** A projection's result, or undefined when the module's access ended after the request's check, as a fresh check would find. */
+async function projectModuleReport<T>(project: () => Promise<T>): Promise<T | undefined> {
+  try { return await project(); }
+  catch (error) { if (isModuleAuthorityDenied(error)) return undefined; throw error; }
 }
 
 /** Report sources that apply each module filter with a selection; a module's own projection applies its filter. */
@@ -1713,7 +1903,7 @@ function projectionDefinition(definition: NormalizedReportDefinition, datasetId:
   return { ...definition, dataset: dataset.id, groupBy: [...dataset.groupBy], columns, columnFilters: [], sort: { column: { key: dataset.defaultSort.field }, direction: dataset.defaultSort.direction } };
 }
 
-async function combinedMemberRows(db: D1Database, principal: Principal, definition: NormalizedReportDefinition, context: ReportProjectionContext, accessible: Set<string>): Promise<ReportResultRow[]> {
+async function combinedMemberRows(db: D1Database, principal: Principal, definition: NormalizedReportDefinition, context: ReportProjectionContext, accessible: ReportAccess): Promise<ReportResultRow[]> {
   const coreDefinition = projectionDefinition(definition, "core.members");
   if (definition.membership === "historical") coreDefinition.labelIds = [];
   let rows = await projectCoreMembers(db, coreDefinition, context); const indexed = new Map(rows.map((row) => [row.id, row]));
@@ -1723,11 +1913,12 @@ async function combinedMemberRows(db: D1Database, principal: Principal, definiti
   let historicalMemberIds: Set<string> | undefined;
   for (const source of sources) {
     if (!accessible.has(source)) continue;
-    const scoped = await moduleReportDatabase(db, principal, source);
+    const scoped = await moduleReportDatabase(db, principal, source, accessible);
     if (!scoped) { accessible.delete(source); continue; }
     const sourceDefinition = projectionDefinition(definition, source);
     if (definition.membership === "historical" && source !== "attendance.members") sourceDefinition.labelIds = [];
-    const projected = source === "attendance.members" ? (await attendanceReportProjection(scoped, sourceDefinition, context)).rows : await moduleReportDispatcher.run(source, scoped, sourceDefinition, context);
+    const projected = await projectModuleReport(async () => source === "attendance.members" ? (await attendanceReportProjection(scoped, sourceDefinition, context)).rows : await moduleReportDispatcher.run(source, scoped, sourceDefinition, context));
+    if (!projected) { accessible.delete(source); continue; }
     if (source === "attendance.members" && definition.membership === "historical" && definition.labelIds.length) historicalMemberIds = new Set(projected.map((row) => row.id));
     for (const sourceRow of projected) {
       const target = indexed.get(sourceRow.id);
@@ -1742,12 +1933,14 @@ async function combinedMemberRows(db: D1Database, principal: Principal, definiti
   return filterAndSortReportRows(definition, rows);
 }
 
-async function runReportDefinition(db: D1Database, principal: Principal, value: unknown): Promise<ReportRun> {
-  const metadata = await reportMetadata(db); const validation = validateReportDefinition(value, metadata.labels, { allowMissingLabels: true, moduleFilterOptions: metadata.moduleFilterOptions });
+async function runReportDefinition(database: D1Database, principal: Principal, value: unknown): Promise<ReportRun> {
+  // Reads started together share one D1 batch, which the Free plan counts as one of its 50 queries per invocation.
+  const db = coalescingDatabase(database);
+  const [metadata, accessible] = await Promise.all([reportMetadata(db), accessibleReportDatasets(db, principal)]); const validation = validateReportDefinition(value, metadata.labels, { allowMissingLabels: true, moduleFilterOptions: metadata.moduleFilterOptions });
   if (!validation.definition || validation.definition.version !== 2 || validation.errors.length) throw new HttpError(400, "Invalid report definition", validation.errors);
-  const definition = validation.definition; const today = policyLocalDate(new Date().toISOString(), metadata.timeZone); const resolved = resolveReportPeriod(definition.period, today, metadata.baseline); const warnings = [...validation.warnings];
+  const definition = validation.definition; const today = policyLocalDate(new Date().toISOString(), metadata.timeZone); const baseline = reportBaselineFor(definition, metadata.baselines, today); const resolved = resolveReportPeriod(definition.period, today, baseline.baseline, baseline.moduleId ? reportBaselineModuleLabel(baseline.moduleId) : undefined); const warnings = [...validation.warnings];
   if (resolved.warning) warnings.push(resolved.warning);
-  const context = { from: resolved.from, to: resolved.to ?? today, today }; const accessible = await accessibleReportDatasets(db, principal);
+  const context = { from: resolved.from, to: resolved.to ?? today, today };
   const controllingFields = [...definition.groupBy, definition.sort.column.key, ...(definition.columnFilters ?? []).map((filter) => filter.column.key)];
   const filterControls = [
     ...(definition.meetingType !== "all" ? [reportFilterSourceDataset(definition.dataset, "meeting-type")] : []),
@@ -1758,46 +1951,60 @@ async function runReportDefinition(db: D1Database, principal: Principal, value: 
   const unavailableControls = [...new Set([...controllingFields.map((field) => reportFieldSourceDataset(definition.dataset, field)), ...filterControls].filter((source): source is string => typeof source === "string" && !accessible.has(source)))];
   const pausedReasons = !accessible.has(definition.dataset) ? [reportSourceExplanation(definition.dataset)] : unavailableControls.map((source) => `${reportSourceExplanation(source)} Results are paused because this source controls grouping, filtering, or sorting.`);
   let rows: ReportResultRow[] = []; let detail = { periodMembers: [] as PolicyMemberResult[], officialMembers: [] as PolicyMemberResult[], meetings: [] as PolicyMeeting[], labels: metadata.labels, rules: [] as AttendanceRule[], timeZone: metadata.timeZone };
+  // Projections also compute the cells of filtered fields that aren't displayed; the response keeps only displayed cells.
+  const computed = reportComputationDefinition(definition);
   if (!pausedReasons.length) {
-    if (definition.dataset === "core.members") rows = await projectCoreMembers(db, definition, context);
+    if (definition.dataset === "core.members") rows = await projectCoreMembers(db, computed, context);
     else if (definition.dataset === combinedMemberDataset.id) {
-      rows = await combinedMemberRows(db, principal, definition, context, accessible);
+      rows = await combinedMemberRows(db, principal, computed, context, accessible);
       const revokedControls = [...new Set([...controllingFields.map((field) => reportFieldSourceDataset(definition.dataset, field)), ...filterControls].filter((source): source is string => typeof source === "string" && !accessible.has(source)))];
       if (revokedControls.length) { rows = []; for (const source of revokedControls) pausedReasons.push(`${reportSourceExplanation(source)} Results are paused because this source controls grouping, filtering, or sorting.`); }
     }
     else {
-      const scoped = await moduleReportDatabase(db, principal, definition.dataset);
-      if (!scoped) pausedReasons.push(reportSourceExplanation(definition.dataset));
-      else if (definition.dataset === "attendance.members") { const projection = await attendanceReportProjection(scoped, definition, context); rows = projection.rows; detail = projection; }
-      else rows = await moduleReportDispatcher.run(definition.dataset, scoped, definition, context);
+      const scoped = await moduleReportDatabase(db, principal, definition.dataset, accessible);
+      const projected = scoped && await projectModuleReport(async () => definition.dataset === "attendance.members" ? await attendanceReportProjection(scoped, computed, context) : { rows: await moduleReportDispatcher.run(definition.dataset, scoped, computed, context) });
+      if (!projected) pausedReasons.push(reportSourceExplanation(definition.dataset));
+      else if ("officialMembers" in projected) { const { rows: projectedRows, ...projection } = projected; rows = projectedRows; detail = projection; }
+      else rows = projected.rows;
     }
+    rows = displayedReportRows(definition, rows);
   }
   const labelNames = new Map(metadata.labels.map((label) => [label.id, label.name]));
-  const columns = definition.columns.map((column) => { const sourceDataset = reportFieldSourceDataset(definition.dataset, column.key) ?? definition.dataset; const available = accessible.has(sourceDataset); return { id: reportColumnId(column), key: column.key, label: reportColumnLabel(column, labelNames), labelId: column.labelId, unit: column.unit, sourceDataset, available, explanation: available ? undefined : reportSourceExplanation(sourceDataset) }; });
+  const columns = definition.columns.map((column) => { const sourceDataset = reportFieldSourceDataset(definition.dataset, column.key) ?? definition.dataset; const available = accessible.has(sourceDataset); return { id: reportColumnId(column), key: column.key, label: reportColumnLabel(column, labelNames, metadata.recentDays), labelId: column.labelId, unit: column.unit, sourceDataset, available, explanation: available ? undefined : reportSourceExplanation(sourceDataset) }; });
   const mutedSources = [...new Set(columns.filter((column) => !column.available).map((column) => column.sourceDataset))];
   if (!pausedReasons.length) for (const source of mutedSources) warnings.push(`${reportSourceExplanation(source)} Affected columns are muted without cached or zero values.`);
-  return { state: pausedReasons.length ? "paused" : "ready", pausedReasons: [...new Set(pausedReasons)], definition, warnings: [...new Set(warnings)], resolvedPeriod: { from: resolved.from, to: resolved.to ?? today }, columns, rows, ...detail };
+  return { state: pausedReasons.length ? "paused" : "ready", pausedReasons: [...new Set(pausedReasons)], definition, warnings: [...new Set(warnings)], resolvedPeriod: { from: resolved.from, to: resolved.to ?? today, ...(definition.period.type === "baseline" && baseline.moduleId ? { baselineModule: baseline.moduleId } : {}) }, columns, rows, ...detail };
 }
 async function customReportQuery(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const input = await parseJson<ReportQueryInput>(request); const run = await runReportDefinition(requireDatabase(env), principal, input.definition); const pagination = reportPagination(input.page, input.pageSize, run.rows.length);
   return response({ state: run.state, pausedReasons: run.pausedReasons, definition: run.definition, warnings: run.warnings, resolvedPeriod: run.resolvedPeriod, columns: run.columns, rows: run.rows.slice(pagination.from, pagination.to), pagination: { page: pagination.page, pageSize: pagination.pageSize, totalRows: run.rows.length, totalPages: pagination.totalPages, rangeStart: run.rows.length ? pagination.from + 1 : 0, rangeEnd: pagination.to } });
 }
 async function leaderboardReport(request: Request, env: Env): Promise<Response> {
-  await requireRole(request, env, ["admin", "operator"]); const url = new URL(request.url); const report = await policyReport(requireDatabase(env), reportFilters(url)); const sort = url.searchParams.get("sort") ?? "regular-desc";
-  if (!["regular-desc", "first-name", "last-name"].includes(sort)) throw new HttpError(400, "Invalid leaderboard sort");
+  await requireRole(request, env, ["admin", "operator"]); const url = new URL(request.url); const filters = reportFilters(url); const sort = url.searchParams.get("sort") ?? "regular-desc";
+  if (!["regular-desc", "label-rate", "first-name", "last-name"].includes(sort)) throw new HttpError(400, "Invalid leaderboard sort");
+  // One label chosen: rank by that label's Attendance rate for the period, from the same evaluation (no extra queries).
+  if (sort === "label-rate" && !filters.labelId) throw new HttpError(400, "Choose one label to rank by its attendance rate");
+  const report = await policyReport(requireDatabase(env), filters, { rankLabelId: sort === "label-rate" ? filters.labelId : undefined });
   report.members.sort((left, right) => {
-    if (sort === "regular-desc") { const a = left.regularAttendance.rate, b = right.regularAttendance.rate; if (a === null && b !== null) return 1; if (a !== null && b === null) return -1; if (a !== null && b !== null && a !== b) return b - a; }
+    const ranked = sort === "regular-desc" ? [left.regularAttendance.preciseRate, right.regularAttendance.preciseRate] : sort === "label-rate" ? [left.labelResult?.rate ?? null, right.labelResult?.rate ?? null] : undefined;
+    if (ranked) { const [a, b] = ranked; if (a === null && b !== null) return 1; if (a !== null && b === null) return -1; if (a !== null && b !== null && a !== b) return b - a; }
     const first = sort === "first-name" ? left.member.firstName.localeCompare(right.member.firstName) : left.member.lastName.localeCompare(right.member.lastName);
     return first || (sort === "first-name" ? left.member.lastName.localeCompare(right.member.lastName) : left.member.firstName.localeCompare(right.member.firstName)) || left.member.memberId.localeCompare(right.member.memberId);
   });
   const policyAlerts = report.members.flatMap((item) => item.currentCompliances.flatMap((policy, index) => policy.status === "below" ? [{ key: `${item.member.id}:${policy.labelId ?? index}`, memberId: item.member.memberId, name: `${item.member.firstName} ${item.member.lastName}`, policy }] : []));
   const trend = report.meetings.map((meeting) => { const rows = report.members.flatMap((member) => member.rows.filter((row) => row.meetingId === meeting.id && row.regularEligible)); const attended = rows.reduce((sum, row) => sum + (row.attended ? row.regularWeight : 0), 0); const eligible = rows.reduce((sum, row) => sum + row.regularWeight, 0); return { meetingId: meeting.id, title: meeting.title, startsAt: meeting.startsAt, rate: eligible > 0 ? Math.round(attended / eligible * 100) : null }; }).filter((point) => point.rate !== null);
-  const pagination = reportPagination(url.searchParams.get("page") ?? 1, url.searchParams.get("pageSize") ?? 25, report.members.length); return response({ ...report, members: report.members.slice(pagination.from, pagination.to), insights: { policyAlerts, trend }, pagination: { page: pagination.page, pageSize: pagination.pageSize, totalRows: report.members.length, totalPages: pagination.totalPages, rangeStart: report.members.length ? pagination.from + 1 : 0, rangeEnd: pagination.to } });
+  const pagination = reportPagination(url.searchParams.get("page") ?? 1, url.searchParams.get("pageSize") ?? 25, report.members.length); return response({ ...report, today: policyLocalDate(new Date().toISOString(), report.timeZone), members: report.members.slice(pagination.from, pagination.to), insights: { policyAlerts, trend }, pagination: { page: pagination.page, pageSize: pagination.pageSize, totalRows: report.members.length, totalPages: pagination.totalPages, rangeStart: report.members.length ? pagination.from + 1 : 0, rangeEnd: pagination.to } });
 }
 async function reportCsvExport(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<ReportQueryInput>(request); const run = await runReportDefinition(db, principal, input.definition);
   if (run.state === "paused") throw new HttpError(409, "Report export is paused until its unavailable source returns or the report is edited", run.pausedReasons);
-  const csv = [run.columns.map((column) => csvCell(column.label)).join(","), ...run.rows.map((row) => run.columns.map((column) => csvCell(row.cells[column.id]?.text ?? "")).join(","))].join("\r\n") + "\r\n";
+  // Rates and counts export as plain numbers (exportText). A report with label column sets also gets Member ID after Member.
+  const labelSets = reportHasLabelSets(run.definition);
+  const policyTypes = new Map(labelSets ? (await labelPolicySummaries(db, policyLocalDate(new Date().toISOString(), run.timeZone))).map((policy) => [policy.labelId, policy.ruleType] as const) : []);
+  const memberId = (row: ReportResultRow) => row.member?.memberId ?? (row.href?.startsWith("/roster/") ? decodeURIComponent(row.href.slice("/roster/".length)) : "");
+  const exportColumns: { header: string; value: (row: ReportResultRow) => string }[] = run.columns.map((column) => ({ header: reportColumnCsvLabel({ key: column.key, labelId: column.labelId }, column.label, policyTypes), value: (row) => { const cell = row.cells[column.id]; return cell?.unavailable ? cell.text : cell?.exportText ?? cell?.text ?? ""; } }));
+  if (labelSets && reportDatasetDefinition(run.definition.dataset)?.rowIdentity === "core.member.identity" && !run.columns.some((column) => column.key === "core.member.id")) exportColumns.splice(1, 0, { header: "Member ID", value: memberId });
+  const csv = [exportColumns.map((column) => csvCell(column.header)).join(","), ...run.rows.map((row) => exportColumns.map((column) => csvCell(column.value(row))).join(","))].join("\r\n") + "\r\n";
   await writeAudit(db, principal, "report.exported", "saved_report", null, { format: "summary", rows: run.rows.length, columns: run.columns.map((column) => column.id) });
   return new Response(csv, { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="lancerlogin-report-${new Date().toISOString().slice(0, 10)}.csv"`, "cache-control": "no-store" } });
 }
@@ -1823,11 +2030,11 @@ async function reportDetailCsvExport(request: Request, env: Env): Promise<Respon
 }
 function policySummaryText(summary?: PolicyMemberResult): string {
   if (!summary) return "No attendance record is available.";
-  const regular = "Regular attendance: " + (summary.regularAttendance.rate === null ? "N/A" : String(summary.regularAttendance.rate) + "%") + " from " + (summary.regularAttendance.from ?? "the first eligible meeting") + " to " + summary.regularAttendance.to + ".";
+  const regular = "Overall rate: " + (summary.regularAttendance.rate === null ? "N/A" : String(summary.regularAttendance.rate) + "%") + " from " + (summary.regularAttendance.from ?? "the first eligible meeting") + " to " + summary.regularAttendance.to + ".";
   if (!summary.currentCompliances.length) return regular + " No assigned attendance policy.";
   const results = summary.currentCompliances.map((current) => {
-    if (current.status === "no_rule") return (current.labelName ?? "Attendance policy") + ": no active attendance rule";
-    const status = current.status === "not_applicable" ? "N/A" : current.status.replaceAll("_", " ");
+    const status = attendanceStatusText(current.status);
+    if (current.status === "no_rule") return (current.labelName ?? "Attendance policy") + ": " + status;
     const result = current.ruleType === "weekly_count"
       ? String(current.attended) + " of " + String(current.threshold) + " meetings, " + status
       : (current.rate === null ? "N/A" : String(current.rate) + "%") + " against " + String(current.threshold) + "% required, " + status + "; excused meetings " + (current.excusedHandling === "count_missed" ? "count as missed" : "are excluded");
@@ -1883,7 +2090,12 @@ async function requireIntegrationEnabled(env: Env, provider: IntegrationProvider
   if (!await integrationIsEnabled(env, provider)) throw new HttpError(409, `${provider === "google" ? "Google OAuth" : provider === "resend" ? "Resend" : "Discord"} is disabled`);
 }
 async function integrationRecord(env: Env, provider: IntegrationProvider): Promise<IntegrationRecord | null> {
-  return requireDatabase(env).prepare(`SELECT i.id, i.ciphertext, i.iv, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, x.${integrationFlagSqlColumns[provider]} AS enabled FROM encrypted_integrations i JOIN installations x ON x.id = i.installation_id WHERE i.installation_id = 'primary' AND i.provider = ?`).bind(provider).first();
+  const read = () => requireDatabase(env).prepare(`SELECT i.id, i.ciphertext, i.iv, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, x.${integrationFlagSqlColumns[provider]} AS enabled FROM encrypted_integrations i JOIN installations x ON x.id = i.installation_id WHERE i.installation_id = 'primary' AND i.provider = ?`).bind(provider).first<IntegrationRecord>();
+  // A scheduled pass reads each provider's record once for all its jobs; no job changes these records.
+  const cache = env.schedulerPass?.integrations; if (!cache) return read();
+  let record = cache.get(provider);
+  if (!record) { record = read(); cache.set(provider, record); record.catch(() => cache.delete(provider)); }
+  return record;
 }
 async function requireIntegrationConfigured(env: Env, provider: IntegrationProvider): Promise<void> {
   const record = await integrationRecord(env, provider);
@@ -2331,17 +2543,26 @@ async function replaceMissingGoogleCalendarEvent(db: D1Database, operation: Goog
   ]);
   return eventId;
 }
+// Per pass: about 2 Google requests and 5 D1 queries per operation, plus the token refresh.
+const GOOGLE_CALENDAR_OPERATION_BATCH_LIMIT = 5;
+const GOOGLE_CALENDAR_OPERATION_COST: PassCost = { d1: 6, external: 2 };
 async function processGoogleCalendarOperations(env: Env, eventIds?: string[]): Promise<GoogleCalendarSyncSummary> {
   if (!await googleCalendarIsReady(env)) return googleCalendarEmptySummary();
+  // A Stop holds first attempts too: the operations stay pending and go out when delivery resumes.
+  if (await deliveryPausedUntil(env) !== null) return { synced: 0, queued: eventIds?.length ? new Set(eventIds).size : 0, failed: 0 };
   const db = requireDatabase(env); const now = new Date().toISOString(); const filter = eventIds?.length ? `AND o.event_id IN (${eventIds.map(() => "?").join(",")})` : "AND (o.status = 'pending' OR (o.status = 'failed' AND o.next_attempt_at IS NOT NULL AND o.next_attempt_at <= ?))"; const values = eventIds?.length ? eventIds : [now];
-  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.event_id AS eventId, o.action, o.starts_at AS startsAt, o.ends_at AS endsAt, o.status, o.attempts, m.synced_at AS syncedAt, m.generation FROM google_calendar_operations o LEFT JOIN google_calendar_event_mappings m ON m.installation_id = o.installation_id AND m.meeting_id = o.meeting_id AND m.event_id = o.event_id WHERE o.installation_id = 'primary' ${filter} ORDER BY o.updated_at LIMIT 50`).bind(...values).all<GoogleCalendarOperation>();
+  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.event_id AS eventId, o.action, o.starts_at AS startsAt, o.ends_at AS endsAt, o.status, o.attempts, m.synced_at AS syncedAt, m.generation FROM google_calendar_operations o LEFT JOIN google_calendar_event_mappings m ON m.installation_id = o.installation_id AND m.meeting_id = o.meeting_id AND m.event_id = o.event_id WHERE o.installation_id = 'primary' ${filter} ORDER BY o.updated_at LIMIT ${GOOGLE_CALENDAR_OPERATION_BATCH_LIMIT}`).bind(...values).all<GoogleCalendarOperation>();
   const operations = result.results ?? []; if (!operations.length) return googleCalendarEmptySummary();
+  if (operations.length === GOOGLE_CALENDAR_OPERATION_BATCH_LIMIT) passMore(env);
+  // Requested operations beyond this batch stay pending for the scheduled pass.
+  const leftover = eventIds?.length ? Math.max(0, new Set(eventIds).size - operations.length) : 0;
   let accessToken: string; let secret: GoogleCalendarSecret;
   try { ({ accessToken, secret } = await googleCalendarAccessToken(env, true)); }
-  catch (error) { for (const operation of operations) await markGoogleCalendarOperationFailure(db, operation, error); return { synced: 0, queued: 0, failed: operations.length }; }
-  if (!secret.calendarId) return { synced: 0, queued: operations.length, failed: 0 };
-  let synced = 0; let queued = 0; let failed = 0;
-  for (const operation of operations) {
+  catch (error) { for (const operation of operations) await markGoogleCalendarOperationFailure(db, operation, error); return { synced: 0, queued: leftover, failed: operations.length }; }
+  if (!secret.calendarId) return { synced: 0, queued: operations.length + leftover, failed: 0 };
+  let synced = 0; let queued = leftover; let failed = 0;
+  for (const [index, operation] of operations.entries()) {
+    if (!passAllows(env, GOOGLE_CALENDAR_OPERATION_COST)) { queued += operations.length - index; break; }
     try {
       if (operation.action === "delete") {
         try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "DELETE" }, env.moduleProviderAuthority); }
@@ -2398,19 +2619,21 @@ async function syncAllGoogleCalendarMeetings(request: Request, env: Env): Promis
 async function users(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (request.method === "GET") { const result = await db.prepare("SELECT u.id, u.email, u.local_username AS localUsername, u.member_id AS memberId, u.role, u.active, u.created_at AS createdAt, m.external_id AS memberExternalId, m.first_name AS memberFirstName, m.last_name AS memberLastName FROM users u LEFT JOIN members m ON m.installation_id = u.installation_id AND m.id = u.member_id WHERE u.installation_id = 'primary' ORDER BY u.created_at").all(); return response({ users: result.results ?? [] }); }
-  const input = await parseJson<{ email?: string | null; localUsername?: string | null; localPassword?: string; role?: Role; memberId?: string | null }>(request);
+  const input = await parseJson<{ email?: string | null; localUsername?: string | null; localPasswordKey?: unknown; localPassword?: unknown; role?: Role; memberId?: string | null }>(request);
+  if (input.localPasswordKey === undefined && input.localPassword !== undefined) throw reloadRequired();
   const email = input.email?.trim().toLowerCase() || null; const username = input.localUsername?.trim().toLowerCase() || null;
   if (!email && !username) throw new HttpError(400, "An email or local username is required");
   if (email && !validEmail(email)) throw new HttpError(400, "Email is invalid");
   if (username && !/^[a-z0-9._-]{3,64}$/.test(username)) throw new HttpError(400, "Local username must be 3–64 letters, numbers, dots, underscores, or hyphens");
   if (!input.role || !["admin", "operator"].includes(input.role)) throw new HttpError(400, "Role must be admin or operator");
-  if (username && (input.localPassword?.length ?? 0) < 12) throw new HttpError(400, "A local user needs a password of at least 12 characters");
+  // The dashboard sends a salt and K, so it enforces the 12-character minimum; the Worker can only check the format.
+  if (username && !validPasswordCredential(input.localPasswordKey)) throw new HttpError(400, "A local user needs a password of at least 12 characters");
   const memberId = input.memberId?.trim() || null;
   if (memberId && !await db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND id = ?").bind(memberId).first()) throw new HttpError(400, "Linked roster member was not found");
   if (memberId && await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND member_id = ?").bind(memberId).first()) throw new HttpError(409, "That roster member already has dashboard access");
   const duplicate = await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND ((email IS NOT NULL AND email = ?) OR (local_username IS NOT NULL AND local_username = ?))").bind(email, username).first();
   if (duplicate) throw new HttpError(409, "That email or username is already in use");
-  const id = crypto.randomUUID(); const now = new Date().toISOString(); const passwordHash = username ? await hashPassword(input.localPassword!) : null;
+  const id = crypto.randomUUID(); const now = new Date().toISOString(); const passwordHash = username ? await passwordHashFromCredential(input.localPasswordKey) ?? null : null;
   await db.batch([
     db.prepare("INSERT INTO users (id, installation_id, email, local_username, password_hash, member_id, role, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, email, username, passwordHash, memberId, input.role, now),
     db.prepare("INSERT INTO platform_module_assignment_epochs (installation_id, user_id, revision) VALUES ('primary', ?, 0)").bind(id),
@@ -2420,7 +2643,8 @@ async function users(request: Request, env: Env): Promise<Response> {
   return response({ user: { id, email, localUsername: username, memberId, role: input.role, active: true, createdAt: now } }, 201);
 }
 async function updateUser(request: Request, env: Env, userId: string): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ role?: Role; active?: boolean; localPassword?: string; memberId?: string | null; email?: string | null }>(request);
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ role?: Role; active?: boolean; localPasswordKey?: unknown; localPassword?: unknown; memberId?: string | null; email?: string | null }>(request);
+  if (input.localPasswordKey === undefined && input.localPassword !== undefined) throw reloadRequired();
   const target = await db.prepare("SELECT id, role, active, email, local_username AS localUsername FROM users WHERE installation_id = 'primary' AND id = ?").bind(userId).first<{ id: string; role: Role; active: number; email?: string | null; localUsername?: string }>();
   if (!target) throw new HttpError(404, "User not found");
   if (input.email !== undefined && input.email !== null && typeof input.email !== "string") throw new HttpError(400, "Email must be text or null");
@@ -2430,16 +2654,17 @@ async function updateUser(request: Request, env: Env, userId: string): Promise<R
   if (email && emailChanged && await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND email = ? AND id <> ?").bind(email, userId).first()) throw new HttpError(409, "That email is already in use");
   if (userId === principal.userId && ((input.role && input.role !== "admin") || input.active === false)) throw new HttpError(409, "You cannot demote or deactivate your current Admin account");
   if (input.role && !["admin", "operator"].includes(input.role)) throw new HttpError(400, "Role must be admin or operator");
-  if (input.localPassword && (!target.localUsername || input.localPassword.length < 12)) throw new HttpError(400, "Password reset requires a local username and at least 12 characters");
+  // As for a new account, the 12-character minimum is enforced where the password is typed; the Worker only sees K.
+  if (input.localPasswordKey !== undefined && (!target.localUsername || !validPasswordCredential(input.localPasswordKey))) throw new HttpError(400, "Password reset requires a local username and at least 12 characters");
   if (input.memberId !== undefined && input.memberId !== null && (!input.memberId.trim() || !await db.prepare("SELECT id FROM members WHERE installation_id = 'primary' AND id = ?").bind(input.memberId.trim()).first())) throw new HttpError(400, "Linked roster member was not found");
   if (input.memberId && await db.prepare("SELECT id FROM users WHERE installation_id = 'primary' AND member_id = ? AND id <> ?").bind(input.memberId.trim(), userId).first()) throw new HttpError(409, "That roster member already has dashboard access");
-  if (input.role === undefined && input.active === undefined && input.localPassword === undefined && input.memberId === undefined && input.email === undefined) throw new HttpError(400, "Provide a role, active status, roster link, Google email, or new local password");
-  const passwordHash = input.localPassword ? await hashPassword(input.localPassword) : null; const now = new Date().toISOString();
+  if (input.role === undefined && input.active === undefined && input.localPasswordKey === undefined && input.memberId === undefined && input.email === undefined) throw new HttpError(400, "Provide a role, active status, roster link, Google email, or new local password");
+  const passwordHash = input.localPasswordKey !== undefined ? await passwordHashFromCredential(input.localPasswordKey) ?? null : null; const now = new Date().toISOString();
   // A password reset clears any failed-login lock. A reset or deactivation bumps the session epoch, revoking existing sessions.
   const revokeSessions = passwordHash !== null || input.active === false ? 1 : 0;
   await db.batch([
     db.prepare("UPDATE users SET role = COALESCE(?, role), active = COALESCE(?, active), password_hash = COALESCE(?, password_hash), failed_login_count = CASE WHEN ? IS NULL THEN failed_login_count ELSE 0 END, locked_until = CASE WHEN ? IS NULL THEN locked_until ELSE NULL END, session_epoch = session_epoch + ?, member_id = CASE WHEN ? = 1 THEN ? ELSE member_id END, email = CASE WHEN ? = 1 THEN ? ELSE email END WHERE installation_id = 'primary' AND id = ?").bind(input.role ?? null, input.active === undefined ? null : input.active ? 1 : 0, passwordHash, passwordHash, passwordHash, revokeSessions, input.memberId === undefined ? 0 : 1, input.memberId?.trim() || null, emailChanged ? 1 : 0, email ?? null, userId),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.updated', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, userId, JSON.stringify({ role: input.role, active: input.active, passwordReset: Boolean(input.localPassword), memberId: input.memberId, ...(emailChanged ? { emailChanged: true, hasGoogle: Boolean(email) } : {}) }), now),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'user.updated', 'user', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, userId, JSON.stringify({ role: input.role, active: input.active, passwordReset: passwordHash !== null, memberId: input.memberId, ...(emailChanged ? { emailChanged: true, hasGoogle: Boolean(email) } : {}) }), now),
   ]);
   const user = await db.prepare("SELECT id, email, local_username AS localUsername, member_id AS memberId, role, active, created_at AS createdAt FROM users WHERE installation_id = 'primary' AND id = ?").bind(userId).first<{ id: string; email?: string | null; localUsername?: string | null; memberId?: string | null; role: Role; active: number; createdAt: string }>();
   return response({ ok: true, user: user ? { ...user, email: user.email ?? null, localUsername: user.localUsername ?? null, memberId: user.memberId ?? null, active: Boolean(user.active) } : undefined });
@@ -2498,7 +2723,8 @@ const discordRetryDelay = (response: Response, body: Record<string, unknown>) =>
   return Number.isFinite(retryAfter) && retryAfter >= 0 ? Math.ceil(retryAfter * 1_000) : 1_000;
 };
 const wait = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
-async function discordRequest<T = Record<string, unknown>>(config: ProviderConfiguration, path: string, init: RequestInit): Promise<{ response: globalThis.Response; body: T }> {
+/** `operation` names the feature in a rate-limit message; by default it follows the path, and module calls pass a neutral one. */
+async function discordRequest<T = Record<string, unknown>>(config: ProviderConfiguration, path: string, init: RequestInit, operation = discordRateLimitOperation(path)): Promise<{ response: globalThis.Response; body: T }> {
   const managesCommands = path.includes("/commands");
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await config[moduleProviderAuthority]?.();
@@ -2510,8 +2736,7 @@ async function discordRequest<T = Record<string, unknown>>(config: ProviderConfi
     if (result.status === 403) throw new DiscordPermissionError(path.includes("/scheduled-events") ? "calendar" : path.includes("/messages/pins/") ? "pin" : managesCommands ? "commands" : path.includes("/members/") && /\/roles\//.test(path) ? "roles" : /\/members(?:\?|$)/.test(path) ? "members" : "channel");
     if (result.status === 429) {
       const retryAfterMs = discordRetryDelay(result, errorBody);
-      if (path.includes("/members/") && path.includes("/roles/") || path.includes("/members?") || retryAfterMs > 2_000) throw new DiscordRateLimitError(retryAfterMs, "role sync");
-      if (attempt === 2) throw new DiscordRateLimitError(retryAfterMs, managesCommands ? "command setup" : path.includes("/scheduled-events") ? "calendar sync" : "this request");
+      if (discordRateLimitFailsFast(path, retryAfterMs) || attempt === 2) throw new DiscordRateLimitError(retryAfterMs, operation);
       await wait(retryAfterMs);
       continue;
     }
@@ -2539,7 +2764,7 @@ async function sendModuleEmail(env: Env, moduleId: string, value: unknown): Prom
   return { id: typeof body.id === "string" ? body.id : null };
 }
 
-const firstDataDeps = (env: Env, db = requireDatabase(env)): FirstDataDeps => ({ db, fetch: (input, init) => fetch(input, init), now: Date.now, credentials: moduleCredentials(env.INTEGRATION_KEY) });
+const firstDataDeps = (env: Env, db = requireDatabase(env)): FirstDataDeps => ({ db, fetch: (input, init) => { env.schedulerPass?.budget.chargeExternal(); return fetch(input, init); }, now: Date.now, credentials: moduleCredentials(env.INTEGRATION_KEY) });
 /**
  * Whom a module's FIRST lookups count against: null for a signed-in user or a job, else the hashed address of the visitor
  * on a public route. A service route without a user still counts as staff when its request carries a valid session.
@@ -2557,20 +2782,21 @@ type ModuleServiceCaller = { readonly userId?: string; readonly nested?: boolean
 function coreModuleServices(env: Env, moduleId: string, caller: ModuleServiceCaller = {}): CoreModuleServices {
   return Object.freeze({
     googleCalendar: Object.freeze({
-      ready: () => googleCalendarIsReady(env),
+      ready: async () => await deliveryPausedUntil(env) === null && await googleCalendarIsReady(env),
       async access() { const { accessToken, secret } = await googleCalendarAccessToken(env, true); return { accessToken, calendarId: secret.calendarId ?? null }; },
       operationPath: googleCalendarOperationPath,
-      request: async (accessToken: string, path: string, init: RequestInit) => (await googleCalendarProviderRequest(accessToken, path, init, env.moduleProviderAuthority)).body,
+      request: async (accessToken: string, path: string, init: RequestInit) => { if ((init.method ?? "GET").toUpperCase() !== "GET") await requireDeliveryRunning(env); return (await googleCalendarProviderRequest(accessToken, path, init, env.moduleProviderAuthority)).body; },
       providerStatus: (error: unknown) => error instanceof GoogleCalendarProviderError ? error.providerStatus : undefined,
     }),
     discord: Object.freeze({
-      ready: () => discordCalendarIsReady(env),
-      async client() { const config = await discordConfiguration(env); return { guildId: config.guildId, request: <T,>(path: string, init: RequestInit) => discordRequest<T>(config, path, init) }; },
-      providerStatus: (error: unknown) => error instanceof DiscordResponseError ? error.discordStatus : undefined,
+      ready: async () => await deliveryPausedUntil(env) === null && await discordCalendarIsReady(env),
+      async client() { const config = await discordConfiguration(env); return { guildId: config.guildId, request: async <T,>(path: string, init: RequestInit) => { if ((init.method ?? "GET").toUpperCase() !== "GET") await requireDeliveryRunning(env); return discordRequest<T>(config, path, init, "requests"); } }; },
+      providerStatus: (error: unknown) => error instanceof DiscordResponseError ? error.discordStatus : error instanceof DiscordRateLimitError ? 429 : undefined,
+      retryAfterMs: (error: unknown) => error instanceof DiscordRateLimitError ? error.retryAfterMs : undefined,
     }),
     email: Object.freeze({
-      ready: () => resendIsReady(env),
-      send: (message: unknown) => sendModuleEmail(env, moduleId, message),
+      ready: async () => await deliveryPausedUntil(env) === null && await resendIsReady(env),
+      send: async (message: unknown) => { await requireDeliveryRunning(env); return sendModuleEmail(env, moduleId, message); },
       providerStatus: (error: unknown) => error instanceof EmailProviderError ? error.emailStatus : undefined,
     }),
     credentials: moduleCredentials(env.INTEGRATION_KEY),
@@ -2659,6 +2885,7 @@ async function saveDiscordCommandSuccess(db: D1Database, config: Record<string, 
   await db.batch([db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', 'managed-commands', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(config.guildId, await discordCommandFingerprint(config), now), db.prepare("DELETE FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'managed-commands-error'")]);
 }
 async function autoReconcileDiscordCommands(env: Env): Promise<void> {
+  if (await deliveryPausedUntil(env) !== null) return;
   const db = requireDatabase(env);
   const record = await integrationRecord(env, "discord");
   if (!record || !record.enabled || !record.verifiedAt || !env.INTEGRATION_KEY) return;
@@ -2686,10 +2913,11 @@ async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string
   const payload = { content, allowed_mentions: { parse: [] }, ...(components ? { components } : {}) };
   const contentHash = await sha256(components ? JSON.stringify({ content, components }) : content); const messagesPath = `/channels/${encodeURIComponent(config.channelId)}/messages`;
   const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = ?").bind(stateKey).first<{ externalId?: string; contentHash?: string }>();
-  let messageId = existing?.externalId ?? ""; let changed = false;
+  let messageId = existing?.externalId ?? ""; let changed = false; let pinned = false;
   if (messageId) {
     try {
-      if (existing?.contentHash === contentHash) await discordRequest(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "GET" });
+      // An unchanged message is only checked: it still exists, and whether it is still pinned.
+      if (existing?.contentHash === contentHash) pinned = (await discordRequest<{ pinned?: unknown }>(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "GET" })).body?.pinned === true;
       else {
         const { body } = await discordRequest(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "PATCH", body: JSON.stringify(payload) });
         messageId = String(body.id ?? messageId); changed = true;
@@ -2704,9 +2932,12 @@ async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string
     messageId = String(body.id ?? ""); changed = true;
     if (!messageId) throw new HttpError(502, "Discord did not return a managed message identifier");
   }
-  const now = new Date().toISOString();
-  await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', ?, ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(stateKey, messageId, contentHash, now).run();
-  if (pin) await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/pins/${encodeURIComponent(messageId)}`, { method: "PUT" });
+  // The recorded message and content only change when Discord's did, and a message Discord reports pinned stays pinned.
+  if (changed || messageId !== existing?.externalId || existing?.contentHash !== contentHash) {
+    const now = new Date().toISOString();
+    await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', ?, ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(stateKey, messageId, contentHash, now).run();
+  }
+  if (pin && !pinned) await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/pins/${encodeURIComponent(messageId)}`, { method: "PUT" });
   return { changed, messageId };
 }
 async function startDiscordVerification(request: Request, env: Env): Promise<Response> {
@@ -2843,17 +3074,29 @@ async function createDiscordAttendanceThread(db: D1Database, config: Record<stri
   const createdAt = new Date().toISOString();
   await db.prepare("UPDATE discord_attendance_notifications SET thread_created_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND message_id = ?").bind(createdAt, createdAt, notice.meetingId, notice.messageId).run();
 }
+// Per pass: a notice costs up to 3 Discord requests and about 10 D1 queries, an expiry 2 or more Discord deletions and
+// about 5 D1 queries, and a thread retry one Discord request. Notices left over are found again on the next pass.
+const DISCORD_ATTENDANCE_NOTICES_PER_PASS = 2;
+const DISCORD_ATTENDANCE_EXPIRIES_PER_PASS = 2;
+const DISCORD_ATTENDANCE_THREAD_RETRIES_PER_PASS = 2;
+const DISCORD_ATTENDANCE_NOTICE_COST: PassCost = { d1: 12, external: 3 };
+const DISCORD_ATTENDANCE_EXPIRY_COST: PassCost = { d1: 6, external: 3 };
+const DISCORD_ATTENDANCE_THREAD_COST: PassCost = { d1: 3, external: 1 };
 async function retryDiscordAttendanceThreads(env: Env, config: Record<string, string>, now: number): Promise<void> {
   const db = requireDatabase(env);
   const notices = await db.prepare("SELECT n.meeting_id AS meetingId, n.message_id AS messageId, n.channel_id AS channelId, m.title FROM discord_attendance_notifications n JOIN meetings m ON m.installation_id = n.installation_id AND m.id = n.meeting_id WHERE n.installation_id = 'primary' AND n.status = 'delivered' AND n.message_id IS NOT NULL AND n.thread_created_at IS NULL AND n.deleted_at IS NULL AND n.expires_at > ? LIMIT 100").bind(new Date(now).toISOString()).all<{ meetingId: string; messageId: string; channelId: string; title: string }>();
-  for (const notice of notices.results ?? []) if (notice.channelId === config.channelId) await createDiscordAttendanceThread(db, config, notice);
+  const retries = (notices.results ?? []).filter((notice) => notice.channelId === config.channelId).slice(0, DISCORD_ATTENDANCE_THREAD_RETRIES_PER_PASS);
+  for (const notice of retries) { if (!passAllows(env, DISCORD_ATTENDANCE_THREAD_COST)) break; await createDiscordAttendanceThread(db, config, notice); }
 }
 async function expireDiscordAttendanceNotifications(env: Env, config: Record<string, string>, contestWindowHours: number, now: number): Promise<void> {
   const db = requireDatabase(env);
   const delivered = await db.prepare("SELECT meeting_id AS meetingId, message_id AS messageId, channel_id AS channelId, processed_at AS processedAt, expires_at AS expiresAt, delivery_id AS deliveryId FROM discord_attendance_notifications WHERE installation_id = 'primary' AND status = 'delivered' AND message_id IS NOT NULL AND deleted_at IS NULL").all<{ meetingId: string; messageId: string; channelId?: string; processedAt?: string; expiresAt?: string; deliveryId?: string }>();
+  let attempted = 0;
   for (const notice of delivered.results ?? []) {
     const expiry = notice.expiresAt ? Date.parse(notice.expiresAt) : Date.parse(notice.processedAt ?? "") + contestWindowHours * 3_600_000;
     if (!Number.isFinite(expiry) || expiry > now || notice.channelId && notice.channelId !== config.channelId) continue;
+    if (attempted >= DISCORD_ATTENDANCE_EXPIRIES_PER_PASS || !passAllows(env, DISCORD_ATTENDANCE_EXPIRY_COST)) break;
+    attempted += 1;
     if (!(await deleteDiscordAttendanceMessages(db, config, notice))) continue;
     const deletedAt = new Date(now).toISOString();
     await db.prepare("UPDATE discord_attendance_notifications SET deleted_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND message_id = ?").bind(deletedAt, deletedAt, notice.meetingId, notice.messageId).run();
@@ -2894,7 +3137,7 @@ async function retractDiscordAttendanceNotices(env: Env, principal: Principal, m
     let outcome: DiscordNoticeRetraction["outcome"] = "failed";
     try {
       const config = await discordConfiguration(env);
-      if (notice.channelId && notice.channelId !== config.channelId || !(await deleteDiscordAttendanceMessages(db, config, notice))) {
+      if (notice.channelId && notice.channelId !== config.channelId || await deliveryPausedUntil(env) !== null || !(await deleteDiscordAttendanceMessages(db, config, notice))) {
         await db.prepare("UPDATE discord_attendance_notifications SET expires_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND message_id = ?").bind(now, now, notice.meetingId, notice.messageId).run();
         outcome = "pending_deletion";
       } else {
@@ -2909,14 +3152,20 @@ async function retractDiscordAttendanceNotices(env: Env, principal: Principal, m
 }
 async function processDiscordAttendanceNotifications(env: Env, now = Date.now()): Promise<void> {
   const discord = await integrationRecord(env, "discord"); if (!discord || discord.enabled === 0 || !discord.verifiedAt) return;
+  if (await deliveryPausedUntil(env) !== null) return;
   const db = requireDatabase(env); const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, discord_contest_window_hours AS contestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes: number; contestWindowHours?: number }>();
   const config = await discordConfiguration(env);
   await expireDiscordAttendanceNotifications(env, config, settings?.contestWindowHours ?? 24, now);
   await retryDiscordAttendanceThreads(env, config, now);
   const meetings = await db.prepare("SELECT m.id, m.title, m.ends_at AS endsAt, n.status AS notificationStatus, n.updated_at AS notificationUpdatedAt FROM meetings m LEFT JOIN discord_attendance_notifications n ON n.installation_id = m.installation_id AND n.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.required = 1 AND m.is_test = 0 AND m.ends_at IS NOT NULL ORDER BY m.ends_at DESC LIMIT 100").all<{ id: string; title: string; endsAt: string; notificationStatus?: string; notificationUpdatedAt?: string }>();
+  let sent = 0;
   for (const meeting of meetings.results ?? []) {
     const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30)); const newlyEligible = cutoff <= now; const retry = meeting.notificationStatus === "failed";
-    if ((!meeting.notificationStatus && newlyEligible) || retry) await sendDiscordAttendanceNotification(env, meeting);
+    if (!((!meeting.notificationStatus && newlyEligible) || retry)) continue;
+    // Only new notices ask for another slice right away; failed ones retry at the job's normal interval.
+    if (sent >= DISCORD_ATTENDANCE_NOTICES_PER_PASS) { if (!meeting.notificationStatus) passMore(env); break; }
+    if (!passAllows(env, DISCORD_ATTENDANCE_NOTICE_COST)) break;
+    sent += 1; await sendDiscordAttendanceNotification(env, meeting);
   }
 }
 type DiscordAnomalyRow = { memberId: string; firstName: string; lastName: string; checkedInAt?: string; checkedOutAt?: string; lateMinutes?: number; earlyMinutes?: number };
@@ -2964,6 +3213,9 @@ async function sendDiscordAnomalyReport(env: Env, config: Record<string, string>
     throw error;
   }
 }
+// Per pass: one Discord message and about 5 D1 queries per report. Reports left over stay pending for the next pass.
+const DISCORD_ANOMALY_REPORTS_PER_PASS = 3;
+const DISCORD_ANOMALY_REPORT_COST: PassCost = { d1: 6, external: 1 };
 async function processDiscordAnomalyReports(env: Env, now = Date.now()): Promise<void> {
   const discord = await integrationRecord(env, "discord"); if (!discord || discord.enabled === 0 || !discord.verifiedAt) return;
   const db = requireDatabase(env);
@@ -2973,10 +3225,15 @@ async function processDiscordAnomalyReports(env: Env, now = Date.now()): Promise
   if (!Number.isFinite(enabledAt)) return;
   const earliestEnd = new Date(enabledAt - lateScanMinutes * 60_000).toISOString();
   const meetings = await db.prepare("SELECT m.id, m.title, m.starts_at AS startsAt, m.ends_at AS endsAt, r.status AS reportStatus FROM meetings m LEFT JOIN discord_anomaly_reports r ON r.installation_id = m.installation_id AND r.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.is_test = 0 AND m.ends_at IS NOT NULL AND m.ends_at >= ? AND (r.status IS NULL OR r.status IN ('pending', 'failed')) ORDER BY m.ends_at ASC LIMIT 100").bind(earliestEnd).all<{ id: string; title: string; startsAt: string; endsAt: string; reportStatus?: string }>();
-  const config = await discordConfiguration(env);
+  if (await deliveryPausedUntil(env) !== null) return;
+  const config = await discordConfiguration(env); let attempted = 0;
   for (const meeting of meetings.results ?? []) {
     const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, lateScanMinutes));
     if (cutoff < enabledAt || cutoff > now) continue;
+    // Only reports never attempted ask for another slice right away; failed ones retry at the job's normal interval.
+    if (attempted >= DISCORD_ANOMALY_REPORTS_PER_PASS) { if (!meeting.reportStatus) passMore(env); break; }
+    if (!passAllows(env, DISCORD_ANOMALY_REPORT_COST)) break;
+    attempted += 1;
     try { await sendDiscordAnomalyReport(env, config, settings.channelId, meeting, { late: settings.anomalyLateThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES, early: settings.anomalyEarlyThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES }); } catch { /* One failed report must not delay other eligible meetings. */ }
   }
 }
@@ -2984,6 +3241,7 @@ async function discordMissing(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string }>(request);
   if (!input.meetingId) throw new HttpError(400, "Meeting is required");
   const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; title: string; startsAt: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found"); if (Date.now() < Date.parse(meeting.startsAt)) throw new HttpError(409, "Attendance has not started for this meeting");
+  await requireDeliveryRunning(env);
   return response(await sendDiscordAttendanceNotification(env, meeting, { force: true, actor: principal }), 202);
 }
 async function discordContests(request: Request, env: Env): Promise<Response> {
@@ -3034,7 +3292,7 @@ async function discordAttendanceReport(db: D1Database, discordUserId: string): P
   const absent = summary.rows.filter((row) => row.regularEligible && row.disposition === "absent");
   let content = `${heading}\n\n${absent.length ? "**Missed required meetings**" : "No missed required meetings in the current reporting period."}`;
   for (const row of absent) { const meeting = meetings.get(row.meetingId); const line = `\n• ${meeting?.startsAt.slice(0, 10) ?? ""} - ${meeting?.title ?? "Meeting"} (${row.audience})`; if ((content + line).length > 1850) { content += "\nMore meetings omitted to fit Discord."; break; } content += line; }
-  if (summary.belowTargetWeeks.length) { const line = `\n\nBelow-target weeks: ${summary.belowTargetWeeks.map((week) => week.weekStartsOn).join(", ")}`; if ((content + line).length <= 2000) content += line; }
+  if (summary.belowTargetWeeks.length) { const line = `\n\nWeeks below target: ${summary.belowTargetWeeks.map((week) => week.weekStartsOn).join(", ")}`; if ((content + line).length <= 2000) content += line; }
   return content;
 }
 async function attendanceDiscordDatabase(db: D1Database) {
@@ -3301,7 +3559,13 @@ async function discordLabelJobStatus(request: Request, env: Env, jobId: string):
   const items = await db.prepare("SELECT discord_user_id AS discordUserId, action, status, attempts, last_error AS lastError FROM discord_label_role_job_items WHERE installation_id = 'primary' AND job_id = ? ORDER BY action, discord_user_id").bind(jobId).all<{ discordUserId: string; action: string; status: string; attempts: number; lastError?: string }>();
   return response({ ...job, items: items.results ?? [] });
 }
+// Per pass: one Discord role request and 2 D1 queries per member, plus about 10 D1 queries and 2 Discord requests for
+// the job itself. A rate limit ends the pass early. The job stays pending until its last member is done.
+const DISCORD_LABEL_ROLE_ITEMS_PER_PASS = 8;
+// One member's request and update, with room left for the job's closing count, update and audit.
+const DISCORD_LABEL_ROLE_ITEM_COST: PassCost = { d1: 5, external: 1 };
 async function processDiscordLabelRoleJobs(env: Env, targetJobId?: string): Promise<void> {
+  if (await deliveryPausedUntil(env) !== null) return;
   const db = requireDatabase(env); const now = new Date().toISOString();
   const job = await db.prepare("SELECT id, label_id AS labelId, guild_id AS guildId, role_id AS roleId, source_fingerprint AS sourceFingerprint, actor_user_id AS actorUserId FROM discord_label_role_jobs WHERE installation_id = 'primary' AND status IN ('pending', 'running') AND next_attempt_at <= ? AND (lease_token IS NULL OR lease_expires_at <= ?) AND (? IS NULL OR id = ?) ORDER BY created_at LIMIT 1").bind(now, now, targetJobId ?? null, targetJobId ?? null).first<{ id: string; labelId: string; guildId: string; roleId: string; sourceFingerprint: string; actorUserId?: string }>();
   if (!job) return;
@@ -3317,8 +3581,9 @@ async function processDiscordLabelRoleJobs(env: Env, targetJobId?: string): Prom
       return;
     }
     await discordManageableRole(config, job.roleId);
-    const rows = await db.prepare("SELECT discord_user_id AS discordUserId, action, attempts FROM discord_label_role_job_items WHERE installation_id = 'primary' AND job_id = ? AND status = 'pending' ORDER BY discord_user_id LIMIT 20").bind(job.id).all<{ discordUserId: string; action: "add" | "remove"; attempts: number }>();
+    const rows = await db.prepare("SELECT discord_user_id AS discordUserId, action, attempts FROM discord_label_role_job_items WHERE installation_id = 'primary' AND job_id = ? AND status = 'pending' ORDER BY discord_user_id LIMIT ?").bind(job.id, DISCORD_LABEL_ROLE_ITEMS_PER_PASS).all<{ discordUserId: string; action: "add" | "remove"; attempts: number }>();
     for (const item of rows.results ?? []) {
+      if (!passAllows(env, DISCORD_LABEL_ROLE_ITEM_COST)) break;
       const path = `/guilds/${job.guildId}/members/${item.discordUserId}/roles/${job.roleId}`;
       try {
         await discordRequest(config, path, { method: item.action === "add" ? "PUT" : "DELETE", headers: { "x-audit-log-reason": encodeURIComponent(`LancerLogin label sync ${job.id}`) } });
@@ -3339,6 +3604,7 @@ async function processDiscordLabelRoleJobs(env: Env, targetJobId?: string): Prom
   }
   const counts = await db.prepare("SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed FROM discord_label_role_job_items WHERE installation_id = 'primary' AND job_id = ?").bind(job.id).first<{ pending: number; failed: number }>();
   const status = counts?.pending ? "pending" : counts?.failed ? "partial" : "completed"; const finished = new Date().toISOString();
+  if (status === "pending" && nextAttempt <= finished) passMore(env);
   await db.prepare("UPDATE discord_label_role_jobs SET status = ?, lease_token = NULL, lease_expires_at = NULL, next_attempt_at = ?, updated_at = ?, completed_at = ? WHERE installation_id = 'primary' AND id = ? AND lease_token = ?").bind(status, nextAttempt, finished, status === "pending" ? null : finished, job.id, lease).run();
   if (status !== "pending" && job.actorUserId) await writeAudit(db, { userId: job.actorUserId, role: "admin", expiresAt: 0 }, "discord.label_role_sync_finished", "member_label", job.labelId, { jobId: job.id, roleId: job.roleId, status, failed: counts?.failed ?? 0 });
 }
@@ -3376,14 +3642,18 @@ async function discordTwoWayServer(db: D1Database, config: ProviderConfiguration
   return { server, deps: { sourceFingerprint: async (labelId) => (await discordLabelSource(db, await discordLabelMapping(db, labelId), config.guildId)).sourceFingerprint } };
 }
 /** The scheduled two-way check. Discord is called only when an active label syncs both ways. */
+// Per pass: one load of the server's members, then about 10 D1 queries for each label checked.
+const DISCORD_TWO_WAY_LABELS_PER_PASS = 2;
+const DISCORD_TWO_WAY_LABEL_COST: PassCost = { d1: 12 };
 async function processDiscordTwoWayLabels(env: Env): Promise<void> {
+  if (await deliveryPausedUntil(env) !== null) return;
   const db = requireDatabase(env);
   if (!await hasTwoWayLabels(db)) return;
   let config: ProviderConfiguration;
   // Disabled or unverified Discord pauses two-way checks until it is verified again.
   try { config = await discordConfiguration(env); } catch (error) { if (error instanceof HttpError && error.status === 503) return; throw error; }
   const { server, deps } = await discordTwoWayServer(db, config);
-  await pollTwoWayLabels(db, server, deps);
+  await pollTwoWayLabels(db, server, deps, DISCORD_TWO_WAY_LABELS_PER_PASS, () => passAllows(env, DISCORD_TWO_WAY_LABEL_COST));
 }
 async function discordTwoWayPreview(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ labelId?: string }>(request);
@@ -3522,8 +3792,14 @@ type DiscordCalendarOutcome = { meetingId: string; title: string; status: "synce
 type DiscordCalendarSyncSummary = { synced: number; queued: number; skipped: number; failed: number; outcomes: DiscordCalendarOutcome[] };
 type DiscordCalendarOperation = { meetingId: string; generation: number; action: "upsert" | "delete"; eventId?: string | null; status: "pending" | "processing" | "delivered" | "failed"; attempts: number; revision: number; actorUserId?: string | null; leaseToken?: string };
 type DiscordCalendarSyncCursor = { startsAt: string; id: string };
-const DISCORD_CALENDAR_OPERATION_BATCH_LIMIT = 10;
+// Per pass: up to 2 Discord requests per operation (3 attempts each on a short 429) and about 8 D1 queries, plus one
+// scheduled-event list shared by the batch. The manual Sync all pages through meetings in batches of the same size.
+const DISCORD_CALENDAR_OPERATION_BATCH_LIMIT = 3;
+const DISCORD_CALENDAR_OPERATION_COST: PassCost = { d1: 10, external: 3 };
 const DISCORD_CALENDAR_SYNC_ALL_LIMIT = 100;
+/** Discord caps a server at 100 scheduled events, so LancerLogin only creates events for meetings starting within 60 days. */
+const DISCORD_CALENDAR_HORIZON_DAYS = 60;
+const discordCalendarHorizon = (now: number) => new Date(now + DISCORD_CALENDAR_HORIZON_DAYS * 86_400_000).toISOString();
 const discordCalendarEmptySummary = (): DiscordCalendarSyncSummary => ({ synced: 0, queued: 0, skipped: 0, failed: 0, outcomes: [] });
 async function discordCalendarIsReady(env: Env): Promise<boolean> { const record = await integrationRecord(env, "discord"); return Boolean(record?.enabled && record.verifiedAt); }
 function discordCalendarRetryAt(attempts: number, error: unknown): string | null {
@@ -3596,19 +3872,32 @@ async function enqueueDiscordCalendarRestore(db: D1Database, env: Env, principal
 function addDiscordCalendarSummaries(...summaries: DiscordCalendarSyncSummary[]): DiscordCalendarSyncSummary { return summaries.reduce((total, item) => ({ synced: total.synced + item.synced, queued: total.queued + item.queued, skipped: total.skipped + item.skipped, failed: total.failed + item.failed, outcomes: [...total.outcomes, ...item.outcomes] }), discordCalendarEmptySummary()); }
 type DiscordScheduledEvent = { id?: string; entity_metadata?: { location?: string } };
 async function discordCalendarCorrelationLocation(meetingId: string, generation: number): Promise<string> { return `LancerLogin · ${(await sha256(`discord-calendar:primary:${meetingId}:${generation}`)).slice(0, 24)}`; }
-async function reconcileDiscordCalendarEvent(config: Record<string, string>, correlationLocation: string): Promise<string | undefined> {
-  const listed = await discordRequest<DiscordScheduledEvent[]>(config, `/guilds/${config.guildId}/scheduled-events`, { method: "GET" });
-  if (!Array.isArray(listed.body)) throw new DiscordResponseError(502, "Discord did not return a scheduled event list");
-  return listed.body.find((event) => event.entity_metadata?.location === correlationLocation && typeof event.id === "string" && event.id.length > 0)?.id;
+async function reconcileDiscordCalendarEvent(config: Record<string, string>, correlationLocation: string, listEvents: () => Promise<DiscordScheduledEvent[]>): Promise<string | undefined> {
+  return (await listEvents()).find((event) => event.entity_metadata?.location === correlationLocation && typeof event.id === "string" && event.id.length > 0)?.id;
 }
 async function processDiscordCalendarOperations(env: Env, meetingIds?: string[]): Promise<DiscordCalendarSyncSummary> {
   if (!await discordCalendarIsReady(env)) return discordCalendarEmptySummary();
+  // A Stop holds first attempts too: the operations stay pending and go out when delivery resumes.
+  if (await deliveryPausedUntil(env) !== null) return { ...discordCalendarEmptySummary(), queued: meetingIds?.length ? new Set(meetingIds).size : 0 };
   const db = requireDatabase(env); const now = new Date().toISOString(); const filter = meetingIds?.length ? `AND o.meeting_id IN (${meetingIds.map(() => "?").join(",")}) AND (o.status IN ('pending', 'failed') OR (o.status = 'processing' AND o.lease_expires_at <= ?))` : "AND (o.status = 'pending' OR (o.status = 'failed' AND o.next_attempt_at IS NOT NULL AND o.next_attempt_at <= ?) OR (o.status = 'processing' AND o.lease_expires_at <= ?))"; const values = meetingIds?.length ? [...meetingIds, now] : [now, now];
-  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.generation, o.action, o.event_id AS eventId, o.status, o.attempts, o.revision, o.actor_user_id AS actorUserId FROM discord_calendar_operations o WHERE o.installation_id = 'primary' ${filter} ORDER BY o.generation, CASE o.action WHEN 'delete' THEN 0 ELSE 1 END, o.updated_at LIMIT ${DISCORD_CALENDAR_OPERATION_BATCH_LIMIT}`).bind(...values).all<DiscordCalendarOperation>();
+  // Discord allows a server 100 scheduled events, so only meetings starting within the horizon get a new event. An upsert
+  // for a later meeting with no event yet stays pending and is picked up once its meeting comes within range; a meeting
+  // that already has an event keeps it in sync.
+  const horizon = discordCalendarHorizon(Date.now());
+  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.generation, o.action, o.event_id AS eventId, o.status, o.attempts, o.revision, o.actor_user_id AS actorUserId FROM discord_calendar_operations o WHERE o.installation_id = 'primary' ${filter} AND NOT (o.action = 'upsert' AND EXISTS (SELECT 1 FROM meetings hm WHERE hm.installation_id = o.installation_id AND hm.id = o.meeting_id AND hm.starts_at > ?) AND NOT EXISTS (SELECT 1 FROM discord_calendar_event_mappings hx WHERE hx.installation_id = o.installation_id AND hx.meeting_id = o.meeting_id AND hx.generation = o.generation AND hx.event_id IS NOT NULL)) ORDER BY o.generation, CASE o.action WHEN 'delete' THEN 0 ELSE 1 END, o.updated_at LIMIT ${DISCORD_CALENDAR_OPERATION_BATCH_LIMIT}`).bind(...values, horizon).all<DiscordCalendarOperation>();
   const operations = result.results ?? []; if (!operations.length) return discordCalendarEmptySummary();
+  if (operations.length === DISCORD_CALENDAR_OPERATION_BATCH_LIMIT) passMore(env);
   let config: Record<string, string>; try { config = await discordConfiguration(env); } catch { return { ...discordCalendarEmptySummary(), queued: operations.length }; }
   const summary = discordCalendarEmptySummary();
+  // One list per batch: each meeting's correlation location is unique, so events this batch creates are never looked up.
+  let guildEvents: Promise<DiscordScheduledEvent[]> | undefined;
+  const listEvents = () => guildEvents ??= discordRequest<DiscordScheduledEvent[]>(config, `/guilds/${config.guildId}/scheduled-events`, { method: "GET" }).then((listed) => {
+    if (!Array.isArray(listed.body)) throw new DiscordResponseError(502, "Discord did not return a scheduled event list");
+    return listed.body;
+  }).catch((error) => { guildEvents = undefined; throw error; });
   for (const operation of operations) {
+    // Operations the pass cannot afford stay pending and count as queued below.
+    if (!passAllows(env, DISCORD_CALENDAR_OPERATION_COST)) break;
     operation.leaseToken = crypto.randomUUID();
     const leaseExpiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
     const claimed = await db.prepare("UPDATE discord_calendar_operations SET status = 'processing', lease_token = ?, lease_expires_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = ? AND revision = ? AND (status IN ('pending', 'failed') OR (status = 'processing' AND lease_expires_at <= ?))").bind(operation.leaseToken, leaseExpiresAt, operation.meetingId, operation.generation, operation.action, operation.revision, now).run();
@@ -3638,7 +3927,7 @@ async function processDiscordCalendarOperations(env: Env, meetingIds?: string[])
         let eventId = mapping.eventId ?? undefined;
         let needsReconciliation = started || operation.status === "processing" || Number(operation.attempts) > 0;
         if (eventId) try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }); needsReconciliation = false; } catch (error) { if (error instanceof DiscordResponseError && error.discordStatus === 404) { eventId = undefined; needsReconciliation = true; } else throw error; }
-        if (!eventId && needsReconciliation) eventId = await reconcileDiscordCalendarEvent(config, correlationLocation);
+        if (!eventId && needsReconciliation) eventId = await reconcileDiscordCalendarEvent(config, correlationLocation, listEvents);
         if (eventId && needsReconciliation) await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) });
         if (!eventId && started) {
           await db.prepare("UPDATE discord_calendar_operations SET status = CASE WHEN revision = ? THEN 'delivered' ELSE 'pending' END, next_attempt_at = CASE WHEN revision = ? THEN NULL ELSE ? END, lease_token = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'upsert' AND lease_token = ?").bind(operation.revision, operation.revision, now, now, operation.meetingId, operation.generation, operation.leaseToken).run();
@@ -3712,6 +4001,8 @@ async function syncMeetingCalendars(request: Request, env: Env): Promise<Respons
   return response({ meetingId: meeting.id, providers });
 }
 async function syncDiscordKioskStatus(env: Env, pin?: boolean): Promise<{ changed: boolean; messageId?: string; online?: boolean; kioskId?: string }> {
+  // While delivery is stopped the status message is left as it is; the channel job refreshes it once delivery resumes.
+  if (await deliveryPausedUntil(env) !== null) return { changed: false };
   const db = requireDatabase(env); const config = await discordConfiguration(env);
   if (pin === undefined) {
     const settings = await db.prepare("SELECT discord_channel_manager_enabled AS enabled FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number }>();
@@ -3755,12 +4046,18 @@ async function syncDiscordKioskStatus(env: Env, pin?: boolean): Promise<{ change
   await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', 'kiosk-status', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(messageId, contentHash, now).run();
   return { changed: true, messageId, online, kioskId };
 }
-async function syncDiscordManagedSurface(env: Env): Promise<void> {
+async function syncDiscordManagedSurface(env: Env): Promise<JobRunResult> {
+  if (await deliveryPausedUntil(env) !== null) return;
   const db = requireDatabase(env);
   const settings = await db.prepare("SELECT discord_channel_manager_enabled AS enabled FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number }>();
   if (!settings?.enabled) { await syncDiscordKioskStatus(env); return; }
+  // On the Durable Object the pinned kiosk status and the help message are separate slices, one Discord message each.
+  const step = env.schedulerPass?.steps ? env.schedulerPass.cursor ?? "kiosk-status" : undefined;
+  if (step !== "howto") {
+    await syncDiscordKioskStatus(env, true);
+    if (step) return { more: true, cursor: "howto" };
+  }
   const config = await discordConfiguration(env);
-  await syncDiscordKioskStatus(env, true);
   const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. Use **View my attendance report** below or `/attendance-report` to receive your private report. Ask general questions in the thread under each absence notice. Only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
   await upsertTrackedDiscordMessage(db, config, "channel-manager-howto", guidance, false, discordAttendanceReportComponents);
 }
@@ -3792,6 +4089,7 @@ const tableColumns = {
   platform_module_assignments: ["installation_id", "user_id", "module_id", "capabilities_json"],
   platform_module_setup_progress: ["installation_id", "module_id", "step_id", "setup_version", "outcome", "completed_at", "completed_by"],
   organization_settings: ["installation_id", "organization_name", "subtitle", "logo_data", "primary_color", "secondary_color", "appearance", "time_zone", "late_scan_minutes", "logo_backdrop", "discord_contest_window_hours", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on", "kiosk_authentication_method", "discord_block_recontests_after_rejection", "pin_lockout_enabled", "pin_lockout_attempts", "pin_lockout_minutes"],
+  module_report_baselines: ["installation_id", "module_id", "starts_on", "revision", "updated_at"],
   user_walkthroughs: ["installation_id", "user_id", "page_id", "content_version", "status", "step_id", "updated_at"],
   users: ["id", "installation_id", "email", "local_username", "password_hash", "failed_login_count", "locked_until", "role", "active", "created_at", "member_id", "debug_mode"],
   user_preferences: ["installation_id", "user_id", "developer_scheduler_enabled", "revision", "updated_at"],
@@ -3833,7 +4131,7 @@ const tableColumns = {
 type BackupTable = keyof typeof tableColumns;
 // Restore parents before children so SQLite's immediate foreign-key checks remain valid.
 const installationTables: BackupTable[] = [
-  "installations", "platform_module_administration", "platform_module_administration_epochs", "platform_module_epochs", "platform_modules", "organization_settings", "members", "users", "user_preferences", "platform_module_assignment_epochs", "platform_module_assignment_revisions", "platform_module_assignments", "platform_module_setup_progress", "user_walkthroughs", "member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "saved_report_views", "saved_report_tabs", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
+  "installations", "platform_module_administration", "platform_module_administration_epochs", "platform_module_epochs", "platform_modules", "organization_settings", "module_report_baselines", "members", "users", "user_preferences", "platform_module_assignment_epochs", "platform_module_assignment_revisions", "platform_module_assignments", "platform_module_setup_progress", "user_walkthroughs", "member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "saved_report_views", "saved_report_tabs", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
   "kiosks", "member_pins", "simulated_kiosk_sessions", "encrypted_integrations", "google_calendar_authorizations", "first_credentials", "integration_deliveries",
   "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports", "audit_log", "telemetry_diagnostics",
@@ -3843,7 +4141,7 @@ const meetingTables: BackupTable[] = ["meeting_weight_categories", "meetings", "
 const rosterTables: BackupTable[] = ["members", "member_labels", "member_label_changes", "label_weekly_targets", "label_attendance_rules"];
 const tablesForScope = (scope: BackupScope) => scope === "installation" ? installationTables : scope === "meetings" ? meetingTables : rosterTables;
 // Core tables added after the backup format existed; a backup older than the schema that added one never carries it.
-const backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49 };
+const backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49, module_report_baselines: 50 };
 // Tables dropped after the backup format existed, with the first schema that no longer carries them and the module that
 // owned them, so older backups still match their ownership metadata. Their rows are read and then ignored.
 const backupTablesRemovedAt: Partial<Record<BackupTable, { schema: number; owner: string }>> = { simulated_kiosk_sessions: { schema: 48, owner: "attendance" } };
@@ -3866,7 +4164,9 @@ const safeBackupValue = (value: unknown) => value === null || ["string", "number
 // token itself) in entire-installation backups. Older backups restore with no FIRST credential. A restored credential
 // the current integration key cannot decrypt shows as saved but unreadable until an Admin saves it again. FIRST's cached
 // answers, seasons and request counts never travel.
-const backupSchemaVersion = 49;
+// Schema 50: each module's own reporting start date (module_report_baselines; Attendance's stays in organization_settings)
+// in entire-installation backups. Older backups had one date for every report, so Outreach restores with Attendance's.
+const backupSchemaVersion = 50;
 /** Exported values computed from other columns: a label paused after a restore is still two-way in a backup. */
 const backupColumnExpressions: Partial<Record<BackupTable, Record<string, string>>> = {
   discord_label_role_mappings: { sync_direction: `CASE WHEN sync_direction = 'to_discord' AND two_way_error = '${twoWayRestorePaused}' THEN 'two_way' ELSE sync_direction END AS sync_direction` },
@@ -4043,6 +4343,9 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   const pinMembers = new Set(tables.members.map((row) => row.id)); const pinKiosks = new Set(tables.kiosks.map((row) => row.id));
   if (tables.member_pins.some(row => !pinMembers.has(row.member_id) || row.set_kiosk_id !== null && !pinKiosks.has(row.set_kiosk_id) || typeof row.pin_hash !== "string" || !row.pin_hash || typeof row.pin_salt !== "string" || !row.pin_salt || !Number.isInteger(row.pin_iterations) || Number(row.pin_iterations) < 1 || Number(row.pin_iterations) > 100_000 || !Number.isInteger(row.failed_attempts) || Number(row.failed_attempts) < 0 || typeof row.set_at !== "string" || typeof row.updated_at !== "string" || row.locked_until !== null && typeof row.locked_until !== "string")) throw new HttpError(400, "Backup contains an invalid member PIN");
   if (tables.first_credentials.some(row => !["FRC", "FTC"].includes(row.program as string) || [row.username, row.ciphertext, row.iv, row.checked_at, row.updated_at].some(value => typeof value !== "string" || !value) || String(row.username).length > 100 || String(row.ciphertext).length > 4000 || String(row.iv).length > 200 || !Number.isInteger(row.key_version) || Number(row.key_version) < 1) || new Set(tables.first_credentials.map(row => row.program)).size !== tables.first_credentials.length) throw new HttpError(400, "Backup contains an invalid FIRST credential");
+  if (tables.module_report_baselines.some(row => typeof row.module_id !== "string" || !row.module_id || row.module_id === "attendance" || row.module_id.length > 64 || row.starts_on !== null && (typeof row.starts_on !== "string" || !validDate(row.starts_on)) || !Number.isSafeInteger(row.revision) || Number(row.revision) < 0 || typeof row.updated_at !== "string" || !row.updated_at) || new Set(tables.module_report_baselines.map(row => row.module_id)).size !== tables.module_report_baselines.length) throw new HttpError(400, "Backup contains an invalid reporting start date");
+  // Before schema 50 one reporting start date served every report; Outreach starts with Attendance's, as migration 0096 did.
+  if (scope === "installation" && schemaVersion < 50) { const startsOn = tables.organization_settings.find((row) => row.installation_id === "primary")?.attendance_reporting_starts_on; if (typeof startsOn === "string" && validDate(startsOn)) tables.module_report_baselines = [{ installation_id: "primary", module_id: "hour-tracking", starts_on: startsOn, revision: 0, updated_at: String(value.exportedAt ?? new Date().toISOString()) }]; }
   if (schemaVersion < 7 && tables.installations) { const providers = new Set(tables.encrypted_integrations.map((row) => row.provider)); tables.installations = tables.installations.map((row) => ({ ...row, google_enabled: providers.has("google") ? 1 : 0, resend_enabled: providers.has("resend") ? 1 : 0, discord_enabled: providers.has("discord") ? 1 : 0 })); }
   if (schemaVersion < 12 && tables.installations) tables.installations = tables.installations.map((row) => ({ google_calendar_enabled: 0, ...row }));
   if (tables.members) tables.members = tables.members.map((row) => ({ attendance_required_from: String(row.created_at ?? "").slice(0, 10), ...row, ...(schemaVersion < 34 ? { inactive_periods_json: row.active === 0 ? JSON.stringify([[new Date().toISOString(), null]]) : "[]" } : {}) }));
@@ -4281,40 +4584,233 @@ async function recordInstallationDeletion(db: D1Database, codeHash: string): Pro
 }
 
 async function moduleJobEnabled(moduleId: string, env: Env): Promise<boolean> {
+  if (env.schedulerPass) return env.schedulerPass.moduleGenerations.has(moduleId);
   try { await requireModuleService(requireDatabase(env), moduleId); return true; }
   catch (error) { if (error instanceof HttpError && [409, 503].includes(error.status)) return false; throw error; }
 }
 
-async function runRegisteredModuleJob(jobId: string, env: Env): Promise<void> {
+async function runRegisteredModuleJob(jobId: string, env: Env): Promise<JobRunResult> {
   const owner = bundledModuleRegistry.modules.find((module) => module.jobs.some((job) => job.id === jobId));
   const handler = owner && apiModules.get(owner.id)?.jobs?.[jobId];
   if (!owner || !handler) throw new Error("Registered module job is unavailable");
-  const db = requireDatabase(env); const generation = await requireModuleService(db, owner.id);
+  // Every statement the job runs rechecks this generation, so a module disabled during the pass stops there.
+  const db = requireDatabase(env); const generation = env.schedulerPass?.moduleGenerations.get(owner.id) ?? await requireModuleService(db, owner.id);
   const scopedDatabase = captureModuleServiceDatabase(db, owner.id, generation); const scopedEnvironment = moduleScopedEnvironment(env, scopedDatabase);
-  await handler({ env: moduleEnvironment(owner.id, scopedEnvironment), db: scopedDatabase, services: coreModuleServices(scopedEnvironment, owner.id) });
+  const pass = env.schedulerPass;
+  return await handler({ env: moduleEnvironment(owner.id, scopedEnvironment), db: scopedDatabase, services: coreModuleServices(scopedEnvironment, owner.id), ...(pass ? { scheduler: Object.freeze({ steps: pass.steps === true, ...(pass.cursor ? { cursor: pass.cursor } : {}) }) } : {}) });
 }
 
 export const registeredModuleSchedulerJobs = moduleSchedulerJobs<Env>({ modules: bundledModuleRegistry.modules, enabled: moduleJobEnabled, runJob: runRegisteredModuleJob });
+/**
+ * Installation housekeeping: module reconciliation, expired sign-in throttles, and module cleanup. On the Durable Object
+ * each is its own slice, a second apart, so the slice that leads every five-minute round (and pays for waking the
+ * object) stays small; the cron fallback runs all three in one pass as before. A cleanup with rows left asks for another
+ * slice instead of looping inside this one.
+ */
+async function runSchedulerHousekeeping(env: Env): Promise<JobRunResult> {
+  const db = requireDatabase(env); const step = env.schedulerPass?.steps ? env.schedulerPass.cursor ?? "reconcile" : undefined;
+  if (!step || step === "reconcile") {
+    try { await reconcileInstalledModules(db); } catch { /* Reconciliation retries on the next round and on requests. */ }
+    if (step) return { more: true, cursor: "prune" };
+  }
+  if (!step || step === "prune") {
+    try { await pruneAuthProtection(db); } catch { /* Expired throttle rows are pruned on a later round. */ }
+    if (step) return { more: true, cursor: "cleanup" };
+  }
+  return (await runModuleCleanup(db)).status === "progress" ? { more: true, cursor: "cleanup" } : {};
+}
 export const registeredCoreSchedulerJobs: readonly SchedulerJob<Env>[] = Object.freeze([
+  Object.freeze({ id: "core.housekeeping", interval: 300_000, internal: true, run: runSchedulerHousekeeping }),
   Object.freeze({ id: "core.discord-commands", interval: 300_000, run: autoReconcileDiscordCommands }),
 ]);
 const registeredPlatformSchedulerJobs = Object.freeze([...registeredCoreSchedulerJobs, ...registeredModuleSchedulerJobs]);
-export const PlatformScheduler = schedulerClass<Env>(registeredPlatformSchedulerJobs, async (request, env) => {
-  try { await requireRole(request, env, ["admin"]); return true; } catch { return false; }
-}, (env) => env.PLATFORM_SCHEDULER_MODE === "durable", webUpdateMaintenance);
+// Core's jobs check the budget before each item, so they start with a small reserve. A plugin's job cannot see the
+// budget, so it starts only with room for its own checks and a short batch.
+const selfLimitingJobs: ReadonlySet<string> = new Set([...registeredCoreSchedulerJobs.map((job) => job.id), ...Object.keys(attendanceRuntime.jobs)]);
+const pluginJobStartCost: PassCost = Object.freeze({ d1: 12, external: 3 });
+/** The jobs a module's own writes poke: a plugin route that queues work gets its jobs run within seconds. */
+const moduleSchedulerJobIds = (moduleId: string) => (bundledModuleRegistry.modules.find((module) => module.id === moduleId)?.jobs ?? []).map((job) => job.id);
 
-async function platformScheduler(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]);
-  if (env.PLATFORM_SCHEDULER_MODE !== "durable" || !env.PLATFORM_SCHEDULER) throw new HttpError(503, "Durable scheduler is not configured");
+type SchedulerStateRow = { pausedUntil: string | null; pausedAt: string | null; pausedBy: string | null; jobsJson: string | null };
+const schedulerStateSql = "SELECT paused_until AS pausedUntil, paused_at AS pausedAt, paused_by AS pausedBy, jobs_json AS jobsJson FROM platform_scheduler_state WHERE installation_id = 'primary'";
+// The state row exists only once the installation does; until then nothing is written and every job is due.
+const schedulerJobsWrite = (db: D1Database, jobs: JobStates, now: number) => db.prepare("INSERT INTO platform_scheduler_state (installation_id, jobs_json, updated_at) SELECT 'primary', ?, ? WHERE EXISTS (SELECT 1 FROM installations WHERE id = 'primary') ON CONFLICT(installation_id) DO UPDATE SET jobs_json = excluded.jobs_json, updated_at = excluded.updated_at").bind(JSON.stringify(jobs), new Date(now).toISOString());
+const pausedUntilTime = (row: { pausedUntil?: string | null } | null | undefined, now: number): number | null => { const until = row?.pausedUntil ? Date.parse(row.pausedUntil) : NaN; return Number.isFinite(until) && until > now ? until : null; };
+
+/**
+ * Whether an Admin's Stop is pausing outbound delivery, and until when. Delivery code checks this before any provider
+ * request and leaves its work queued; a slice already knows. One read per request (keyed on its database wrapper).
+ */
+const deliveryPauseReads = new WeakMap<object, Promise<number | null>>();
+async function deliveryPausedUntil(env: Env): Promise<number | null> {
+  if (env.schedulerPass) return env.schedulerPass.pausedUntil;
+  const db = env.DB; if (!db) return null;
+  let read = deliveryPauseReads.get(db);
+  if (!read) {
+    read = db.prepare("SELECT paused_until AS pausedUntil FROM platform_scheduler_state WHERE installation_id = 'primary'").first<{ pausedUntil: string | null }>()
+      .then((row) => pausedUntilTime(row, Date.now()))
+      // An installation whose migrations have not reached 0097 has no Stop to honour.
+      .catch(() => null);
+    deliveryPauseReads.set(db, read);
+  }
+  return read;
+}
+const deliveryPausedMessage = (until: number) => `Outbound delivery is stopped until ${new Date(until).toISOString()}. Start the scheduler on the Debug page to resume it sooner.`;
+async function requireDeliveryRunning(env: Env): Promise<void> { const until = await deliveryPausedUntil(env); if (until !== null) throw new HttpError(409, deliveryPausedMessage(until)); }
+
+/**
+ * Ask the scheduler to run these jobs within seconds. Only a Durable Object deployment can; without one the cron runs
+ * them on its next tick. Never fails or delays the write that created the work.
+ */
+function pokeScheduler(env: Env, context: WorkerContext | undefined, jobIds: readonly string[]): void {
+  if (!durableScheduler(env) || !jobIds.length || env.schedulerPass) return;
+  const poke = (async () => { try { await schedulerObject(env)!.fetch(schedulerRequest("poke", { jobs: jobIds })); } catch { /* The job still runs when it next falls due. */ } })();
+  context?.waitUntil(poke);
+}
+/**
+ * The jobs a successful write should poke, by route: writes that queue calendar operations, label role changes, notice
+ * changes, channel changes, or a plugin's own work (its publication requests or visit notifications, for example).
+ * Kiosk scans and reads never poke.
+ */
+function schedulerPokesFor(pathname: string): readonly string[] {
+  if (/^\/(meetings|meeting-series|meeting-templates|calendars\/sync|discord\/calendar)(\/|$)/.test(pathname) || /^\/admin\/integrations\/(google-calendar|discord\/calendar)(\/|$)/.test(pathname)) return [...schedulerJobsFor.calendar, ...schedulerJobsFor.notices];
+  if (/^\/labels(\/|$)/.test(pathname) || pathname.startsWith("/admin/integrations/discord/label-roles")) return schedulerJobsFor.labels;
+  if (pathname === "/admin/integrations/discord/anomaly-reports" || pathname === "/discord/missing") return schedulerJobsFor.notices;
+  if (pathname === "/admin/integrations/discord/channel-manager" || pathname === "/discord/kiosk-status") return schedulerJobsFor.channel;
+  const owner = bundledModuleRegistry.routeOwner(pathname)?.module;
+  return owner && owner.id !== "attendance" ? moduleSchedulerJobIds(owner.id) : [];
+}
+/** The jobs a write that queues each kind of delivery pokes. */
+const schedulerJobsFor = {
+  calendar: ["attendance.google-calendar", "attendance.discord-calendar"],
+  labels: ["attendance.discord-label-roles"],
+  notices: ["attendance.discord-notices", "attendance.discord-anomalies"],
+  channel: ["attendance.discord-channel"],
+} as const satisfies Record<string, readonly string[]>;
+
+/**
+ * `hooks` is set by the Durable Object: it records the running job in its own storage instead of the D1 "running" write,
+ * saving one D1 query in every slice. `steps` lets a job split its work into one step per slice (see JobRunResult).
+ */
+type SchedulerPassOptions = { now?: number; pokes?: Pokes; maxJobs: number; limits: PassLimits; slack?: number; order?: number; hooks?: SliceHooks; steps?: boolean };
+export type SchedulerPassReport = SliceResult & { attempted: string[]; deferred: string[]; d1Queries: number; externalRequests: number; skipped?: "maintenance" | "unconfigured" };
+/**
+ * One scheduler invocation's work. A Durable Object alarm runs it with maxJobs 1 (one slice); the cron fallback runs it
+ * over every due job. It opens with one batched read, marks the jobs it takes as running with their next time already
+ * set (so a slice the platform kills still lets other jobs go next), runs them, and writes their outcomes.
+ */
+async function runSchedulerPass(env: Env, options: SchedulerPassOptions): Promise<SchedulerPassReport> {
+  const now = options.now ?? Date.now();
+  const budget = new SchedulerBudget(options.limits);
+  const report = (result: Omit<SchedulerPassReport, "d1Queries" | "externalRequests">): SchedulerPassReport => ({ ...result, d1Queries: budget.d1, externalRequests: budget.external });
+  if (!env.DB) return report({ nextWake: now + SLICE_IDLE_MAX_MS, attempted: [], deferred: [], skipped: "unconfigured" });
+  const passEnv: Env = { ...env, DB: budget.database(env.DB) }; const db = requireDatabase(passEnv);
+  let maintenance: { results?: unknown[] } | undefined, modules: { results?: unknown[] } | undefined, stateRow: SchedulerStateRow | null = null, stateKept = true;
+  try {
+    const [maintenanceResult, moduleResult, stateResult] = await db.batch([webUpdateMaintenanceStatement(db), moduleServiceGenerationsStatement(db), db.prepare(schedulerStateSql)]);
+    maintenance = maintenanceResult; modules = moduleResult; stateRow = (stateResult?.results?.[0] as SchedulerStateRow | undefined) ?? null;
+  } catch {
+    // Without the state table (an installation whose migrations have not reached 0097) the jobs still run, as the
+    // cron ran them before, with no state kept.
+    stateKept = false;
+    const [maintenanceResult, moduleResult] = await db.batch([webUpdateMaintenanceStatement(db), moduleServiceGenerationsStatement(db)]);
+    maintenance = maintenanceResult; modules = moduleResult;
+  }
+  // Due work stays intact while an update holds maintenance; a later slice resumes it without another command.
+  if (maintenance?.results?.length) return report({ nextWake: now + SLICE_RETRY_MS, attempted: [], deferred: [], skipped: "maintenance" });
+  const pausedUntil = pausedUntilTime(stateRow, now);
+  const states = parseJobStates(registeredPlatformSchedulerJobs, stateRow?.jobsJson, now);
+  // A job whose slice the platform stopped (it never reached its closing write) moves on: failed, due after its interval.
+  const crashed = options.hooks?.crashed; const crashedJob = crashed && registeredPlatformSchedulerJobs.find((job) => job.id === crashed.job);
+  if (crashedJob) states[crashedJob.id] = { next: now + crashedJob.interval, last: crashed!.at, outcome: "failed" };
+  const pokes = crashedJob ? withoutPokes(options.pokes, [crashedJob.id]) : options.pokes;
+  const ordered = rotateJobs(registeredPlatformSchedulerJobs, options.order ?? 0);
+  const due = dueJobs(ordered, states, now, { pokes, slack: options.slack, internalOnly: pausedUntil !== null }).slice(0, options.maxJobs);
+  if (!due.length) {
+    if (crashedJob && stateKept) await schedulerJobsWrite(db, states, now).run();
+    return report({ ran: crashedJob?.id, nextWake: nextWake(registeredPlatformSchedulerJobs, states, now, { pokes, pausedUntil }), attempted: [], deferred: [] });
+  }
+  const before = structuredClone(states);
+  for (const job of due) states[job.id] = { next: now + job.interval, last: now, outcome: "running" };
+  if (options.hooks) await options.hooks.started(due[0]!.id);
+  else if (stateKept) await schedulerJobsWrite(db, states, now).run();
+  const schedulerPass: SchedulerPass = { budget, moduleGenerations: moduleServiceGenerations(modules?.results as { moduleId: string; generation: number }[] | undefined), integrations: new Map(), pausedUntil, steps: options.steps === true };
+  // Core's own jobs make provider requests outside a module scope; counting them is all their authority check does.
+  const jobEnv: Env = { ...passEnv, schedulerPass, moduleProviderAuthority: async () => budget.chargeExternal() };
+  const attempted: string[] = []; let more = false;
+  for (const job of due) {
+    try {
+      // A disabled module's job is skipped, not deferred: its check reads the module state this pass already has.
+      if (job.enabled && !await job.enabled(jobEnv)) { states[job.id]!.outcome = "paused"; attempted.push(job.id); continue; }
+      // Leave room for the closing write.
+      if (!budget.allows(addCosts(selfLimitingJobs.has(job.id) ? scheduledJobStartCost : pluginJobStartCost, { d1: 1 }))) { budget.defer(job.id); states[job.id] = before[job.id]!; continue; }
+      budget.exhausted = false; attempted.push(job.id);
+      // The job sees the step it asked to continue from; jobs run one after another, so the shared pass can carry it.
+      schedulerPass.cursor = before[job.id]!.cursor;
+      const result = await job.run(jobEnv);
+      const jobMore = budget.exhausted || Boolean(result && typeof result === "object" && (result as { more?: unknown }).more === true);
+      const cursor = jobMore ? runCursor(result) : undefined;
+      states[job.id] = { next: jobMore ? now + SLICE_CONTINUE_MS : now + job.interval, last: now, outcome: "ok", ...(cursor ? { cursor } : {}) };
+      more ||= jobMore;
+    } catch (error) {
+      // Each job's failure is its own; it retries when it next falls due.
+      const status = (error as { status?: number })?.status;
+      states[job.id]!.outcome = status === 409 || status === 503 ? "paused" : "failed";
+    }
+  }
+  if (stateKept) await schedulerJobsWrite(db, states, now).run();
+  if (budget.deferred.length) console.log(JSON.stringify({ event: "scheduler_jobs_deferred", ...budget.snapshot() }));
+  const wake = more ? now + SLICE_CONTINUE_MS : nextWake(registeredPlatformSchedulerJobs, states, now, { pokes: withoutPokes(options.pokes, attempted), pausedUntil });
+  return report({ ran: due[0]!.id, more, nextWake: wake, attempted, deferred: [...budget.deferred] });
+}
+const addCosts = (left: PassCost, right: PassCost): PassCost => ({ d1: (left.d1 ?? 0) + (right.d1 ?? 0), external: (left.external ?? 0) + (right.external ?? 0) });
+const withoutPokes = (pokes: Pokes | undefined, ran: readonly string[]): Pokes | undefined => pokes && Object.fromEntries(Object.entries(pokes).filter(([id]) => !ran.includes(id)));
+
+/** One Durable Object slice: one job's small batch (or one step of it) inside one alarm invocation. */
+export function runSchedulerSlice(env: Env, pokes: Pokes = {}, now?: number, hooks?: SliceHooks): Promise<SchedulerPassReport> {
+  return runSchedulerPass(env, { now, pokes, maxJobs: 1, limits: scheduledSliceLimits, hooks, steps: true });
+}
+
+export const PlatformScheduler = schedulerClass<Env>(registeredPlatformSchedulerJobs, (env, pokes, hooks) => runSchedulerSlice(env, pokes, undefined, hooks));
+const schedulerObject = (env: Env) => env.PLATFORM_SCHEDULER ? env.PLATFORM_SCHEDULER.get(env.PLATFORM_SCHEDULER.idFromName("primary")) : undefined;
+/** The Durable Object runs the scheduler whenever it is bound; PLATFORM_SCHEDULER_MODE "cron" keeps the cron fallback. */
+const durableScheduler = (env: Env) => Boolean(env.PLATFORM_SCHEDULER) && env.PLATFORM_SCHEDULER_MODE !== "cron";
+
+/** Scheduler status and Stop/Start, read from D1 so they work with or without the Durable Object. */
+async function platformScheduler(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  const action = request.method === "GET" ? "status" : new URL(request.url).pathname.endsWith("/start") ? "start" : "stop";
   if (request.method === "POST") {
     const input = await parseJson<Record<string, unknown>>(request, 128);
     if (!isObject(input) || Object.keys(input).length) throw new HttpError(400, "Scheduler controls accept no configuration fields");
+    const at = new Date();
+    if (action === "stop") {
+      // A Stop always lasts 24 hours from the latest Stop, so a forgotten Stop cannot hold delivery indefinitely.
+      const until = new Date(at.getTime() + SCHEDULER_STOP_MS).toISOString();
+      await db.prepare("INSERT INTO platform_scheduler_state (installation_id, paused_until, paused_at, paused_by, updated_at) VALUES ('primary', ?, ?, ?, ?) ON CONFLICT(installation_id) DO UPDATE SET paused_until = excluded.paused_until, paused_at = excluded.paused_at, paused_by = excluded.paused_by, updated_at = excluded.updated_at").bind(until, at.toISOString(), principal.userId, at.toISOString()).run();
+      await writeAudit(db, principal, "scheduler.stop", "platform_scheduler", "primary", { pausedUntil: until });
+    } else {
+      await db.prepare("UPDATE platform_scheduler_state SET paused_until = NULL, paused_at = NULL, paused_by = NULL, updated_at = ? WHERE installation_id = 'primary'").bind(at.toISOString()).run();
+      await writeAudit(db, principal, "scheduler.start", "platform_scheduler", "primary");
+      // Work the Stop held goes out now rather than when each job next falls due.
+      pokeScheduler(env, context, registeredPlatformSchedulerJobs.map((job) => job.id));
+    }
   }
-  const action = request.method === "GET" ? "status" : new URL(request.url).pathname.endsWith("/start") ? "start" : "stop";
-  const stub = env.PLATFORM_SCHEDULER.get(env.PLATFORM_SCHEDULER.idFromName("primary"));
-  const result = await stub.fetch(new Request(`https://scheduler.internal/${action}`, { method: request.method, headers: { cookie: request.headers.get("cookie") ?? "" } }));
-  if (result.ok && request.method === "POST") await writeAudit(requireDatabase(env), principal, `scheduler.${action}`, "platform_scheduler", "primary");
-  return new Response(result.body, { status: result.status, headers: result.headers });
+  const now = Date.now();
+  const row = await db.prepare(schedulerStateSql).first<SchedulerStateRow>();
+  const pausedUntil = pausedUntilTime(row, now);
+  const durable = durableScheduler(env);
+  // Reading status also re-arms a missing alarm, as the cron watchdog does, so opening the page recovers a lost one.
+  let alarm: number | null | undefined;
+  if (durable) try { alarm = ((await (await schedulerObject(env)!.fetch(schedulerRequest("watchdog"))).json()) as { alarm?: number | null }).alarm ?? null; } catch { alarm = undefined; }
+  return response({
+    enabled: pausedUntil === null,
+    mode: durable ? "durable" : "cron",
+    pausedUntil: pausedUntil === null ? null : new Date(pausedUntil).toISOString(),
+    pausedAt: pausedUntil === null ? null : row?.pausedAt ?? null,
+    alarm: alarm ?? null,
+    jobs: parseJobStates(registeredPlatformSchedulerJobs, row?.jobsJson, now),
+  }, 200, { "cache-control": "no-store" });
 }
 
 const worker = { async fetch(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
@@ -4325,7 +4821,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
   if (usage) env = { ...env, DB: usage.database };
   try {
     if (binding && usage && request.method !== "OPTIONS") { const current = env; await ensureModulesReconciled(usage.database, binding, () => webUpdateMaintenance(current), undefined, undefined, context ? (promise) => context.waitUntil(promise) : undefined); }
-    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !["/auth/local", "/auth/logout", "/auth/google/callback"].includes(url.pathname) && await webUpdateMaintenance(env)) return withCors(response({ error: "An installation update requires temporary write suspension. Retry after recovery or completion.", code: "update_maintenance" }, 503, { "retry-after": "30" }), request, env);
+    if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && !["/auth/local", "/auth/local/params", "/auth/logout", "/auth/google/callback"].includes(url.pathname) && await webUpdateMaintenance(env)) return withCors(response({ error: "An installation update requires temporary write suspension. Retry after recovery or completion.", code: "update_maintenance" }, 503, { "retry-after": "30" }), request, env);
     if (request.method === "POST" && Object.hasOwn(authRateLimits, url.pathname) && env.DB) {
       const retryAfter = await consumeAuthRateLimit(env.DB, request, url.pathname, env.SESSION_KEY ?? env.BOOTSTRAP_CODE_HASH ?? "");
       if (retryAfter) return withCors(response({ error: "Too many attempts. Wait a few minutes and try again.", code: "rate_limited" }, 429, { "retry-after": String(retryAfter) }), request, env);
@@ -4367,7 +4863,8 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/web-updates/setup/recheck" && request.method === "POST") result = await recheckSetup(request, env);
     else if (url.pathname === "/admin/plugins" && request.method === "GET") result = await pluginManagement(request, env, "state");
     else if (url.pathname === "/admin/plugins/migrations" && request.method === "GET") { await requireRole(request, env, ["admin"]); result = response({ required: await requiredModuleMigrations(env) }); }
-    else if (["/admin/plugins/review", "/admin/plugins/change", "/admin/plugins/reauthenticate", "/admin/plugins/release"].includes(url.pathname) && request.method === "POST") result = await pluginManagement(request, env, url.pathname.slice("/admin/plugins/".length) as "review" | "change" | "reauthenticate" | "release");
+    else if (["/admin/plugins/review", "/admin/plugins/change", "/admin/plugins/reauthenticate", "/admin/plugins/reauthenticate/params", "/admin/plugins/release"].includes(url.pathname) && request.method === "POST") result = await pluginManagement(request, env, url.pathname.slice("/admin/plugins/".length) as "review" | "change" | "reauthenticate" | "reauthenticate/params" | "release");
+    else if (url.pathname === "/auth/local/params" && request.method === "POST") result = await localPasswordParams(request, env);
     else if (url.pathname === "/auth/local" && request.method === "POST") result = await localLogin(request, env);
     else if (url.pathname === "/auth/session" && request.method === "GET") result = await authSession(request, env);
     else if (/^\/auth\/walkthroughs\/[^/]+$/.test(url.pathname) && ["GET", "PATCH"].includes(request.method)) result = await authWalkthrough(request, env, url.pathname.slice("/auth/walkthroughs/".length));
@@ -4377,6 +4874,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/platform/modules" && request.method === "GET") result = await modulePlatform(request, env);
     else if (url.pathname === "/admin/modules" && request.method === "PUT") result = await modulePlatform(request, env);
     else if (url.pathname === "/admin/modules/grants" && ["GET", "POST"].includes(request.method) || url.pathname === "/admin/modules/grants/revoke" && request.method === "POST") result = await moduleInterfaceGrants(request, env, request.method === "GET" ? "list" : url.pathname.endsWith("/revoke") ? "revoke" : "grant");
+    else if (/^\/admin\/modules\/[^/]+\/report-baseline$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await moduleReportBaseline(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/modules\/[^/]+\/setup$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await moduleSetup(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/modules\/assignments\/[^/]+$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await moduleAssignments(request, env, decodeURIComponent(url.pathname.split("/")[4]));
     else if (url.pathname.startsWith("/module-setup/attendance/")) { const principal = await requireRole(request, env, ["admin"]); result = await attendanceSetupRoute(request, requireDatabase(env), principal.userId); }
@@ -4457,6 +4955,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/meetings" && ["GET", "POST"].includes(request.method)) result = await meetings(request, env);
     else if (url.pathname === "/meeting-templates" && request.method === "GET") result = await meetingTemplates(request, env);
     else if (url.pathname === "/meetings/bulk-delete" && request.method === "POST") result = await bulkDeleteMeetings(request, env);
+    else if (url.pathname === "/meetings/import" && request.method === "POST") result = await meetingImport(request, env);
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "GET") result = await meetingDetail(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (/^\/meetings\/[^/]+\/impact$/.test(url.pathname) && request.method === "POST") result = await meetingImpact(request, env, decodeURIComponent(url.pathname.split("/")[2]));
     else if (/^\/meetings\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateMeeting(request, env, decodeURIComponent(url.pathname.split("/")[2]));
@@ -4513,7 +5012,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (/^\/admin\/integrations\/discord\/label-role-jobs\/[^/]+\/retry$/.test(url.pathname) && request.method === "POST") result = await discordLabelRetry(request, env, decodeURIComponent(url.pathname.split("/")[5]), context);
     else if (url.pathname === "/admin/users" && ["GET", "POST"].includes(request.method)) result = await users(request, env);
     else if (/^\/admin\/users\/[^/]+$/.test(url.pathname) && request.method === "PATCH") result = await updateUser(request, env, decodeURIComponent(url.pathname.split("/")[3]));
-    else if (url.pathname === "/admin/scheduler" && request.method === "GET" || ["/admin/scheduler/start", "/admin/scheduler/stop"].includes(url.pathname) && request.method === "POST") result = await platformScheduler(request, env);
+    else if (url.pathname === "/admin/scheduler" && request.method === "GET" || ["/admin/scheduler/start", "/admin/scheduler/stop"].includes(url.pathname) && request.method === "POST") result = await platformScheduler(request, env, context);
     else if (url.pathname === "/communications/email" && request.method === "POST") result = await sendAttendanceEmail(request, env);
     else if (url.pathname === "/discord/interactions" && request.method === "POST") result = await discordInteraction(request, env);
     else if (url.pathname === "/discord/link" && request.method === "POST") result = await linkDiscordMember(request, env);
@@ -4608,21 +5107,20 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     const headers = new Headers(result.headers); headers.set("cache-control", "no-store, private, max-age=0"); headers.set("pragma", "no-cache"); headers.set("expires", "0"); headers.set("x-robots-tag", "noindex, nofollow");
     result = new Response(result.body, { status: result.status, headers });
   }
+  if (result.status < 400 && !["GET", "HEAD", "OPTIONS"].includes(request.method)) pokeScheduler(env, context, schedulerPokesFor(url.pathname));
   const measured = usage?.snapshot();
   if (measured && (measured.measuredRowsRead >= 100 || usageCategory(url.pathname) === "/reports")) console.log(JSON.stringify({ event: "d1_usage", category: usageCategory(url.pathname), status: result.status, ...measured }));
   return withCors(result, request, env);
 }, async scheduled(controller: ScheduledController, env: Env): Promise<void> {
-  if (await webUpdateMaintenance(env)) return;
-  const db = requireDatabase(env);
-  try { await reconcileInstalledModules(db); } catch { /* Reconciliation retries on the next scheduled pass. */ }
-  try { await pruneAuthProtection(db); } catch { /* Expired throttle rows are pruned on a later pass. */ }
-  for (let pass = 0; pass < 8; pass += 1) { if (await webUpdateMaintenance(env)) return; const cleanup = await runModuleCleanup(db); if (cleanup.status !== "progress") break; }
-  if (env.PLATFORM_SCHEDULER_MODE === "durable") return;
-  if (controller.cron === "*/5 * * * *") {
-    for (const job of registeredPlatformSchedulerJobs) {
-      if (await webUpdateMaintenance(env)) return;
-      try { if (await job.enabled?.(env) !== false) await job.run(env); } catch { /* Each registered job retries independently on the next scheduled pass. */ }
-    }
+  if (controller.cron !== undefined && controller.cron !== "*/5 * * * *") return;
+  if (durableScheduler(env)) {
+    // With the Durable Object the cron is only a watchdog: it re-arms a missing alarm and does no job work itself.
+    try { await schedulerObject(env)!.fetch(schedulerRequest("watchdog")); } catch { /* The next tick tries again. */ }
+    return;
   }
+  // The cron fallback: one slice for each due job, within one pass budget, starting one job later each tick so a job
+  // the budget defers leads a later tick. A job due within a minute of the tick runs now rather than a tick later.
+  const scheduledTime = controller.scheduledTime;
+  await runSchedulerPass(env, { now: Date.now(), maxJobs: registeredPlatformSchedulerJobs.length, limits: scheduledPassLimits, slack: 60_000, order: scheduledTime === undefined ? 0 : passSlot(scheduledTime) });
 } };
 export default worker;

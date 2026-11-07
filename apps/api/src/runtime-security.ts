@@ -1,7 +1,7 @@
-import { scryptAsync } from "@noble/hashes/scrypt.js";
+import { clientPasswordHash, constantTimeEqual, decodeFixedBytes, encodeBase64Url as encodeBytes, parsePasswordHash, passwordSaltBytes, passwordScrypt, passwordVerifier } from "../../../packages/shared/src/password-hash.mjs";
+import { derivePasswordKey } from "../../../packages/shared/src/password-key.mjs";
 
 const encoder = new TextEncoder();
-const scryptOptions = { N: 32_768, r: 8, p: 1, dkLen: 32, maxmem: 64 * 1024 * 1024, asyncTick: 5 } as const;
 
 function encodeBase64Url(value: Uint8Array): string {
   return btoa(String.fromCharCode(...value)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
@@ -12,27 +12,76 @@ function decodeBase64Url(value: string): Uint8Array {
   return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
 }
 
-function constantTimeEqual(left: Uint8Array, right: Uint8Array): boolean {
-  if (left.length !== right.length) return false;
-  let difference = 0;
-  for (let index = 0; index < left.length; index += 1) difference |= left[index] ^ right[index];
-  return difference === 0;
-}
-
 const asArrayBuffer = (value: Uint8Array): ArrayBuffer => Uint8Array.from(value).buffer;
 
-export async function hashPassword(password: string, salt = crypto.getRandomValues(new Uint8Array(16))): Promise<string> {
-  if (password.length < 12) throw new Error("Password must be at least 12 characters");
-  const derived = await scryptAsync(password, salt, scryptOptions);
-  return `scrypt$${scryptOptions.N}$${scryptOptions.r}$${scryptOptions.p}$${encodeBase64Url(salt)}$${encodeBase64Url(derived)}`;
+/*
+ * Local-account passwords ("server relief"). The browser computes K = scrypt(password, salt, N=32768, r=8, p=1, dkLen=32)
+ * and sends K; the Worker stores `scrypt-c$32768$8$1$<salt>$<SHA-256("lancerlogin:password:v2" ‖ K)>` and compares in
+ * constant time. That costs well under 1 ms of CPU, where server-side scrypt cost 179–354 ms against the Free plan's 10 ms.
+ *
+ * The Worker never sees the password for a `scrypt-c` row, so it cannot check the 12-character minimum: the dashboard
+ * and scripts/reset-local-password.mjs enforce it (packages/shared/src/password-key.mjs). Only the person choosing a
+ * password could bypass it, and only for a password they choose themselves.
+ *
+ * Legacy `scrypt$` rows hold K itself. They are never converted without the password, because backups exported before
+ * this change contain those K values, and a converted row would let such a K sign in directly. Instead the client sends
+ * the password once with a new salt and its new K; the Worker checks the password with server-side scrypt (one burst
+ * per user, inside the sign-in throttle and account lock) and stores the new K under the new salt.
+ */
+export { passwordSaltBytes, passwordScrypt };
+export type PasswordFormat = "scrypt-c" | "legacy";
+
+/** Which path a stored hash takes, or undefined when it can't sign in at all (no password, or a malformed row). */
+export function passwordFormat(encoded: string | null | undefined): PasswordFormat | undefined {
+  const parsed = parsePasswordHash(encoded);
+  return parsed?.format === "scrypt-c" ? "scrypt-c" : parsed?.format === "scrypt" ? "legacy" : undefined;
 }
 
-export async function verifyPassword(password: string, encoded: string): Promise<boolean> {
-  const [algorithm, cost, blockSize, parallel, saltText, expectedText] = encoded.split("$");
-  if (algorithm !== "scrypt" || Number(cost) !== scryptOptions.N || Number(blockSize) !== scryptOptions.r || Number(parallel) !== scryptOptions.p || !saltText || !expectedText) return false;
-  const expected = decodeBase64Url(expectedText);
-  const actual = await scryptAsync(password, decodeBase64Url(saltText), { ...scryptOptions, dkLen: expected.length });
-  return constantTimeEqual(actual, expected);
+/** The salt stored in a `scrypt-c` row, as base64url. */
+export function storedPasswordSalt(encoded: string): string | undefined {
+  const parsed = parsePasswordHash(encoded);
+  return parsed?.format === "scrypt-c" ? encodeBytes(parsed.salt) : undefined;
+}
+
+/** A 32-byte K sent by the client, or undefined for anything else. */
+export const parsePasswordKey = (value: unknown) => decodeFixedBytes(value, passwordScrypt.dkLen);
+/** A 16-byte salt sent by the client, or undefined for anything else. */
+export const parsePasswordSalt = (value: unknown) => decodeFixedBytes(value, passwordSaltBytes);
+
+/** A password set by setup, account creation or a reset: `{ salt, key }`, both base64url. Returns the `scrypt-c` row. */
+export async function passwordHashFromCredential(value: unknown): Promise<string | undefined> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const { salt, key, ...extra } = value as Record<string, unknown>;
+  const saltBytes = parsePasswordSalt(salt); const keyBytes = parsePasswordKey(key);
+  return saltBytes && keyBytes && !Object.keys(extra).length ? clientPasswordHash(saltBytes, keyBytes) : undefined;
+}
+
+/** Compares K with a `scrypt-c` row in constant time. Any other row, or a malformed K, is false. */
+export async function verifyPasswordKey(key: Uint8Array, encoded: string | null | undefined): Promise<boolean> {
+  const parsed = parsePasswordHash(encoded);
+  const actual = await passwordVerifier(key);
+  return parsed?.format === "scrypt-c" && key.length === passwordScrypt.dkLen && constantTimeEqual(actual, parsed.verifier);
+}
+
+/** The one server-side scrypt left: checks the password against a legacy `scrypt$` row before it is re-salted. */
+export async function verifyLegacyPassword(password: string, encoded: string): Promise<boolean> {
+  const parsed = parsePasswordHash(encoded);
+  if (parsed?.format !== "scrypt" || !password) return false;
+  return constantTimeEqual(await derivePasswordKey(password, parsed.salt), parsed.key);
+}
+
+/**
+ * The salt the params endpoint gives for a username with no `scrypt-c` password (unknown, inactive or Google-only): the
+ * first 16 bytes of HMAC-SHA256(HMAC(SESSION_KEY, "lancerlogin:pw-salt"), username). It is the same on every request and
+ * looks like a stored salt, so the response doesn't reveal which usernames exist. It replaces the old timing equalizer.
+ */
+export async function fakePasswordSalt(secret: string, username: string): Promise<string> {
+  const keyBytes = decodeBase64Url(secret);
+  if (keyBytes.length < 32) throw new Error("SESSION_KEY must contain at least 32 random bytes");
+  const root = await crypto.subtle.importKey("raw", asArrayBuffer(keyBytes), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const derived = new Uint8Array(await crypto.subtle.sign("HMAC", root, encoder.encode("lancerlogin:pw-salt")));
+  const saltKey = await crypto.subtle.importKey("raw", asArrayBuffer(derived), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return encodeBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", saltKey, encoder.encode(username))).slice(0, passwordSaltBytes));
 }
 
 /**

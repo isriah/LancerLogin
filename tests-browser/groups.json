@@ -1,6 +1,11 @@
 {
   "description": "Browser spec groups for the complete release gate. core: Core behaviour, run plugin-free. plugin: needs the Outreach or Carpool plugin and skips entirely without it, run composed only. integration: Core behaviour that changes when plugins exist, run plugin-free with core and again composed. seconds: approximate time for the file on a CI runner with one worker, used to balance the gate parts. See scripts/browser-groups.mjs; tests/browser-groups.test.mjs keeps this complete.",
   "specs": {
+    "attendance-by-label.spec.ts": {
+      "group": "core",
+      "area": "Roster, members and reports",
+      "seconds": 30
+    },
     "auth-setup-conformance.spec.ts": {
       "group": "core",
       "area": "Sign-in and first setup",
@@ -195,6 +200,11 @@
       "group": "core",
       "area": "Meetings and attendance",
       "seconds": 48
+    },
+    "meeting-import.spec.ts": {
+      "group": "core",
+      "area": "Meetings and attendance",
+      "seconds": 15
     },
     "meeting-weight-disclosure.spec.ts": {
       "group": "core",

@@ -44,15 +44,15 @@ const reportColumns=[
   { key: "core.member.status",label: "Roster status",group: "Roster",sortable: true,filterKind: "text" as const },
   { key: "core.member.labels",label: "Current labels",group: "Roster",sortable: false,filterKind: "text" as const },
   { key: "attendance.member.required-from",label: "Attendance starts",group: "Roster",sortable: true,filterKind: "text" as const },
-  { key: "attendance.member.regular-rate",label: "Regular attendance",group: "Regular attendance",sortable: true,filterKind: "number" as const },
-  { key: "attendance.member.weighted-present",label: "Regular weighted present",group: "Regular attendance",sortable: true,filterKind: "number" as const },
-  { key: "attendance.member.weighted-eligible",label: "Regular weighted eligible",group: "Regular attendance",sortable: true,filterKind: "number" as const },
-  { key: "attendance.member.regular-period",label: "Regular reporting period",group: "Regular attendance",sortable: false,filterKind: "text" as const },
-  { key: "attendance.member.assigned-policies",label: "Assigned policies",group: "Policies",sortable: false,filterKind: "text" as const },
-  { key: "attendance.policy.history",label: "Policy history",group: "Policies",sortable: false,filterKind: "text" as const },
-  ...["present","absent","excused"].flatMap((status) => { const label=status[0]!.toUpperCase()+status.slice(1); return [{ key: `attendance.detail.${status}-count`,label: `${label} count`,group: "Attendance detail",sortable: true,filterKind: "number" as const },{ key: `attendance.detail.${status}-dates`,label: `${label} dates`,group: "Attendance detail",sortable: false,filterKind: "text" as const }]; }),
-  ...Object.entries({ "official-result": "Official policy result","official-status": "Official policy status","official-target": "Official policy target","official-type": "Official policy type","official-excused": "Official excuse handling","official-period": "Official policy period","report-result": "Report-period policy result","report-status": "Report-period policy status","report-target": "Report-period policy target","report-period": "Report-period policy period" }).map(([key,label]) => ({ key: `attendance.policy.${key}`,label,group: "Policies",sortable: !key.endsWith("period"),filterKind: key.endsWith("result")||key.endsWith("target") ? "number" as const : "text" as const,requiresLabel: true })),
-  { key: "attendance.policy.report-summary",label: "Report-period policies",group: "Policies",sortable: false,filterKind: "text" as const },
+  { key: "attendance.member.regular-rate",label: "Overall rate",group: "Overall attendance",sortable: true,filterKind: "number" as const },
+  { key: "attendance.member.weighted-present",label: "Overall: meetings attended (weighted)",group: "Overall attendance",sortable: true,filterKind: "number" as const },
+  { key: "attendance.member.weighted-eligible",label: "Overall: meetings counted (weighted)",group: "Overall attendance",sortable: true,filterKind: "number" as const },
+  { key: "attendance.member.regular-period",label: "Overall: period",group: "Overall attendance",sortable: false,filterKind: "text" as const },
+  { key: "attendance.member.assigned-policies",label: "Last 30 days: policy results (all labels)",group: "Attendance policies (per label)",sortable: false,filterKind: "text" as const },
+  { key: "attendance.policy.history",label: "Policy history",group: "Attendance policies (per label)",sortable: false,filterKind: "text" as const },
+  ...["present","absent","excused"].flatMap((status) => { const label=status[0]!.toUpperCase()+status.slice(1); return [{ key: `attendance.detail.${status}-count`,label: `${label} meetings`,group: "Meetings by outcome",sortable: true,filterKind: "number" as const },{ key: `attendance.detail.${status}-dates`,label: `${label} dates`,group: "Meetings by outcome",sortable: false,filterKind: "text" as const }]; }),
+  ...Object.entries({ "official-result": "Last 30 days: policy result","official-status": "Last 30 days: policy status","official-target": "Last 30 days: policy target","official-type": "Last 30 days: policy type","official-excused": "Last 30 days: excused-meeting handling","official-period": "Last 30 days: policy period","report-result": "Policy result","report-status": "Policy status","report-target": "Policy target","report-period": "Policy period" }).map(([key,label]) => ({ key: `attendance.policy.${key}`,label,group: "Attendance policies (per label)",sortable: !key.endsWith("period"),filterKind: key.endsWith("result")||key.endsWith("target") ? "number" as const : "text" as const,requiresLabel: true })),
+  { key: "attendance.policy.report-summary",label: "Policy results (all labels)",group: "Attendance policies (per label)",sortable: false,filterKind: "text" as const },
 ].map((column) => ({ ...column,datasets: ["attendance.members"] }));
 const attendanceDataset={ id: "attendance.members",label: "Members - Attendance",description: "Member-level Attendance measures with Community roster fields.",available: true,rowIdentity: "core.member.identity",capability: "attendance.manage",fields: reportColumns.map((column) => ({ id: column.key,label: column.label,group: column.group,kind: column.filterKind==="number" ? "measure" as const : "dimension" as const,valueType: column.filterKind,sortable: column.sortable,filterOperators: [column.filterKind==="number" ? "minimum" as const : "contains" as const],requiresLabel: column.requiresLabel })),filters: ["period","roster","meeting-type","labels","membership"] as const,groupBy: ["core.member.identity"],defaultColumns: ["core.member.name","attendance.member.regular-rate","attendance.member.assigned-policies"],defaultSort: { field: "core.member.name",direction: "asc" as const },relationships: [] };
 const defaultReportDefinition={ version: 2 as const,dataset: "attendance.members",groupBy: ["core.member.identity"],period: { type: "all" as const },roster: "active" as const,meetingType: "all" as const,labelIds: [] as string[],labelMatch: "any" as const,membership: "current" as const,columns: attendanceDataset.defaultColumns.map((key) => ({ key })),columnFilters: [] as { column: { key: string; labelId?: string }; operator: "contains"|"minimum"; value: string }[],sort: { column: { key: "core.member.name" },direction: "asc" as const } };
@@ -101,7 +101,7 @@ async function useReferenceContext(page: Page,role: Role="admin",debugMode=false
   await page.route("**/reports/leaderboard*",(route) => { const url=new URL(route.request().url()); const data=referenceAttendanceReport(url.searchParams.get("from") ?? undefined); return route.fulfill({ json: { ...data,pagination: { page: 1,pageSize: url.searchParams.get("pageSize")==="all"?"all":Number(url.searchParams.get("pageSize")||25),totalRows: data.members.length,totalPages: 1,rangeStart: data.members.length?1:0,rangeEnd: data.members.length },insights: { policyAlerts: [],trend: data.meetings.map((meeting) => ({ meetingId: meeting.id,title: meeting.title,startsAt: meeting.startsAt,rate: 50 })) } } }); });
   await page.route("**/reports/query",async (route) => {
     const body=route.request().postDataJSON() as { definition: typeof defaultReportDefinition; page?: number; pageSize?: number|"all" }; const columns=body.definition.columns.map((column) => ({ id: reportColumnId(column),key: column.key,label: reportColumnLabel(column),labelId: column.labelId })); const absentDates=["2026-09-01","2026-09-08","2026-09-15","2026-09-22"];
-    let rows=roster.map((member,index) => ({ id: member.id,label: `${member.firstName} ${member.lastName}`,href: `/roster/${member.memberId}`,cells: Object.fromEntries(columns.map((column) => [column.id,column.key==="core.member.name"?{ text: `${member.firstName} ${member.lastName}`,sortValue: member.lastName }:column.key==="attendance.member.regular-rate"?{ text: index?"0%":"100%",sortValue: index?0:100 }:column.key==="attendance.member.assigned-policies"?{ text: index?"No assigned policy":"Mentor: N/A",sortValue: null }:column.key==="attendance.detail.absent-dates"?{ text: absentDates.join("; "),sortValue: null,dates: absentDates }:{ text: index?"0":"1",sortValue: index?0:1 }] )) }));
+    let rows=roster.map((member,index) => ({ id: member.id,label: `${member.firstName} ${member.lastName}`,href: `/roster/${member.memberId}`,cells: Object.fromEntries(columns.map((column) => [column.id,column.key==="core.member.name"?{ text: `${member.firstName} ${member.lastName}`,sortValue: member.lastName }:column.key==="attendance.member.regular-rate"?{ text: index?"0%":"100%",sortValue: index?0:100 }:column.key==="attendance.member.assigned-policies"?{ text: index?"No assigned policy":"Mentor: Not enough meetings yet",sortValue: null }:column.key==="attendance.detail.absent-dates"?{ text: absentDates.join("; "),sortValue: null,dates: absentDates }:{ text: index?"0":"1",sortValue: index?0:1 }] )) }));
     rows=rows.filter((row) => (body.definition.columnFilters??[]).every((filter) => { const value=row.cells[reportColumnId(filter.column)]; return filter.operator==="minimum" ? typeof value?.sortValue==="number"&&value.sortValue>=Number(filter.value) : value?.text.toLowerCase().includes(filter.value.toLowerCase()); }));
     const sortId=reportColumnId(body.definition.sort.column),direction=body.definition.sort.direction==="asc"?1:-1; rows.sort((left,right) => String(left.cells[sortId]?.sortValue??"").localeCompare(String(right.cells[sortId]?.sortValue??""))*direction);
     return route.fulfill({ json: { definition: body.definition,warnings: [],resolvedPeriod: body.definition.period.type === "fixed" ? body.definition.period : { to: "2026-09-22" },columns,rows,pagination: { page: body.page??1,pageSize: body.pageSize??25,totalRows: rows.length,totalPages: 1,rangeStart: 1,rangeEnd: rows.length } } });
@@ -287,7 +287,7 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await expect(controls.locator(".report-control-actions")).toHaveCount(0);
       await expect(page.locator(".report-action-card")).toHaveCount(0);
       await expect(page.getByRole("table",{ name: "Attendance leaderboard" })).toBeVisible();
-      await expect(page.getByRole("group",{ name: "Team regular attendance trend", exact: true })).toBeVisible();
+      await expect(page.getByRole("group",{ name: "Team overall rate trend", exact: true })).toBeVisible();
       const leaderboardHeading=page.locator(".leaderboard-heading .info-heading h2");
       const leaderboardInfo=page.locator(".leaderboard-heading .info-tip-glyph");
       const headingBounds=await leaderboardHeading.boundingBox(); const infoBounds=await leaderboardInfo.boundingBox();
@@ -307,6 +307,13 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await expect(leaderboard.getByRole("link",{ name: "Avery Stone",exact: true })).toHaveAttribute("href","/roster/A-101");
       await expect(leaderboard).not.toContainText("A-101");
       await expect(leaderboard.getByRole("row").nth(1).getByRole("cell")).toHaveCount(2);
+      const overallTip=leaderboard.getByRole("columnheader").getByRole("button",{ name: "About Overall rate",exact: true });
+      await overallTip.focus();
+      await expect(page.getByRole("tooltip").filter({ hasText: "Excused meetings count as missed." })).toBeVisible();
+      // The rate header is right-aligned; its tip must not inherit that.
+      await expect(leaderboard.getByRole("columnheader").last()).toHaveCSS("text-align","right");
+      await expect(page.getByRole("tooltip").filter({ hasText: "Excused meetings count as missed." })).toHaveCSS("text-align","start");
+      await page.keyboard.press("Escape");
       const reportingPeriod=page.getByLabel("Reporting period");
       expect((await reportingPeriod.boundingBox())!.height).toBeGreaterThanOrEqual(44);
       await reportingPeriod.focus();
@@ -382,9 +389,9 @@ for(const viewport of dashboardConformanceReferences.viewports) {
       await page.route("**/attendance/policy/preview",(route) => route.fulfill({ json: { impact: [],previewToken: "policy-preview" } }));
       await page.route("**/labels/membership/preview",(route) => route.fulfill({ json: { changes: [{ memberId: "A-101",label: "Mentor",action: "add",effectiveDate: "2026-09-01" }],impact: [],previewToken: "label-preview" } }));
       await page.goto("/settings/attendance");
-      await page.getByText("Add attendance rule", { exact: true }).click();
+      await page.getByText("Add attendance policy", { exact: true }).click();
       await expect(page.getByLabel("Excused meetings")).toHaveValue("exclude");
-      for(const name of ["Preview new rule","Preview window change"]) await expectLabelButtonTheme(page,name,"primary");
+      for(const name of ["Preview new policy","Preview window change"]) await expectLabelButtonTheme(page,name,"primary");
       await expectLabelButtonTheme(page,"Preview removal","danger");
       await expect(page.locator(".settings-callout").getByRole("link",{ name: "Labels",exact: true })).toHaveAttribute("href","/settings/labels");
       await page.getByRole("button",{ name: "Preview removal" }).click();
@@ -471,7 +478,7 @@ test("Browse reports popup follows its trigger when web fonts finish loading aft
   await page.route(/\.woff2?(\?.*)?$/,async (route) => { await fontsHeld; await route.continue(); });
   await page.goto("/reports");
   await page.getByText("Browse reports",{ exact: true }).click();
-  await expect(page.getByRole("button",{ name: "Attendance dates personal",exact: true })).toBeVisible();
+  await expect(page.getByRole("button",{ name: "Attendance dates private",exact: true })).toBeVisible();
   const geometry=() => page.evaluate(() => ({ fonts: document.fonts.status,trigger: document.querySelector(".report-browser > summary")!.getBoundingClientRect().left,popup: document.querySelector(".report-browser-popover")!.getBoundingClientRect().left }));
   expect((await geometry()).fonts).toBe("loading");
   releaseFonts(); await page.evaluate(() => document.fonts.ready);
@@ -487,7 +494,7 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await page.evaluate(() => document.fonts.ready);
   await page.getByText("Browse reports",{ exact: true }).click();
   await expect(page.getByRole("button",{ name: /Imported browser view/ })).toBeVisible();
-  await expect(page.getByRole("button",{ name: "Attendance dates personal",exact: true })).toBeVisible();
+  await expect(page.getByRole("button",{ name: "Attendance dates private",exact: true })).toBeVisible();
   const browseGeometry=await page.evaluate(() => { const trigger=document.querySelector(".report-browser > summary")!.getBoundingClientRect(); const popup=document.querySelector(".report-browser-popover")!.getBoundingClientRect(); return { triggerLeft: trigger.left,triggerBottom: trigger.bottom,popupLeft: popup.left,popupTop: popup.top }; });
   expect(Math.abs(browseGeometry.popupLeft-browseGeometry.triggerLeft)).toBeLessThanOrEqual(1);
   expect(browseGeometry.popupTop-browseGeometry.triggerBottom).toBeGreaterThanOrEqual(7);
@@ -506,9 +513,14 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   const absentDatesTarget=(await absentDatesOption.locator("..").boundingBox())!;
   expect(absentDatesTarget.height).toBeGreaterThanOrEqual(44);
   expect(absentDatesTarget.height).toBeLessThanOrEqual(52);
-  await expect(page.getByRole("button",{ name: /Choose labels for official policy result/i })).toBeVisible();
-  await expect(page.getByRole("checkbox",{ name: /Mentor - official policy result/i })).toHaveCount(0);
-  await page.getByRole("button",{ name: /Choose labels for official policy result/i }).click();
+  // Single per-label columns sit under "Single policy column", below "Attendance by label".
+  await expect(page.getByRole("button",{ name: /Choose labels for Last 30 days: policy result/i })).toHaveCount(0);
+  // This catalog predates the label set fields, so the set entry shows but is unavailable.
+  await expect(page.getByRole("button",{ name: "Attendance by label unavailable",exact: true })).toBeDisabled();
+  await page.getByRole("button",{ name: "Choose a single policy column",exact: true }).click();
+  await expect(page.getByRole("button",{ name: /Choose labels for Last 30 days: policy result/i })).toBeVisible();
+  await expect(page.getByRole("checkbox",{ name: /Mentor - Last 30 days: policy result/i })).toHaveCount(0);
+  await page.getByRole("button",{ name: /Choose labels for Last 30 days: policy result/i }).click();
   const addColumnDialog=page.getByRole("dialog",{ name: "Add report column" });
   await expect(addColumnDialog).toBeVisible();
   const compactOption = addColumnDialog.locator(".report-column-option").first();
@@ -518,7 +530,7 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await expect(addColumnDialog.getByLabel("Search labels")).toBeVisible();
   const mentorPolicyColumn=addColumnDialog.getByRole("checkbox",{ name: "Mentor",exact: true });
   await mentorPolicyColumn.check();
-  await expect(page.getByRole("button",{ name: /Mentor - official policy result column options/i })).toBeVisible();
+  await expect(page.getByRole("button",{ name: /Mentor - Last 30 days: policy result column options/i })).toBeVisible();
   await mentorPolicyColumn.uncheck();
   await page.keyboard.press("Escape");
   await page.getByRole("button",{ name: "Add column",exact: true }).click();
@@ -527,18 +539,23 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await expect(page.getByText("+1 more").first()).toBeVisible();
   await page.getByText("+1 more").first().click();
   await expect(page.locator(".date-list").first()).toContainText("2026-09-22");
-  const regularOptions=page.getByRole("button",{ name: "Regular attendance column options" });
+  const overallTip=page.getByRole("button",{ name: "About Overall rate" });
+  await overallTip.focus();
+  await expect(page.getByRole("tooltip").filter({ hasText: "Share of all required meetings attended." })).toBeVisible();
+  await expect(page.getByRole("tooltip").filter({ hasText: "Share of all required meetings attended." })).toHaveCSS("text-align","start");
+  await page.keyboard.press("Escape");
+  const regularOptions=page.getByRole("button",{ name: "Overall rate column options" });
   await regularOptions.click();
-  const regularDialog=page.getByRole("dialog",{ name: "Regular attendance options" });
+  const regularDialog=page.getByRole("dialog",{ name: "Overall rate options" });
   await expect(regularDialog.getByText("Sort",{ exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Minimum value")).toHaveCount(0);
-  const beforeScroll=await page.evaluate(() => { const trigger=document.querySelector<HTMLButtonElement>('[aria-label="Regular attendance column options"]')!.getBoundingClientRect(); const menu=document.querySelector(".report-column-popover")!.getBoundingClientRect(); return { scrollY,offset: menu.top-trigger.bottom }; });
+  const beforeScroll=await page.evaluate(() => { const trigger=document.querySelector<HTMLButtonElement>('[aria-label="Overall rate column options"]')!.getBoundingClientRect(); const menu=document.querySelector(".report-column-popover")!.getBoundingClientRect(); return { scrollY,offset: menu.top-trigger.bottom }; });
   await page.evaluate((currentY) => window.scrollBy(0,currentY>20?-16:16),beforeScroll.scrollY);
-  await expect.poll(async () => page.evaluate(() => { const trigger=document.querySelector<HTMLButtonElement>('[aria-label="Regular attendance column options"]')!.getBoundingClientRect(); const menu=document.querySelector(".report-column-popover")!.getBoundingClientRect(); return menu.top-trigger.bottom; })).toBeCloseTo(beforeScroll.offset,0);
+  await expect.poll(async () => page.evaluate(() => { const trigger=document.querySelector<HTMLButtonElement>('[aria-label="Overall rate column options"]')!.getBoundingClientRect(); const menu=document.querySelector(".report-column-popover")!.getBoundingClientRect(); return menu.top-trigger.bottom; })).toBeCloseTo(beforeScroll.offset,0);
   await page.getByRole("button",{ name: "Descending",exact: true }).click();
   await expect(page.locator(".editable-report-table tbody tr").first()).toContainText("Avery Stone");
   await page.locator('th[data-column-id="attendance.detail.absent-dates"]').dragTo(page.locator('th[data-column-id="attendance.member.regular-rate"]'));
-  await expect.poll(async () => page.locator(".editable-report-table thead th .report-column-trigger span").allTextContents()).toEqual(["Member","Absent dates","Regular attendance","Assigned policies"]);
+  await expect.poll(async () => page.locator(".editable-report-table thead th .report-column-trigger span").allTextContents()).toEqual(["Member","Absent dates","Overall rate","Last 30 days: policy results (all labels)"]);
   const summaryDownload=page.waitForEvent("download");
   await openReportExport(page);
   await page.getByRole("button",{ name: "Download report CSV" }).click();
@@ -554,7 +571,7 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await expect(page.getByRole("button",{ name: "Edit",exact: true })).toBeVisible();
   await expect(page.getByLabel("Report name")).toHaveCount(0);
   await expect(page.getByRole("button",{ name: "Add column",exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Remove filter: Optional meetings", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Remove filter: Meetings: Optional", exact: true })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("lancerlogin-reports-view"))).toBeNull();
   expect(await page.evaluate(() => sessionStorage.getItem("lancerlogin-report-draft-v1"))).toBeNull();
   await page.getByText("Report actions",{ exact: true }).click();
@@ -566,7 +583,9 @@ test("saved report tabs, imported drafts, configurable columns, and exports rema
   await expect(page.getByRole("button",{ name: /Move Attendance dates (left|right)/ })).toHaveCount(0);
   await expect(page.getByRole("button",{ name: "Absent dates column options" })).toBeVisible();
   await expect(page.getByRole("button",{ name: "Add column",exact: true })).toBeVisible();
-  await expect(page.locator(".report-settings-summary")).toContainText("Member, Absent dates");
+  // The table shows the columns; the old read-only Columns, Sort and Visibility summary is gone.
+  await expect(page.locator(".report-settings-summary")).toHaveCount(0);
+  await expect(page.locator(".editable-report-table thead th .report-column-trigger span")).toHaveText(["Member","Absent dates"]);
   await expectResponsiveFit(page, responsiveFit);
   await page.getByRole("button",{ name: "Edit",exact: true }).click();
   await expect(page.getByLabel("Report name")).toHaveValue("Attendance dates");
@@ -614,14 +633,14 @@ test(`attendance requirement alerts use readable warning pills at ${viewport.wid
 
   await page.goto("/dashboard");
   await expect(page.getByRole("heading",{ name: "Dashboard" })).toBeVisible();
-  await expect(page.getByRole("heading",{ name: "Below attendance requirement" })).toHaveCount(0);
+  await expect(page.getByRole("heading",{ name: "Below target" })).toHaveCount(0);
   expect(reportRequests).toBe(0);
 
   await page.goto("/reports");
   const alerts=page.locator(".policy-alerts-card");
-  await expect(alerts.getByRole("heading",{ name: "Below attendance requirement" })).toBeVisible();
+  await expect(alerts.getByRole("heading",{ name: "Below target" })).toBeVisible();
   await expect(alerts).toContainText("Avery Stone");
-  await expect(alerts).toContainText("Class: 70% of 80% · below");
+  await expect(alerts).toContainText("Class: 70% of 80% · Below target");
   const pills = alerts.locator(".status-pill");
   await expect(pills).toHaveCount(2);
   for (const pill of await pills.all()) {
@@ -891,10 +910,15 @@ test("regular and Class policy attendance agree across Reports, Roster, and memb
   await expect(reportRow.getByRole("cell")).toHaveCount(2);
   await expect(reportRow.getByRole("link",{ name: "Avery Stone" })).toHaveAttribute("href","/roster/A-101");
   await page.goto("/roster");
-  await expect(page.getByRole("row").filter({ hasText: "Avery Stone" }).locator(".roster-attendance-rate")).toHaveText("Regular: 60% · Class: 75% of 75% · met");
+  await expect(page.getByRole("row").filter({ hasText: "Avery Stone" }).locator(".roster-attendance-rate")).toHaveText("Overall: 60% · Class: 75% of 75% · Met");
   await page.goto("/roster/A-101");
   await expect(page.getByText("60% · 2026-01-01 to 2026-09-22",{ exact: true })).toBeVisible();
-  await expect(page.getByText("Class: 75% of 75% · met · 2026-08-24 to 2026-09-22",{ exact: true })).toBeVisible();
+  await expect(page.getByText("Class: 75% of 75% · Met · 2026-08-24 to 2026-09-22",{ exact: true })).toBeVisible();
+  // Each tile's definition tip is a named button that opens on keyboard focus.
+  await page.getByRole("button",{ name: "About attendance policies" }).focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(page.getByRole("button",{ name: "About Overall rate" })).toBeFocused();
+  await expect(page.getByRole("tooltip").filter({ hasText: "Excused meetings count as missed." })).toBeVisible();
 });
 
 test("weekly assigned policies display meeting counts and pending status",async ({ page }) => {
@@ -905,7 +929,7 @@ test("weekly assigned policies display meeting counts and pending status",async 
   await page.goto("/reports");
   await expect(page.locator(".report-row:not(.header)").filter({ hasText: "Avery Stone" }).getByRole("cell").nth(1)).toHaveText("100%");
   await page.goto("/roster");
-  await expect(page.getByRole("row").filter({ hasText: "Avery Stone" }).locator(".roster-attendance-rate")).toHaveText("Regular: 100% · Mentor: 2 of 3 meetings · pending");
+  await expect(page.getByRole("row").filter({ hasText: "Avery Stone" }).locator(".roster-attendance-rate")).toHaveText("Overall: 100% · Mentor: 2 of 3 meetings · In progress");
 });
 
 test("Admin previews and applies a separate dated label CSV; Operator sees labels without mutation controls",async ({ page }) => {
@@ -922,7 +946,7 @@ test("Admin previews and applies a separate dated label CSV; Operator sees label
   await page.getByLabel("CSV contents").fill("memberId,label,action,effectiveDate\nA-101,Mentor,add,2026-09-01");
   await page.getByRole("button",{ name: "Preview CSV import" }).click();
   await expect(page.getByRole("heading",{ name: "Review dated label changes" })).toBeVisible();
-  await expect(page.getByText(/regular 50% to 100%; policies No assigned policy to Mentor: 1 of 1 meetings/)).toBeVisible();
+  await expect(page.getByText(/Overall rate 50% to 100%; policies No assigned policy to Mentor: 1 of 1 meetings/)).toBeVisible();
   await page.getByRole("button",{ name: "Apply label changes" }).click();
   expect(applied).toBe(true);
   await useReferenceContext(page,"operator");
@@ -1096,17 +1120,23 @@ test("saved reports apply multi-label matching and membership filters to CSV exp
   let exported: { definition?: { labelIds?: string[]; labelMatch?: string; membership?: string } }={};
   await page.route("**/exports/report.csv",async (route) => { exported=route.request().postDataJSON(); return route.fulfill({ status: 200,headers: { "content-type": "text/csv","content-disposition": "attachment; filename=report.csv" },body: "Member\nAvery Stone\n" }); });
   await page.goto("/reports/view/class-report");
-  await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await expect(page.getByRole("combobox",{ name: "Membership",exact: true })).toBeEnabled();
-  await expect(page.getByText("Current membership applies today’s labels",{ exact: false })).toBeVisible();
-  await page.getByRole("combobox",{ name: "Membership",exact: true }).selectOption("historical");
-  await expect(page.getByText("Historical membership uses labels held on each meeting date.",{ exact: false })).toBeVisible();
-  await page.getByText("Labels (all)",{ exact: true }).click();
-  await page.getByRole("checkbox",{ name: "Mentor",exact: true }).check();
-  await page.getByRole("heading",{ level: 2,name: "Class attendance" }).click();
-  await expect(page.getByRole("checkbox",{ name: "Mentor",exact: true })).toBeHidden();
-  await page.getByLabel("Label matching").selectOption("all");
-  await page.getByLabel("Membership").selectOption("historical");
+  // Membership sits with the period in the period chip; labels and their matching are a list filter in + Filter.
+  await page.getByRole("button",{ name: /^Report period: / }).click();
+  const periodDialog=page.getByRole("dialog",{ name: "Report period" });
+  await expect(periodDialog.getByRole("combobox",{ name: "Membership",exact: true })).toBeEnabled();
+  await expect(periodDialog.getByText("Current membership applies today’s labels",{ exact: false })).toBeVisible();
+  await periodDialog.getByRole("combobox",{ name: "Membership",exact: true }).selectOption("historical");
+  await expect(periodDialog.getByText("Historical membership uses labels held on each meeting date.",{ exact: false })).toBeVisible();
+  await periodDialog.getByRole("button",{ name: "Apply",exact: true }).click();
+  await expect(periodDialog).toBeHidden();
+  await page.getByRole("button",{ name: "Add filter",exact: true }).click();
+  await page.getByRole("dialog",{ name: "Add a filter" }).getByRole("button",{ name: "Labels (choose from a list)",exact: true }).click();
+  const labelDialog=page.getByRole("dialog",{ name: "Filter Labels" });
+  await labelDialog.getByRole("checkbox",{ name: "Mentor",exact: true }).check();
+  await labelDialog.getByRole("radio",{ name: "All selected",exact: true }).check();
+  await labelDialog.getByRole("button",{ name: "Apply",exact: true }).click();
+  await expect(labelDialog).toBeHidden();
+  await expect(page.getByRole("button",{ name: "Edit filter: Labels: Mentor",exact: true })).toContainText("Not shown");
   const download=page.waitForEvent("download");
   await openReportExport(page);
   await page.getByRole("button",{ name: "Download report CSV" }).click();
@@ -1233,7 +1263,7 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     expect(confirmed).toBeUndefined();
 
     await directionPicker.selectOption("two_way");
-    await expect(card.getByRole("note")).toContainText("FRC 321 is used by 1 attendance rule and 2 weekly targets. With two-way sync on, adding or removing @FRC 321 in Discord changes these members' attendance requirements.");
+    await expect(card.getByRole("note")).toContainText("FRC 321 is used by 1 attendance policy and 2 weekly targets. With two-way sync on, adding or removing @FRC 321 in Discord changes these members' attendance requirements.");
     await expect(card).toContainText("2 people don't match · 0 of 2 decided");
     await expect(card).toContainText("2 Discord users with @FRC 321 aren't linked to anyone on the roster. They're listed in Debug tools on the Kiosks page and won't be changed.");
     await expect(card).toContainText("No changes chosen yet.");
@@ -1339,12 +1369,12 @@ test("saved reports allow temporary search and sorting, then save explicitly wit
   const table = page.getByRole("table", { name: /Report results/ });
   await expect(table).toContainText("Morgan Diaz");
   await expect(page.getByLabel("Report name")).toHaveCount(0);
-  await expect(page.locator(".report-settings-details")).not.toHaveAttribute("open", "");
+  await expect(page.locator(".report-settings-details")).toHaveCount(0);
   await page.getByRole("searchbox", { name: "Search report results" }).fill("Avery");
   await expect(table).toContainText("Avery Stone");
   await expect(table).not.toContainText("Morgan Diaz");
   await expect(page.getByText("UNSAVED CHANGES", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Remove filter: Member contains Avery", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Remove filter: Member contains “Avery”", exact: true })).toBeVisible();
   expect(writes).toEqual([]);
   await page.getByRole("button", { name: "Reset view", exact: true }).click();
   await expect(table).toContainText("Morgan Diaz");
@@ -1375,10 +1405,16 @@ test("new report filters appear after creation and result dates omit all-time an
   await useReferenceContext(page);
   await page.goto("/reports/new");
   await expect(page.getByText("DRAFT", { exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Visibility", exact: true }).locator("option:checked")).toHaveText("Private");
+  await expect(page.getByRole("region", { name: "New report" }).getByText("private", { exact: true })).toBeVisible();
+  await expect(page.getByText("Only you can access this private report.", { exact: true })).toHaveCount(1);
   await expect(page.getByRole("group", { name: "Filter records", exact: true })).toHaveCount(0);
   await expect(page.getByRole("searchbox", { name: "Search report results" })).toHaveCount(0);
   await expect(page.getByLabel("Applied report filters")).toHaveCount(0);
-  await page.getByRole("button", { name: "Regular attendance column options" }).click();
+  await expect(page.getByRole("button", { name: "Filter Overall rate" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add filter" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Report period:/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "Overall rate column options" }).click();
   await expect(page.getByLabel("Minimum", { exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
   await page.getByLabel("Report name").fill("New filtered report");
@@ -1388,14 +1424,84 @@ test("new report filters appear after creation and result dates omit all-time an
   await expect(page.getByText("Saved report", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("searchbox", { name: "Search report results" })).toBeVisible();
   await expect(page.locator(".report-resolved-period")).toHaveCount(0);
-  await page.getByText("Filters and report settings", { exact: true }).click();
-  await page.getByRole("combobox", { name: "Period", exact: true }).selectOption("fixed");
-  await page.getByLabel("From", { exact: true }).fill("2026-09-01");
-  await page.getByLabel("To", { exact: true }).fill("2026-09-22");
-  await expect(page.locator(".report-resolved-period")).toHaveText("2026-09-01 - 2026-09-22");
+  await page.getByRole("button", { name: "Report period: All history", exact: true }).click();
+  const periodDialog = page.getByRole("dialog", { name: "Report period" });
+  await periodDialog.getByRole("combobox", { name: "Period", exact: true }).selectOption("fixed");
+  await periodDialog.getByLabel("From", { exact: true }).fill("2026-09-01");
+  await periodDialog.getByLabel("To", { exact: true }).fill("2026-09-22");
+  await periodDialog.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(page.locator(".report-resolved-period")).toHaveText("2026-09-01 – 2026-09-22");
+  await expect(page.getByRole("button", { name: "Report period: 2026-09-01 to 2026-09-22", exact: true })).toBeFocused();
   await expect(page.getByText("UNSAVED CHANGES", { exact: true })).toBeVisible();
-  await page.getByRole("combobox", { name: "Period", exact: true }).selectOption("all");
+  await page.getByRole("button", { name: /^Report period:/ }).click();
+  await periodDialog.getByRole("combobox", { name: "Period", exact: true }).selectOption("all");
+  await periodDialog.getByRole("button", { name: "Apply", exact: true }).click();
   await expect(page.locator(".report-resolved-period")).toHaveCount(0);
+});
+
+test("a custom report range starts on the installation's today in the evening, not the UTC date", async ({ page }) => {
+  // 8:30 PM in New York on November 3 is November 4 in UTC; the range used to start tomorrow and match nothing.
+  await page.clock.setFixedTime(new Date("2026-11-04T01:30:00Z"));
+  await useReferenceContext(page);
+  await page.route("**/reports/catalog", (route) => route.fulfill({ json: { datasets: [attendanceDataset], columns: reportColumns, labels: [], reportFilters: [], baseline: null, timeZone: "America/New_York", defaultDefinition: defaultReportDefinition, role: "admin", attendanceAvailable: true } }));
+  await page.goto("/reports/view/class-report");
+  await page.getByRole("button", { name: /^Report period:/ }).click();
+  await page.getByRole("combobox", { name: "Period", exact: true }).selectOption("fixed");
+  await expect(page.getByLabel("From", { exact: true })).toHaveValue("2026-11-03");
+  await expect(page.getByLabel("To", { exact: true })).toHaveValue("2026-11-03");
+});
+
+test("Last month follows Current month and shows the whole previous month in the installation's time zone", async ({ page }) => {
+  // 10:30 PM in New York on November 30 is December 1 in UTC; the installation's last month is still October.
+  await page.clock.setFixedTime(new Date("2026-12-01T03:30:00Z"));
+  await useReferenceContext(page);
+  await page.route("**/reports/catalog", (route) => route.fulfill({ json: { datasets: [attendanceDataset], columns: reportColumns, labels: [], reportFilters: [], baseline: null, timeZone: "America/New_York", defaultDefinition: defaultReportDefinition, role: "admin", attendanceAvailable: true } }));
+  const periods: unknown[] = [];
+  await page.route("**/reports/query", async (route) => {
+    const body = route.request().postDataJSON() as { definition: { period: { type: string } } }; periods.push(body.definition.period);
+    const response = await route.fetch(); const json = await response.json();
+    // The API resolves Last month from its own today (covered by report-builder.test.ts); this mock answers as it would.
+    if (body.definition.period.type === "last_month") json.resolvedPeriod = { from: "2026-10-01", to: "2026-10-31" };
+    await route.fulfill({ response, json });
+  });
+  await page.goto("/reports/view/class-report");
+  await page.getByRole("button", { name: /^Report period:/ }).click();
+  const period = page.getByRole("combobox", { name: "Period", exact: true });
+  await expect(period.locator("option")).toHaveText(["All history", /baseline/, "Last 7 days", "Last 30 days", "Last 60 days", "Last 90 days", "Current month", "Last month", "Current year", "Custom fixed range"]);
+  await period.selectOption("last_month");
+  await expect(period.locator("option:checked")).toHaveText("Last month");
+  await page.getByRole("dialog", { name: "Report period" }).getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(page.locator(".report-period-chip")).toContainText("Last month (2026-10-01 to 2026-10-31)");
+  await expect(page.getByRole("button", { name: /Last month \(2026-10-01 to 2026-10-31\)/ })).toBeVisible();
+  await expect(page.locator(".report-resolved-period")).toHaveText("2026-10-01 – 2026-10-31");
+  expect(periods).toContainEqual({ type: "last_month" });
+  await page.getByRole("button", { name: "Save view", exact: true }).click();
+  await expect(page.getByText("UNSAVED CHANGES", { exact: true })).toHaveCount(0);
+  await page.reload();
+  await page.getByRole("button", { name: /^Report period:/ }).click();
+  await expect(page.getByRole("combobox", { name: "Period", exact: true }).locator("option:checked")).toHaveText("Last month");
+});
+
+test("the Leaderboard offers Last month and fills the previous month's dates", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-12-01T03:30:00Z"));
+  await useReferenceContext(page);
+  const queries: URLSearchParams[] = [];
+  await page.route("**/reports/leaderboard?*", async (route) => {
+    queries.push(new URL(route.request().url()).searchParams);
+    const response = await route.fetch(); const json = await response.json();
+    await route.fulfill({ response, json: { ...json, today: "2026-11-30", timeZone: "America/New_York" } });
+  });
+  await page.goto("/reports");
+  const period = page.getByRole("combobox", { name: "Reporting period", exact: true });
+  await expect(period.locator("option")).toHaveText([/baseline/, "Last month", "All history / fixed dates"]);
+  await period.selectOption("last_month");
+  await expect(page.getByLabel("From", { exact: true })).toHaveValue("2026-10-01");
+  await expect(page.getByLabel("To", { exact: true })).toHaveValue("2026-10-31");
+  await expect(period.locator("option:checked")).toHaveText("Last month");
+  await expect.poll(() => queries.some((query) => query.get("from") === "2026-10-01" && query.get("to") === "2026-10-31")).toBe(true);
+  await period.selectOption("custom");
+  await expect(page.getByLabel("From", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("To", { exact: true })).toHaveValue("");
 });
 
 test("closing a draft offers cancel, preserves failures and saves once before leaving", async ({ page }) => {
@@ -1457,13 +1563,73 @@ test("closing a modified report can save or discard and row navigation preserves
   await expect(page).toHaveURL(/\/reports$/);
   expect(writes).toHaveLength(1);
   await page.getByText("Browse reports", { exact: true }).click();
-  await page.getByRole("button", { name: "Attendance dates personal", exact: true }).click();
+  await page.getByRole("button", { name: "Attendance dates private", exact: true }).click();
   await expect(page.getByRole("searchbox", { name: "Search report results" })).toHaveValue("Avery");
   await page.getByRole("searchbox", { name: "Search report results" }).fill("Morgan");
   await page.getByRole("button", { name: "Close Attendance dates" }).click();
   await dialog.getByRole("button", { name: "Discard changes" }).click();
   await expect(page).toHaveURL(/\/reports$/);
   expect(writes).toHaveLength(1);
+});
+
+for (const report of [
+  { id: "dates-report", name: "Attendance dates", edit: true, message: "Delete Attendance dates? This removes your private report. Your unsaved changes will be discarded." },
+  { id: "class-report", name: "Class attendance", edit: true, message: "Delete Class attendance? This removes it for everyone who can access it. Your unsaved changes will be discarded." },
+  { id: "class-report", name: "Class attendance", edit: false, message: "Delete Class attendance? This removes it for everyone who can access it." },
+]) test(`deleting ${report.edit ? "an edited" : "an unedited"} ${report.id} confirms first and leaves without asking to save`, async ({ page }) => {
+  await useReferenceContext(page);
+  const deletes: string[] = [];
+  page.on("request", request => { if (request.method() === "DELETE" && request.url().includes("/reports/views/")) deletes.push(request.url()); });
+  await page.goto(`/reports/view/${report.id}`);
+  if (report.edit) {
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByLabel("Report name").fill(report.name + " renamed");
+    await expect(page.getByText("UNSAVED CHANGES", { exact: true })).toBeVisible();
+  }
+  const messages: string[] = [];
+  page.once("dialog", dialog => { messages.push(dialog.message()); return dialog.dismiss(); });
+  await page.getByText("Report actions", { exact: true }).click();
+  await page.getByRole("button", { name: "Delete report", exact: true }).click();
+  await expect.poll(() => messages).toEqual([report.message]);
+  expect(deletes).toEqual([]);
+  await expect(page).toHaveURL(new RegExp(`/reports/view/${report.id}$`));
+  if (report.edit) {
+    await expect(page.getByLabel("Report name")).toHaveValue(report.name + " renamed");
+    await expect(page.getByText("UNSAVED CHANGES", { exact: true })).toBeVisible();
+  }
+  page.once("dialog", dialog => { messages.push(dialog.message()); return dialog.accept(); });
+  await page.getByText("Report actions", { exact: true }).click();
+  await page.getByRole("button", { name: "Delete report", exact: true }).click();
+  await expect(page).toHaveURL(/\/reports$/);
+  await expect(page.getByRole("dialog", { name: "Save changes before leaving?" })).toHaveCount(0);
+  expect(messages).toEqual([report.message, report.message]);
+  expect(deletes).toHaveLength(1);
+  await expect(page.getByRole("navigation", { name: "Report pages" }).getByRole("button", { name: report.name, exact: true })).toHaveCount(0);
+  await page.getByText("Browse reports", { exact: true }).click();
+  await expect(page.locator(".report-browser-popover").getByRole("button", { name: new RegExp(`^${report.name}`) })).toHaveCount(0);
+  await page.locator(".report-browser-popover").getByRole("button").first().click();
+  await expect(page.getByRole("dialog", { name: "Save changes before leaving?" })).toHaveCount(0);
+});
+
+test("a confirmed delete still leaves the deleted report when the library refresh fails", async ({ page }) => {
+  await useReferenceContext(page);
+  let deleted = false;
+  page.on("request", request => { if (request.method() === "DELETE") deleted = true; });
+  await page.route("**/reports/catalog", async route => { if (deleted) return route.fulfill({ status: 503, json: { error: "Temporarily unavailable" } }); await route.fallback(); });
+  await page.goto("/reports/view/dates-report");
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await page.getByLabel("Report name").fill("Attendance dates renamed");
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByText("Report actions", { exact: true }).click();
+  await page.getByRole("button", { name: "Delete report", exact: true }).click();
+  await expect(page).toHaveURL(/\/reports$/);
+  await expect(page.getByText("Report deleted. Reload the page to refresh the report library.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Save changes before leaving?" })).toHaveCount(0);
+  await page.getByText("Browse reports", { exact: true }).click();
+  await expect(page.locator(".report-browser-popover").getByRole("button", { name: /^Attendance dates/ })).toHaveCount(0);
+  await page.locator(".report-browser-popover").getByRole("button", { name: /^Class attendance/ }).click();
+  await expect(page).toHaveURL(/\/reports\/view\/class-report$/);
+  await expect(page.getByRole("dialog", { name: "Save changes before leaving?" })).toHaveCount(0);
 });
 
 test("report library searches pinned reports and opening an unpinned report does not pin it", async ({ page }) => {
@@ -1477,7 +1643,7 @@ test("report library searches pinned reports and opening an unpinned report does
   await expect(library).toContainText("Class attendance");
   await expect(library).toContainText("Pinned");
   await library.getByRole("searchbox").fill("Attendance dates");
-  await library.getByRole("button", { name: "Attendance dates personal", exact: true }).click();
+  await library.getByRole("button", { name: "Attendance dates private", exact: true }).click();
   await expect(page).toHaveURL(/\/reports\/view\/dates-report$/);
   await expect(library).toBeHidden();
   await expect(page.getByRole("button", { name: "Close Attendance dates", exact: true })).toBeVisible();
@@ -1517,7 +1683,7 @@ test("Last 10 chart shows the newest meetings chronologically with focusable exa
   const trend = Array.from({ length: 15 }, (_, index) => ({ meetingId: "trend-" + (15 - index), title: "Synthetic meeting " + (15 - index), startsAt: "2026-09-" + String(15 - index).padStart(2, "0") + "T15:00:00Z", rate: 50 + index }));
   await page.route("**/reports/leaderboard*", route => route.fulfill({ json: { ...data, pagination: { page: 1, pageSize: 25, totalRows: 2, totalPages: 1, rangeStart: 1, rangeEnd: 2 }, insights: { policyAlerts: [], trend } } }));
   await page.goto("/reports");
-  const chart = page.getByRole("group", { name: "Team regular attendance trend", exact: true });
+  const chart = page.getByRole("group", { name: "Team overall rate trend", exact: true });
   await expect(chart.locator("time")).toHaveCount(10);
   await expect(chart.locator("time").first()).toHaveAttribute("datetime", "2026-09-06T15:00:00Z");
   await expect(chart.locator("time").last()).toHaveAttribute("datetime", "2026-09-15T15:00:00Z");
@@ -1618,3 +1784,180 @@ for (const { theme, width } of pairedViews) {
     await page.screenshot({ path: test.info().outputPath("leaderboard-compact.png"), fullPage: true });
   });
 }
+
+test("saved report filters live in the results table: column funnels, + Filter, chips, the period chip, edit settings and the phone layout", async ({ page }) => {
+  await useReferenceContext(page);
+  await page.route("**/reports/catalog", (route) => route.fulfill({ json: { datasets: [attendanceDataset], columns: reportColumns, labels: [{ id: "test-label-a", name: "Test Label A", active: 1 }, { id: "test-label-b", name: "Test Label B", active: 0 }], reportFilters: [], baseline: null, timeZone: "UTC", defaultDefinition: defaultReportDefinition, role: "admin", attendanceAvailable: true } }));
+  type Definition = typeof defaultReportDefinition & { period: { type: string; days?: number }; roster: string; labelIds: string[]; columnFilters: { column: { key: string }; operator: string; value: string }[] };
+  const queries: Definition[] = []; const saves: Definition[] = [];
+  const students = [{ id: "test-a", memberId: "T-001", name: "Test Student A", rate: 100, absent: 0 }, { id: "test-b", memberId: "T-002", name: "Test Student B", rate: 40, absent: 3 }];
+  const cell = (student: typeof students[number], key: string) => key === "core.member.name" ? { text: student.name, sortValue: student.name } : key === "attendance.member.regular-rate" ? { text: `${student.rate}%`, sortValue: student.rate } : key === "attendance.detail.absent-count" ? { text: String(student.absent), sortValue: student.absent } : { text: "No assigned policy", sortValue: null };
+  await page.route("**/reports/query", async (route) => {
+    const definition = (route.request().postDataJSON() as { definition: Definition }).definition; queries.push(definition);
+    // Like the API, filters may name fields that aren't columns, and the response carries only the displayed cells.
+    const rows = students.filter((student) => definition.columnFilters.every((filter) => { const value = cell(student, filter.column.key); return filter.operator === "minimum" ? Number(value.sortValue) >= Number(filter.value) : value.text.toLowerCase().includes(filter.value.toLowerCase()); }))
+      .map((student) => ({ id: student.id, label: student.name, href: `/roster/${student.memberId}`, cells: Object.fromEntries(definition.columns.map((column) => [reportColumnId(column), cell(student, column.key)])) }));
+    const columns = definition.columns.map((column) => ({ id: reportColumnId(column), key: column.key, label: reportColumnLabel(column), available: true, sourceDataset: "attendance.members" }));
+    await route.fulfill({ json: { state: "ready", pausedReasons: [], definition, warnings: [], resolvedPeriod: definition.period.type === "last_days" ? { from: "2026-08-24", to: "2026-09-22" } : { to: "2026-09-22" }, columns, rows, pagination: { page: 1, pageSize: 25, totalRows: rows.length, totalPages: 1, rangeStart: rows.length ? 1 : 0, rangeEnd: rows.length } } });
+  });
+  page.on("request", (request) => { if (request.method() === "PATCH" && request.url().includes("/reports/views/")) saves.push((request.postDataJSON() as { definition: Definition }).definition); });
+  const last = () => queries.at(-1)!;
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/reports/view/class-report");
+  const card = page.locator('[data-walkthrough="report-builder"]');
+  const table = page.getByRole("table", { name: /Report results/ });
+  await expect(table).toContainText("Test Student B");
+
+  // One card: name, scope and period chip, row count and chips, then Search, + Filter, Export, Add column and the table.
+  await expect(page.getByText("Filters and report settings", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".report-settings-summary")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Results", exact: true })).toHaveCount(0);
+  await expect(card.getByRole("heading", { level: 2, name: "Class attendance" })).toBeVisible();
+  await expect(card.locator('[data-walkthrough="reports-results"]')).toContainText("Test Student A");
+  await expect(card.locator(".report-results-meta")).toHaveText("2 matching rows");
+  expect(await card.locator(".report-results-toolbar").evaluate((toolbar) => Array.from(toolbar.children).map((element) => element.matches(".report-results-search") ? "Search" : element.matches(".report-add-filter-button") ? "Filter" : element.matches(".report-menu") ? element.querySelector("summary")!.textContent : element.textContent))).toEqual(["Search", "Filter", "Export", "Add column"]);
+  await expect(page.getByRole("button", { name: "Edit filter: Roster: Active members", exact: true })).not.toContainText("Not shown");
+  await expect(page.getByRole("button", { name: "Filter Member", exact: true })).toBeVisible();
+
+  // A column's funnel opens its filter. Nothing changes until Apply; Escape closes it and returns focus.
+  const funnel = page.getByRole("button", { name: "Filter Overall rate", exact: true });
+  await expect(funnel).toHaveAttribute("aria-expanded", "false");
+  await funnel.click();
+  const rateDialog = page.getByRole("dialog", { name: "Filter Overall rate" });
+  await expect(rateDialog).toBeVisible();
+  await expect(funnel).toHaveAttribute("aria-expanded", "true");
+  await expect(rateDialog.getByRole("combobox", { name: "Filter condition", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(rateDialog).toHaveCount(0);
+  await expect(funnel).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(rateDialog).toBeVisible();
+  await rateDialog.getByLabel("Minimum", { exact: true }).fill("50");
+  await expect(page.getByText("UNSAVED CHANGES", { exact: true })).toHaveCount(0);
+  await rateDialog.getByLabel("Minimum", { exact: true }).press("Enter");
+  await expect(rateDialog).toHaveCount(0);
+  await expect.poll(() => last().columnFilters).toEqual([{ column: { key: "attendance.member.regular-rate" }, operator: "minimum", value: "50" }]);
+  await expect(table).not.toContainText("Test Student B");
+  await expect(card.locator(".report-results-meta")).toHaveText("1 matching row");
+  await expect(funnel).toHaveClass(/is-active/);
+  await expect(funnel).toBeFocused();
+  await expect(page.getByRole("button", { name: "Edit filter: Overall rate ≥ 50", exact: true })).not.toContainText("Not shown");
+  await expect(page.getByText("UNSAVED CHANGES", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save view", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Overall rate column options", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Overall rate options" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Filter condition", exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  // + Filter lists the table's fields, then fields and list filters that aren't shown; picking one swaps in its filter.
+  const addFilter = page.getByRole("button", { name: "Add filter", exact: true });
+  await addFilter.click();
+  const picker = page.getByRole("dialog", { name: "Add a filter" });
+  await expect(picker.getByRole("heading")).toHaveText(["In this report", "Not in the table"]);
+  await expect(picker.getByRole("button", { name: "Overall rate (number), filtered", exact: true })).toBeVisible();
+  await expect(picker.getByRole("button", { name: "Roster (active or all members), filtered", exact: true })).toBeVisible();
+  await expect(picker.getByRole("button", { name: "Meetings (all, required or optional)", exact: true })).toBeVisible();
+  await picker.getByRole("searchbox", { name: "Search fields" }).fill("absent");
+  await expect(picker.getByRole("button", { name: "Labels (choose from a list)", exact: true })).toHaveCount(0);
+  await picker.getByRole("button", { name: "Absent meetings (number)", exact: true }).click();
+  const absentDialog = page.getByRole("dialog", { name: "Filter Absent meetings" });
+  await expect(absentDialog.locator(".report-column-popover-heading")).toContainText("Not shown");
+  await expect(absentDialog.getByRole("combobox", { name: "Filter condition", exact: true })).toBeFocused();
+  await absentDialog.getByRole("button", { name: "Back", exact: true }).click();
+  await picker.getByRole("button", { name: "Absent meetings (number)", exact: true }).click();
+  await absentDialog.getByLabel("Minimum", { exact: true }).fill("1");
+  await absentDialog.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect.poll(() => last().columnFilters.map((filter) => filter.column.key)).toEqual(["attendance.member.regular-rate", "attendance.detail.absent-count"]);
+  expect(last().columns.map((column) => column.key)).not.toContain("attendance.detail.absent-count");
+  await expect(card.locator(".report-results-meta")).toHaveText("0 matching rows");
+  await expect(page.getByRole("button", { name: "Edit filter: Absent meetings ≥ 1", exact: true })).toContainText("Not shown");
+  await expect(addFilter).toBeFocused();
+
+  // A chip reopens its filter with the current value; the x removes it.
+  await page.getByRole("button", { name: "Edit filter: Overall rate ≥ 50", exact: true }).click();
+  await expect(rateDialog.getByLabel("Minimum", { exact: true })).toHaveValue("50");
+  await rateDialog.getByLabel("Minimum", { exact: true }).fill("30");
+  await rateDialog.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Edit filter: Overall rate ≥ 30", exact: true })).toBeVisible();
+  await expect(table).toContainText("Test Student B");
+  await expect(table).not.toContainText("Test Student A");
+  await page.getByRole("button", { name: "Remove filter: Absent meetings ≥ 1", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Edit filter: Absent meetings ≥ 1", exact: true })).toHaveCount(0);
+  await expect.poll(() => last().columnFilters.map((filter) => filter.column.key)).toEqual(["attendance.member.regular-rate"]);
+  await expect(addFilter).toBeFocused();
+
+  // Labels are a list filter with Any or All matching inside; retired labels are marked.
+  await addFilter.click();
+  await picker.getByRole("button", { name: "Labels (choose from a list)", exact: true }).click();
+  const labelsDialog = page.getByRole("dialog", { name: "Filter Labels" });
+  await expect(labelsDialog.locator(".report-column-option").filter({ hasText: "Test Label B" })).toContainText("Retired");
+  await labelsDialog.getByRole("checkbox", { name: "Test Label A", exact: true }).check();
+  await labelsDialog.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect.poll(() => last().labelIds).toEqual(["test-label-a"]);
+  await expect(page.getByRole("button", { name: "Edit filter: Labels: Test Label A", exact: true })).toContainText("Not shown");
+
+  // Removing a column keeps its filter, now marked "Not shown".
+  await page.getByRole("button", { name: "Overall rate column options", exact: true }).click();
+  await page.getByRole("button", { name: "Remove column", exact: true }).click();
+  await expect.poll(() => last().columns.map((column) => column.key)).not.toContain("attendance.member.regular-rate");
+  expect(last().columnFilters).toEqual([{ column: { key: "attendance.member.regular-rate" }, operator: "minimum", value: "30" }]);
+  await expect(page.getByRole("button", { name: "Edit filter: Overall rate ≥ 30", exact: true })).toContainText("Not shown");
+  await expect(page.getByRole("button", { name: "Filter Overall rate", exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await expect(page.getByRole("group", { name: "Applied report filters" })).toHaveCount(0);
+  await expect.poll(() => ({ roster: last().roster, labelIds: last().labelIds, columnFilters: last().columnFilters })).toEqual({ roster: "all", labelIds: [], columnFilters: [] });
+  await expect(table).toContainText("Test Student A");
+
+  // The period is a chip beside the report type, not a removable filter.
+  const periodChip = page.getByRole("button", { name: "Report period: All history", exact: true });
+  await expect(card.locator(".report-scope-line")).toContainText("Members ·");
+  await periodChip.click();
+  const periodDialog = page.getByRole("dialog", { name: "Report period" });
+  await expect(periodChip).toHaveAttribute("aria-expanded", "true");
+  await expect(periodDialog.getByRole("combobox", { name: "Period", exact: true }).locator("option")).toContainText(["Last month"]);
+  await periodDialog.getByRole("combobox", { name: "Period", exact: true }).selectOption("last_30");
+  await periodDialog.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect.poll(() => last().period).toEqual({ type: "last_days", days: 30 });
+  await expect(page.getByRole("button", { name: "Report period: Last 30 days", exact: true })).toBeFocused();
+  await expect(card.locator(".report-results-meta")).toHaveText("2 matching rows · 2026-08-24 – 2026-09-22");
+
+  // Filters and the period are part of the saved definition.
+  await page.getByRole("button", { name: "Save view", exact: true }).click();
+  await expect(page.getByText("UNSAVED CHANGES", { exact: true })).toHaveCount(0);
+  expect(saves.at(-1)).toMatchObject({ period: { type: "last_days", days: 30 }, roster: "all", labelIds: [], columnFilters: [] });
+
+  // Edit opens Report settings inside the same card, above the toolbar, without any filter fields.
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  const settings = card.locator(".report-edit-settings");
+  await expect(settings.getByLabel("Report name")).toHaveValue("Class attendance");
+  await expect(settings.getByRole("combobox", { name: "Report type", exact: true })).toBeVisible();
+  await expect(settings.getByRole("combobox", { name: "Visibility", exact: true })).toBeVisible();
+  for (const name of ["Period", "Roster", "Meetings", "Membership", "Label matching"]) await expect(page.getByRole("combobox", { name, exact: true })).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "Filter records", exact: true })).toHaveCount(0);
+  expect(await card.evaluate((element) => Boolean(element.querySelector(".report-edit-settings")!.compareDocumentPosition(element.querySelector(".report-results-toolbar")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  await expect(card.locator(".report-control-actions").getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+  await expect(card.locator(".report-control-actions").getByText("Report actions", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(settings).toHaveCount(0);
+
+  // Phone: funnels are hidden and + Filter covers every field. + Filter and Export share a row; Add column takes the next.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("button", { name: "Filter Member", exact: true })).toBeHidden();
+  const row = await Promise.all([addFilter, card.locator(".report-results-toolbar > .report-menu > summary"), page.getByRole("button", { name: "Add column", exact: true })].map(async (locator) => (await locator.boundingBox())!));
+  expect(Math.abs(row[0].y - row[1].y)).toBeLessThanOrEqual(2); expect(row[0].x).toBeLessThan(row[1].x);
+  expect(row[2].y).toBeGreaterThanOrEqual(row[0].y + row[0].height); expect(row[2].width).toBeGreaterThan(300);
+  await expectResponsiveFit(page, responsiveFit);
+  await addFilter.click();
+  await picker.getByRole("button", { name: "Member (text)", exact: true }).click();
+  const memberDialog = page.getByRole("dialog", { name: "Filter Member" });
+  const bounds = (await memberDialog.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+  await memberDialog.getByLabel("Contains", { exact: true }).fill("Student B");
+  await memberDialog.getByRole("button", { name: "Apply", exact: true }).click();
+  const chip = page.locator(".report-filter-chip-group").filter({ hasText: "Member contains" });
+  await expect(chip).toBeVisible();
+  expect((await chip.boundingBox())!.width).toBeGreaterThan(300);
+  await expect(table).not.toContainText("Test Student A");
+  await expectResponsiveFit(page, responsiveFit);
+});

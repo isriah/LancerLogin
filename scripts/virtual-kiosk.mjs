@@ -21,6 +21,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { coreRoot, developmentRuntime } from "./plugin-dev.mjs";
 import { defaultNetworkState, networkOnline, rebootExitCode, updateExitCode, validNetworkState } from "./virtual-kiosk/fakes.mjs";
+import { newPasswordCredential, passwordProof } from "../packages/shared/src/password-key.mjs";
 
 const defaultStateRoot = join(coreRoot, ".provision/virtual-kiosk");
 const panelHtml = join(dirname(fileURLToPath(import.meta.url)), "virtual-kiosk/panel.html");
@@ -107,16 +108,22 @@ async function completeSetupStep(api, moduleId, stepId) {
   return api.ok("PUT", `/admin/modules/${moduleId}/setup`, { generation, stepId, outcome: "completed" });
 }
 
+/** Signs in as the dashboard does: the account's salt, then the scrypt result computed here. */
+async function signIn(api, admin) {
+  const params = await api.ok("POST", "/auth/local/params", { username: admin.username });
+  await api.ok("POST", "/auth/local", { username: admin.username, ...await passwordProof(admin.password, params) });
+}
+
 /** First Admin, attendance setup, two test members and two test meetings. Runs once per state folder. */
 async function seedPreview(api, { setupCode, adminPath }) {
   if (existsSync(adminPath)) {
     const admin = JSON.parse(readFileSync(adminPath, "utf8"));
-    await api.ok("POST", "/auth/local", { username: admin.username, password: admin.password });
+    await signIn(api, admin);
     return admin;
   }
   const admin = { username: "virtual-admin", password: randomBytes(18).toString("base64url") };
-  await api.ok("POST", "/setup/bootstrap", { setupCode, organizationName: "Virtual Robotics", timeZone: "UTC", authMode: "local", localUsername: admin.username, localPassword: admin.password });
-  await api.ok("POST", "/auth/local", { username: admin.username, password: admin.password });
+  await api.ok("POST", "/setup/bootstrap", { setupCode, organizationName: "Virtual Robotics", timeZone: "UTC", authMode: "local", localUsername: admin.username, localPasswordKey: await newPasswordCredential(admin.password) });
+  await signIn(api, admin);
   const modules = await api.ok("GET", "/platform/modules");
   await api.ok("PUT", "/admin/modules", { enabled: ["attendance"].filter((id) => modules.modules.some((module) => module.id === id)), revision: modules.revision });
   await api.ok("POST", "/admin/members", { members: testMembers });
@@ -141,6 +148,28 @@ async function seedPreview(api, { setupCode, adminPath }) {
   for (const member of testMembers) await api.call("PATCH", `/admin/attendance/members/${encodeURIComponent(member.memberId)}`, { attendanceRequiredFrom: new Date(now - 30 * 86_400_000).toISOString().slice(0, 10), expected: null });
   await writeFile(adminPath, `${JSON.stringify(admin, null, 2)}\n`, { mode: 0o600 });
   return admin;
+}
+
+/**
+ * A meetings CSV for previewing **Import CSV** on the Dashboard against the seeded data (the preview's time zone is UTC):
+ * Test meeting B with a later end (a matching row to Skip or Update), two new meetings, one in the past and one that
+ * overlaps another row. Written on every run, since the dates follow Test meeting B.
+ */
+export function meetingImportSample(meetings, now = Date.now()) {
+  const anchor = meetings.find((meeting) => meeting.title === "Test meeting B");
+  const start = anchor ? new Date(anchor.startsAt) : new Date(now + 7 * 86_400_000);
+  const date = (offsetDays) => { const value = new Date(start.getTime() + offsetDays * 86_400_000); return `${String(value.getUTCMonth() + 1).padStart(2, "0")}/${String(value.getUTCDate()).padStart(2, "0")}/${value.getUTCFullYear()}`; };
+  const clock = (value) => `${String(value.getUTCHours()).padStart(2, "0")}:${String(value.getUTCMinutes()).padStart(2, "0")}`;
+  const end = anchor ? new Date(Date.parse(anchor.endsAt) + 3_600_000) : new Date(start.getTime() + 3 * 3_600_000);
+  const past = new Date(now - 10 * 86_400_000);
+  return [
+    "Title,Date,Start time,End time,Attendance,Audience labels,Notes",
+    `Test meeting B,${date(0)},${clock(start)},${clock(end)},Required,,Synthetic`,
+    `Test Build Session,${date(2)},17:00,19:00,Required,,Synthetic`,
+    `Test Drive Practice,${date(3)},3:30 PM,5:30 PM,Optional,,Synthetic`,
+    `Test Kickoff Review,${String(past.getUTCMonth() + 1).padStart(2, "0")}/${String(past.getUTCDate()).padStart(2, "0")}/${past.getUTCFullYear()},17:00,18:00,Required,,Synthetic`,
+    `Test Scrimmage Prep,${date(2)},18:00,20:00,Required,,Synthetic`,
+  ].join("\n") + "\n";
 }
 
 /** The pairing key the dashboard would show for a new kiosk, pointing at the cloud link instead of the Worker. */
@@ -411,6 +440,8 @@ async function main() {
 
   const api = apiClient(runtime.apiUrl, runtime.dashboardUrl);
   const admin = await seedPreview(api, { setupCode: runtime.setupCode, adminPath: join(stateRoot, "admin.json") });
+  const importSample = join(stateRoot, "meetings-import-sample.csv");
+  await writeFile(importSample, meetingImportSample((await api.ok("GET", "/meetings")).meetings));
   // Whether the Worker is reachable at all; each kiosk also needs its own network to reach it.
   const worker = { online: true };
 
@@ -433,6 +464,7 @@ async function main() {
     `Virtual kiosk control panel: ${urls.panelUrl}`,
     options.dashboard ? `Local dashboard: ${runtime.dashboardUrl}  (sign in as ${admin.username}; the password is in ${urls.adminFile})` : `Local Worker: ${runtime.apiUrl}`,
     ...kiosksRef.map((kiosk) => `${kiosk.name}: http://127.0.0.1:${kiosk.port}/`),
+    `Meeting import sample (Dashboard > Import CSV): ${importSample}`,
     "Ctrl+C stops everything. State is kept in .provision/virtual-kiosk; --reset starts over.",
     "",
   ].join("\n"));

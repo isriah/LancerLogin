@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { buildProvisionConfig, workerPlacement } from "./prepare-cloudflare-provision.mjs";
-import { buildPagesProxy } from "./prepare-pages-proxy.mjs";
+import { writePagesOutput } from "./prepare-pages-proxy.mjs";
 
 import { resolveDatabaseName } from "./database-identity.mjs";
 import { ensureFingerprintVaultKey, fingerprintVaultSecretName, fingerprintVaultStateSql } from "./ensure-fingerprint-vault-key.mjs";
@@ -84,6 +84,18 @@ export async function validateMigrationPolicy(policy, files, applied, previousVe
   for (const [index, file] of files.entries()) {
     if (reviewed[index]?.name !== file.name || reviewed[index]?.sha256 !== createHash("sha256").update(file.content.replaceAll("\r\n", "\n")).digest("hex") || reviewed[index]?.forwardCompatible !== true) throw new Error("migration_hash_review_required");
   }
+}
+
+/**
+ * The Worker configuration a web update deploys: the release's own provisioning config (so it carries the scheduler's
+ * Durable Object binding and the 5-minute watchdog cron together), plus this installation's updater variables.
+ */
+export function webUpgradeWorkerConfig(context, databaseName, deploymentMarker) {
+  const config = buildProvisionConfig(context.slug, [{ name: databaseName, uuid: context.databaseId }], context.tag.slice(1), databaseName).config;
+  config.vars.UPDATE_REPOSITORY = context.repository;
+  config.vars.UPDATE_WORKFLOW_URL = `https://github.com/${context.repository}/actions/workflows/upgrade-web.yml`;
+  config.vars.DEPLOYMENT_MARKER = deploymentMarker;
+  return config;
 }
 
 /** Git's blob SHA-1 for file content, as GitHub reports it for lancerlogin.modules.json. */
@@ -339,10 +351,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
   const deploymentMarker = randomUUID();
   const source = resolve(sourceDirectory); const configPath = resolve(source, ".provision/wrangler.json");
   const databaseName = resolveDatabaseName(context.slug, context.databaseName);
-  const config = buildProvisionConfig(context.slug, [{ name: databaseName, uuid: context.databaseId }], context.tag.slice(1), databaseName).config;
-  config.vars.UPDATE_REPOSITORY = context.repository;
-  config.vars.UPDATE_WORKFLOW_URL = `https://github.com/${context.repository}/actions/workflows/upgrade-web.yml`;
-  config.vars.DEPLOYMENT_MARKER = deploymentMarker;
+  const config = webUpgradeWorkerConfig(context, databaseName, deploymentMarker);
   await mkdir(resolve(source, ".provision"), { recursive: true });
   await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
   const processEnvironment = { ...environment, CI: "true", WRANGLER_SEND_METRICS: "false", WRANGLER_WRITE_LOGS: "false", WRANGLER_LOG_SANITIZE: "true" };
@@ -440,7 +449,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
     async build() {
       await wrangler(["deploy", "--dry-run", "--outdir", ".provision/api-build"]);
       await command(process.platform === "win32" ? "npm.cmd" : "npm", ["--workspace", "@lancerlogin/dashboard", "run", "build"], source, { ...processEnvironment, VITE_API_BASE_URL: "/api" });
-      await writeFile(resolve(source, "apps/dashboard/dist/_worker.js"), buildPagesProxy(context.apiUrl, context.tag.slice(1)), { mode: 0o600 });
+      await writePagesOutput(resolve(source, "apps/dashboard/dist"), context.apiUrl, context.tag.slice(1));
     },
     async drain() { await new Promise((done) => setTimeout(done, 60_000)); },
     async checkpoint() {

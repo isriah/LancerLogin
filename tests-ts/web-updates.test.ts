@@ -23,7 +23,7 @@ class D1 {
   }
   prepare(sql: string) {
     let params: unknown[] = []; const database = this;
-    return { bind(...values: unknown[]) { params = values; return this; },
+    return { sql, bind(...values: unknown[]) { params = values; return this; },
       async first<T>() { return (database.sqlite.prepare(sql).get(...params as []) ?? null) as T | null; },
       async all<T>() { return { results: database.sqlite.prepare(sql).all(...params as []) as T[] }; },
       async run() {
@@ -34,7 +34,8 @@ class D1 {
         return { success: true, meta: { changes: after - before } };
       } };
   }
-  async batch(statements: Array<{ run(): Promise<unknown> }>) { return Promise.all(statements.map((statement) => statement.run())); }
+  // As D1 does, a read in a batch returns its rows.
+  async batch(statements: Array<{ sql: string; all(): Promise<unknown>; run(): Promise<unknown> }>) { return Promise.all(statements.map((statement) => /^\s*(?:SELECT|WITH)\b/i.test(statement.sql) ? statement.all() : statement.run())); }
 }
 const secret = "A".repeat(43);
 function environment(database = new D1()): Env {
@@ -474,6 +475,8 @@ test("Worker binds the backup download to the request and maintenance keeps logi
   database.sqlite.exec("UPDATE web_update_requests SET maintenance = 1, state = 'recovery_required'");
   const login = await worker.fetch(new Request("https://api.test/auth/local", { method: "POST" }), env);
   assert.equal(login.status, 415); // Authentication/content boundary remains reachable, not maintenance503.
+  // So does the salt lookup that comes before every local sign-in.
+  assert.equal((await worker.fetch(new Request("https://api.test/auth/local/params", { method: "POST" }), env)).status, 415);
 });
 test("Worker uses current Admin role, origin and strict no-selector prepare", async () => {
   const database = new D1(); const env = environment(database);
@@ -495,15 +498,18 @@ test("installation maintenance pauses cron and the production durable scheduler 
   await worker.scheduled({ cron: "*/5 * * * *" }, env);
   assert.deepEqual(database.sqlite.prepare("SELECT total_changes() AS n").get(), before);
   env.PLATFORM_SCHEDULER_MODE = "durable";
+  env.PLATFORM_SCHEDULER = { idFromName: (name: string) => name, get: () => ({ fetch: async () => Response.json({}) }) };
   let alarm: number | null = null, writes = 0;
-  const state = { enabled: true, jobs: { "core.discord-commands": { next: 0, last: null, outcome: "waiting" } } };
+  // A poked job is due now, but maintenance holds it: the slice changes nothing and retries in 30 seconds.
   const scheduler = new PlatformScheduler({ storage: {
-    get: async <T>() => structuredClone(state) as T,
-    put: async () => { writes++; }, transaction: async callback => callback(),
+    get: async <T>(key: string) => (key === "pokes" ? { "core.discord-commands": Date.now() - 1_000 } : undefined) as T,
+    put: async () => { writes++; },
     getAlarm: async () => alarm, setAlarm: async value => { alarm = value; }, deleteAlarm: async () => { alarm = null; },
   } }, env);
   await scheduler.alarm();
-  assert.equal(writes, 0); assert.ok(alarm! > Date.now());
+  assert.equal(writes, 0); assert.ok(alarm! > Date.now() + 25_000);
+  // The cron is then only a watchdog and changes nothing in D1.
+  await worker.scheduled({ cron: "*/5 * * * *" }, env);
   assert.deepEqual(database.sqlite.prepare("SELECT total_changes() AS n").get(), before);
   const login = await worker.fetch(new Request("https://api.test/auth/local", { method: "POST" }), env);
   assert.equal(login.status, 415);

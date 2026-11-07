@@ -42,6 +42,9 @@ test("the offline check matches the server's PBKDF2 hash (Node pbkdf2Sync vector
   assert.equal(fixed.hash, pbkdf2Sync("135790", salt, 1_000, 32, "sha256").toString("base64"));
   assert.equal(await verifyMemberPin("135790", fixed), true);
   assert.equal(await verifyMemberPin("135791", fixed), false);
+  // The server hashes new PINs at 2,000 iterations and rehashes older ones to it.
+  assert.equal(await verifyMemberPin("4821", serverHash("4821", 2_000)), true);
+  assert.equal(await verifyMemberPin("4822", serverHash("4821", 2_000)), false);
 });
 
 test("a malformed or untrusted cached hash never matches", async () => {
@@ -188,6 +191,20 @@ test("locked, no PIN yet and other refusals map to their screens", async () => {
   assert.equal(displayForAttendanceError(new KioskApiError("This kiosk requires a PIN.", 400, "pin_required")).message, "PIN needed");
   assert.equal(pinOutcomeFor(await answer(200, { accepted: true, eventId: scan.eventId, action: "check_in" })), undefined);
   assert.deepEqual(pinOutcomeFor(new KioskApiError("Locked", 423, "pin_locked", "2026-10-30T18:15:00.000Z")), { kind: "locked", lockedUntil: "2026-10-30T18:15:00.000Z" });
+});
+
+test("a throttled PIN try answers the scan with the server's message; a busy server's 429 is still retried", async () => {
+  const throttled = await answer(429, { error: "Too many wrong PINs. Try again in 30 seconds.", code: "pin_throttled", retryAt: "2026-10-30T18:00:30.000Z", retryAfterSeconds: 30 });
+  assert.deepEqual(throttled, { kind: "rejected", status: 429, code: "pin_throttled", message: "Too many wrong PINs. Try again in 30 seconds." });
+  assert.deepEqual(pinOutcomeFor(throttled), { kind: "throttled", message: "Too many wrong PINs. Try again in 30 seconds." });
+  assert.deepEqual(pinOutcomeFor(await answer(429, { code: "pin_throttled" })), { kind: "throttled", message: "Too many wrong PINs. Try again in a few minutes." });
+  assert.deepEqual(await answer(429, { error: "Too many requests" }), { kind: "retry", status: 429 }, "a busy server's 429 is retried");
+  // The result screen shows the message like other refusals, then returns to the start.
+  const shown = flowReducer({ step: "sending", member }, { type: "pin_refused", outcome: { kind: "throttled", message: "Too many wrong PINs. Try again in 1 minute." } });
+  assert.equal(shown.step, "result");
+  const display = (shown as Extract<Flow, { step: "result" }>).display;
+  assert.deepEqual({ id: display.id, tone: display.tone, message: display.message, name: display.name, detail: display.detail, durationMs: display.durationMs },
+    { id: "rejected", tone: "error", message: "Please wait", name: "Test Student G", detail: "Too many wrong PINs. Try again in 1 minute.", durationMs: 4_000 });
 });
 
 test("the PIN calls use the kiosk endpoints, and the PIN goes only in a request body", async () => {

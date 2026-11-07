@@ -21,6 +21,7 @@ import { clearWalkthroughSession } from "./walkthrough-session";
 import { readStorage, writeStorage } from "./browser-storage";
 import { isWebKioskPath } from "./web-kiosk/route";
 import { product, type ThemeColors } from "../../../packages/shared/src/product.ts";
+import { minimumPasswordLength, newPasswordCredential, passwordProof, type PasswordParams } from "./password-hashing";
 // Loaded last so desktop consistency rules follow every page and mobile stylesheet.
 import "./desktop-layout.css";
 
@@ -148,8 +149,10 @@ function FirstAdminSetup({ defaultTheme, onConfigured }: { defaultTheme: ThemeCo
   async function submit(event: FormEvent) {
     event.preventDefault(); setResult({ busy: true });
     if (usesLocal && localPassword !== localPasswordConfirmation) { setResult({ error: "The password confirmation does not match. Re-enter both password fields." }); return; }
+    // The Worker only receives a salt and the scrypt result, so the length rule is checked here, with its old message.
+    if (usesLocal && localPassword.length < minimumPasswordLength) { setResult({ error: "Local sign-in requires a username and a password of at least 12 characters" }); return; }
     let response: Response;
-    try { response = await fetch(`${apiBaseUrl}/setup/bootstrap`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ setupCode, organizationName, timeZone, authMode, adminEmail: usesGoogle ? adminEmail : undefined, googleClientId: usesGoogle ? googleClientId : undefined, googleClientSecret: usesGoogle ? googleClientSecret : undefined, localUsername: usesLocal ? localUsername : undefined, localPassword: usesLocal ? localPassword : undefined }) }); }
+    try { const localPasswordKey = usesLocal ? await newPasswordCredential(localPassword) : undefined; response = await fetch(`${apiBaseUrl}/setup/bootstrap`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ setupCode, organizationName, timeZone, authMode, adminEmail: usesGoogle ? adminEmail : undefined, googleClientId: usesGoogle ? googleClientId : undefined, googleClientSecret: usesGoogle ? googleClientSecret : undefined, localUsername: usesLocal ? localUsername : undefined, localPasswordKey }) }); }
     catch { setResult({ error: "Setup service unavailable. Check your connection and try again; your entries are kept." }); return; }
     const body = await response.json().catch(() => ({})) as { error?: string; details?: string[] };
     if (!response.ok) { setResult({ error: body.details?.join(" ") ?? body.error ?? (response.status >= 500 ? "Setup service unavailable. Try again; your entries are kept." : "Setup failed") }); return; }
@@ -208,7 +211,17 @@ function signInFailureMessage(status: number) {
 function LocalLogin({ status, onSignedIn }: { status: SetupStatus; onSignedIn: (user: DashboardSession) => void }) {
   const mode = status.installation?.authMode ?? "local";
   const [username, setUsername] = useState(""); const [password, setPassword] = useState(""); const [message, setMessage] = useState(""); const [busy, setBusy] = useState(false);
-  async function submit(event: FormEvent) { event.preventDefault(); setMessage(""); setBusy(true); try { const response = await fetch(`${apiBaseUrl}/auth/local`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ username, password }) }); if (response.ok) onSignedIn((await response.json() as { user: DashboardSession }).user); else setMessage(signInFailureMessage(response.status)); } catch { setMessage("Sign-in service unavailable. Check your connection and try again."); } finally { setBusy(false); } }
+  // Two requests: the account's salt, then the scrypt result computed here. "Signing in…" covers the hashing too.
+  async function submit(event: FormEvent) {
+    event.preventDefault(); setMessage(""); setBusy(true);
+    try {
+      const post = (path: string, body: unknown) => fetch(`${apiBaseUrl}${path}`, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const params = await post("/auth/local/params", { username });
+      if (!params.ok) { setMessage(signInFailureMessage(params.status)); return; }
+      const response = await post("/auth/local", { username, ...await passwordProof(password, await params.json() as PasswordParams) });
+      if (response.ok) onSignedIn((await response.json() as { user: DashboardSession }).user); else setMessage(signInFailureMessage(response.status));
+    } catch { setMessage("Sign-in service unavailable. Check your connection and try again."); } finally { setBusy(false); }
+  }
   const messageId = message ? "sign-in-message" : undefined;
   return <main id="dashboard-content" className="login-card ui-card" aria-labelledby="sign-in-title"><div className="form-intro"><p className="kicker">{status.settings?.organizationName ?? "LancerLogin"}</p><h1 id="sign-in-title">{status.justCreated ? "Sign in to finish setup" : "Sign in"}</h1><p>{status.justCreated ? mode === "google" ? "Your installation is ready. Continue with Google using the first Admin email to finish setup." : "Your installation is ready. Sign in with the Admin account you just created to finish setup." : "Sign in to manage attendance."}</p></div>{mode !== "google" && <form className="ui-form" onSubmit={submit} aria-describedby={messageId}><label htmlFor="sign-in-username">Username<input id="sign-in-username" required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><label htmlFor="sign-in-password">Password<input id="sign-in-password" required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} aria-invalid={Boolean(message)} aria-describedby={messageId} /></label><button className="primary-button" disabled={busy} type="submit">{busy ? "Signing in…" : "Sign in"}</button></form>}{mode === "both" && <div className="auth-divider" aria-hidden="true"><span>or</span></div>}{mode !== "local" && <a className="google-button action-link" href={`${apiBaseUrl}/auth/google/start`}>Continue with Google</a>}{message && <p id="sign-in-message" className="ui-status auth-message" data-tone="error" role="alert" tabIndex={-1}>{message}</p>}</main>;
 }

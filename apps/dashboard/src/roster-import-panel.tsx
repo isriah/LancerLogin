@@ -1,5 +1,6 @@
 import { type ChangeEvent, useMemo, useRef, useState } from "react";
 import { api } from "./dashboard-api";
+import { downloadCsvTemplate } from "./csv-import.ts";
 import { useModalFocus } from "./modal-focus";
 import { parseRosterText, rosterFieldHelp, rosterFieldLabels, rosterTemplateCsv, type RosterField, type RosterRecord } from "./roster-csv";
 import type { RosterMember } from "./user-settings";
@@ -7,10 +8,7 @@ import type { RosterMember } from "./user-settings";
 type IncomingMember = RosterRecord;
 type PreviewRow = IncomingMember & { status: "Add" | "Update" | "Unchanged" | "Deactivate"; accountLinked?: boolean };
 
-function downloadTemplate() {
-  const url = URL.createObjectURL(new Blob([rosterTemplateCsv], { type: "text/csv;charset=utf-8" })); const link = document.createElement("a");
-  link.href = url; link.download = "roster-template.csv"; document.body.append(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 0);
-}
+const downloadTemplate = () => downloadCsvTemplate("roster-template.csv", rosterTemplateCsv);
 
 // `embedded` hides the panel's own heading before preview, when a surrounding dialog already titles the import.
 type Props = { members: RosterMember[]; onImported: () => Promise<void>; open?: boolean; onClose?: () => void; embedded?: boolean };

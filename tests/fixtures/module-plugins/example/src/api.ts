@@ -34,6 +34,19 @@ const api: ApiModuleContribution<unknown> = {
           return context.respond({ ready, timeZone, providerStatus }, 502);
         }
       }
+      // Lets tests confirm a Discord rate limit reaches a plugin as a neutral 429 with Discord's delay.
+      if (context.url.pathname === "/admin/example/discord-events" && context.request.method === "GET") {
+        await context.requireRole(["admin"]);
+        try {
+          const client = await context.services.discord.client();
+          const listed = await client.request(`/guilds/${client.guildId}/scheduled-events`, { method: "GET" });
+          return context.respond({ events: listed.body });
+        } catch (error) {
+          const providerStatus = context.services.discord.providerStatus(error);
+          if (providerStatus === undefined) throw error;
+          return context.respond({ providerStatus, retryAfterMs: context.services.discord.retryAfterMs(error), message: (error as Error).message }, 502);
+        }
+      }
       if (context.url.pathname !== "/admin/example/items") return undefined;
       await context.requireRole(["admin", "operator"]);
       if (context.request.method === "GET") return context.respond({ items: await itemsWithRequests(context.db, installationId) });

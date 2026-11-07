@@ -8,7 +8,7 @@ The step-by-step procedure for regaining access when every Admin has lost their 
 
 - It requires an interactive terminal and reads the new password twice from hidden prompts. It rejects non-interactive input and has no password argument.
 - It needs `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in the terminal environment. The token needs Account Settings read and D1 edit access in the adopter-owned account. The tool verifies the exact account-token pair before it touches D1. Never paste either value into LancerLogin or commit it.
-- It derives the same salted scrypt hash the Worker uses and runs one Wrangler D1 update against the named database. The update also clears any failed-login lock.
+- It runs the same salted scrypt the dashboard runs when a password is set, stores the same `scrypt-c` value the Worker would (a SHA-256 of the scrypt result), and runs one Wrangler D1 update against the named database. The update also clears any failed-login lock.
 - Wrangler reports `passwords_reset: 1` on success. A zero count means the username was not found; it is safe to rerun with the corrected name.
 - It never prints the password or the derived hash.
 

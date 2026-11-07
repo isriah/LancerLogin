@@ -153,6 +153,8 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
   await expect(page.locator(".meeting-view-icon")).toHaveCount(2);
   await expectInlineViewIcons(page);
   for (const control of await page.locator(".compact-view-toggle label,.calendar-heading > button").all()) expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  // A cold first load can measure before the heading web font arrives, when the fallback font wraps the title.
+  await page.evaluate(() => document.fonts.ready);
   const meetings = await capture();
   await page.getByRole("radio", { name: "Table" }).check();
   await expect(page.getByRole("heading", { name: "Existing meetings" })).toBeVisible();
@@ -162,6 +164,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
   await expect(page.locator(".meeting-view-icon")).toHaveCount(2);
   await expectInlineViewIcons(page);
   for (const control of await page.locator(".compact-view-toggle label,.calendar-heading > button,.outreach-activity-visibility > summary").all()) expect((await control.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await page.evaluate(() => document.fonts.ready);
   const activities = await capture();
   await page.getByRole("radio", { name: "Table" }).check();
   await expect(page.getByRole("heading", { name: "Activity table" })).toBeVisible();

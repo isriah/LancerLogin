@@ -3,7 +3,7 @@
    tokens: one card padding, one action-button type scale and one content inset per card. */
 @media (min-width: 801px) {
   /* Action buttons share the ui-button type scale. Content-bearing buttons such as calendar days keep their own text. */
-  .app main :is(button, summary.meeting-more-actions-summary):not(.compact-calendar-day):not(.trend-point):not(.info-tip-button):not(.settings-edit-button):not(.report-column-trigger):not(.kiosk-device-select):not([role="switch"]):not([role="option"]):not([role="tab"]),
+  .app main :is(button, summary.meeting-more-actions-summary):not(.compact-calendar-day):not(.trend-point):not(.info-tip-button):not(.settings-edit-button):not(.report-column-trigger):not(.report-column-filter-button):not(.kiosk-device-select):not([role="switch"]):not([role="option"]):not([role="tab"]),
   .app .meeting-more-actions > summary,
   .app .sign-out-button { font-family: var(--font-body); font-size: var(--text-small); font-weight: 750; line-height: 1.2; }
 

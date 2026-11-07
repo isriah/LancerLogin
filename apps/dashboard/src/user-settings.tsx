@@ -4,6 +4,7 @@ import { api } from "./dashboard-api";
 import { readModuleSnapshot } from "./module-client";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
 import { InfoHeading } from "./info-tip";
+import { minimumPasswordLength, newPasswordCredential } from "./password-hashing";
 
 // Keeps password managers from filling the signed-in Admin's own sign-in details into fields for another account.
 const passwordManagerIgnore = { "data-1p-ignore": "", "data-lpignore": "true", "data-bwignore": "", "data-form-type": "other" } as const;
@@ -60,7 +61,9 @@ export function UserSettings({ members }: { members: RosterMember[] }) {
   }
   async function create(event: FormEvent) {
     event.preventDefault(); setError(""); if (method === "local" && password !== confirmation) { showError("Temporary password confirmation does not match."); return; }
-    try { await api("/admin/users", { method: "POST", body: JSON.stringify(method === "local" ? { localUsername: identifier, localPassword: password, memberId: memberId || null, role } : { email: identifier, memberId: memberId || null, role }) }); setIdentifier(""); setPassword(""); setConfirmation(""); setMemberId(""); setCreating(false); await load(); setNotice("Dashboard access created and audited."); grantButton.current?.focus(); }
+    // The Worker receives only a salt and the scrypt result, so the length rule is checked here, with its old message.
+    if (method === "local" && password.length < minimumPasswordLength) { showError("A local user needs a password of at least 12 characters"); return; }
+    try { await api("/admin/users", { method: "POST", body: JSON.stringify(method === "local" ? { localUsername: identifier, localPasswordKey: await newPasswordCredential(password), memberId: memberId || null, role } : { email: identifier, memberId: memberId || null, role }) }); setIdentifier(""); setPassword(""); setConfirmation(""); setMemberId(""); setCreating(false); await load(); setNotice("Dashboard access created and audited."); grantButton.current?.focus(); }
     catch (caught) { showError((caught as Error).message); }
   }
 

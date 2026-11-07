@@ -1,5 +1,6 @@
 import { externalModuleManifests } from "./generated/external-manifests.ts";
 import { coreMemberReportFieldDefinitions, reportFilterOperators } from "./module-report-fields.ts";
+import { labelSetFieldLabels, labelSetFields } from "./attendance-label-sets.ts";
 
 // Report field helpers live in a module without imports of installed manifests, so plugin manifests can use them while
 // this registry module is still loading those manifests.
@@ -28,7 +29,8 @@ export type ModuleDiscordCommandDefinition = {
 
 export type ReportFilterOperator = "contains" | "minimum" | "equals" | "maximum" | "between" | "empty" | "not_empty";
 
-export type ReportDurationUnit = "minutes" | "hours";
+/** How a duration measure, always stored in minutes, is shown: minutes, decimal hours, or hours and minutes as H:MM. */
+export type ReportDurationUnit = "minutes" | "hours" | "hours_minutes";
 
 export type ReportFieldDefinition = {
   readonly id: string;
@@ -314,7 +316,7 @@ export function createModuleRegistry(input: readonly ModuleDefinition[]) {
       const fields = new Map(dataset.fields.map((field) => [field.id, field]));
       if (!capabilityPattern.test(dataset.id) || !dataset.label || !dataset.description || !capabilityPattern.test(dataset.rowIdentity) || reportDatasets.has(dataset.id)) throw new Error("Invalid or duplicate report dataset contribution");
       if (!module.capabilities.some((capability) => capability.id === dataset.capability) || fields.size !== dataset.fields.length || !fields.has(dataset.rowIdentity)) throw new Error("Invalid report dataset authority or row identity");
-      if (dataset.fields.some((field) => !capabilityPattern.test(field.id) || !field.label || !field.group || !["dimension", "measure"].includes(field.kind) || !["text", "number", "date"].includes(field.valueType) || field.filterOperators.some((operator) => !reportFilterOperators(field.valueType).includes(operator)) || field.durationUnits && (field.valueType !== "number" || !field.durationUnits.length || new Set(field.durationUnits).size !== field.durationUnits.length || field.durationUnits.some((unit) => !["minutes", "hours"].includes(unit)) || !field.defaultDurationUnit || !field.durationUnits.includes(field.defaultDurationUnit)) || !field.durationUnits && field.defaultDurationUnit)) throw new Error("Invalid report field contribution");
+      if (dataset.fields.some((field) => !capabilityPattern.test(field.id) || !field.label || !field.group || !["dimension", "measure"].includes(field.kind) || !["text", "number", "date"].includes(field.valueType) || field.filterOperators.some((operator) => !reportFilterOperators(field.valueType).includes(operator)) || field.durationUnits && (field.valueType !== "number" || !field.durationUnits.length || new Set(field.durationUnits).size !== field.durationUnits.length || field.durationUnits.some((unit) => !["minutes", "hours", "hours_minutes"].includes(unit)) || !field.defaultDurationUnit || !field.durationUnits.includes(field.defaultDurationUnit)) || !field.durationUnits && field.defaultDurationUnit)) throw new Error("Invalid report field contribution");
       if (!dataset.defaultColumns.length || dataset.defaultColumns.some((field) => !fields.has(field)) || new Set(dataset.defaultColumns).size !== dataset.defaultColumns.length || !fields.get(dataset.defaultSort.field)?.sortable) throw new Error("Invalid report dataset defaults");
       if (dataset.groupBy.some((field) => fields.get(field)?.kind !== "dimension") || new Set(dataset.groupBy).size !== dataset.groupBy.length || new Set(dataset.filters).size !== dataset.filters.length || dataset.filters.some((filter) => !(coreReportFilterIds as readonly string[]).includes(filter) && !ownFilters.has(filter))) throw new Error("Invalid report dataset grouping or filters");
       for (const [alias, field] of Object.entries(dataset.fieldAliases ?? {})) {
@@ -392,20 +394,27 @@ export const coreReportDatasets = Object.freeze<readonly ReportDatasetDefinition
   },
 ]);
 
+// "Last N days" labels are filled in with the configured current-standing window when the API serves them.
+const policyGroup = "Attendance policies (per label)", outcomeGroup = "Meetings by outcome";
 const attendanceFields = Object.freeze<readonly ReportFieldDefinition[]>([
   ...coreMemberReportFields,
   { id: "attendance.member.required-from", label: "Attendance starts", group: "Attendance", kind: "dimension", valueType: "date", sortable: true, filterOperators: reportFilterOperators("date") },
-  { id: "attendance.member.regular-rate", label: "Regular attendance", group: "Regular attendance", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
-  { id: "attendance.member.weighted-present", label: "Regular weighted present", group: "Regular attendance", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
-  { id: "attendance.member.weighted-eligible", label: "Regular weighted eligible", group: "Regular attendance", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
-  { id: "attendance.member.regular-period", label: "Regular reporting period", group: "Regular attendance", kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
-  { id: "attendance.member.assigned-policies", label: "Assigned policies", group: "Policies", kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
-  ...["official-result", "official-status", "official-target", "official-type", "official-excused", "official-period", "report-result", "report-status", "report-target", "report-period"].map((id): ReportFieldDefinition => ({ id: `attendance.policy.${id}`, label: ({ "official-result": "Official policy result", "official-status": "Official policy status", "official-target": "Official policy target", "official-type": "Official policy type", "official-excused": "Official excuse handling", "official-period": "Official policy period", "report-result": "Report-period policy result", "report-status": "Report-period policy status", "report-target": "Report-period policy target", "report-period": "Report-period policy period" } as Record<string, string>)[id]!, group: "Policies", kind: id.includes("target") || id.includes("result") ? "measure" : "dimension", valueType: id.includes("target") || id.includes("result") ? "number" : "text", sortable: !id.includes("period"), filterOperators: reportFilterOperators(id.includes("target") || id.includes("result") ? "number" : "text"), requiresLabel: true })),
-  { id: "attendance.policy.report-summary", label: "Report-period policies", group: "Policies", kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
-  { id: "attendance.policy.history", label: "Policy history", group: "Policies", kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
+  { id: "attendance.member.regular-rate", label: "Overall rate", group: "Overall attendance", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "attendance.member.weighted-present", label: "Overall: meetings attended (weighted)", group: "Overall attendance", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "attendance.member.weighted-eligible", label: "Overall: meetings counted (weighted)", group: "Overall attendance", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+  { id: "attendance.member.regular-period", label: "Overall: period", group: "Overall attendance", kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
+  { id: "attendance.member.assigned-policies", label: "Last N days: policy results (all labels)", group: policyGroup, kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
+  ...["official-result", "official-status", "official-target", "official-type", "official-excused", "official-period", "report-result", "report-status", "report-target", "report-period"].map((id): ReportFieldDefinition => ({ id: `attendance.policy.${id}`, label: ({ "official-result": "Last N days: policy result", "official-status": "Last N days: policy status", "official-target": "Last N days: policy target", "official-type": "Last N days: policy type", "official-excused": "Last N days: excused-meeting handling", "official-period": "Last N days: policy period", "report-result": "Policy result", "report-status": "Policy status", "report-target": "Policy target", "report-period": "Policy period" } as Record<string, string>)[id]!, group: policyGroup, kind: id.includes("target") || id.includes("result") ? "measure" : "dimension", valueType: id.includes("target") || id.includes("result") ? "number" : "text", sortable: !id.includes("period"), filterOperators: reportFilterOperators(id.includes("target") || id.includes("result") ? "number" : "text"), requiresLabel: true })),
+  // A label's column set ("Attendance by label"): the report period's result under the label's policy, with plain meeting counts.
+  ...Object.values(labelSetFields).map((id): ReportFieldDefinition => {
+    const number = id !== labelSetFields.status;
+    return { id, label: labelSetFieldLabels[id]!, group: policyGroup, kind: number ? "measure" : "dimension", valueType: number ? "number" : "text", sortable: true, filterOperators: reportFilterOperators(number ? "number" : "text"), requiresLabel: true };
+  }),
+  { id: "attendance.policy.report-summary", label: "Policy results (all labels)", group: policyGroup, kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
+  { id: "attendance.policy.history", label: "Policy history", group: policyGroup, kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
   ...["present", "absent", "excused"].flatMap((status): ReportFieldDefinition[] => [
-    { id: `attendance.detail.${status}-count`, label: `${status[0]!.toUpperCase()}${status.slice(1)} count`, group: "Attendance detail", kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
-    { id: `attendance.detail.${status}-dates`, label: `${status[0]!.toUpperCase()}${status.slice(1)} dates`, group: "Attendance detail", kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
+    { id: `attendance.detail.${status}-count`, label: `${status[0]!.toUpperCase()}${status.slice(1)} meetings`, group: outcomeGroup, kind: "measure", valueType: "number", sortable: true, filterOperators: reportFilterOperators("number") },
+    { id: `attendance.detail.${status}-dates`, label: `${status[0]!.toUpperCase()}${status.slice(1)} dates`, group: outcomeGroup, kind: "dimension", valueType: "text", sortable: false, filterOperators: reportFilterOperators("text") },
   ]),
 ]);
 

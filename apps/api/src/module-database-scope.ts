@@ -1,8 +1,12 @@
 import { preserveDatabaseIdentity, type D1Database, type D1Result, type D1Statement } from "./d1-usage.ts";
+import { readCoalescer, readOnlyStatement } from "./d1-coalesce.ts";
 import { HttpError } from "./http-error.ts";
 
 type Predicate = { sql: string; bindings: readonly unknown[] };
 const denialMarker = "module-authority-denied";
+const deniedMessage = "Module authority changed; reload current state";
+/** The error a scoped database throws when its guard finds the captured module authority gone. */
+export const isModuleAuthorityDenied = (error: unknown) => error instanceof HttpError && error.status === 403 && error.message === deniedMessage;
 
 function requireGeneration(generation: number) {
   if (!Number.isSafeInteger(generation) || generation < 1 || generation >= Number.MAX_SAFE_INTEGER) throw new HttpError(409, "Module generation is invalid");
@@ -12,6 +16,8 @@ function requireGeneration(generation: number) {
  * Recheck captured module authority in the same D1 transaction as every read or
  * write. The deliberately invalid JSON path aborts the batch only when the
  * predicate is false, including when authority changes during a long request.
+ * Reads a module starts together (a Promise.all) go out as one batch between
+ * one pair of guards, so a projection's reads cost one D1 query, not one each.
  */
 function scopedDatabase(db: D1Database, predicate: Predicate): D1Database {
   const statements = new WeakMap<D1Statement, D1Statement>();
@@ -26,21 +32,24 @@ function scopedDatabase(db: D1Database, predicate: Predicate): D1Database {
       const results = await db.batch([guard(), ...originals, guard()]);
       return results.slice(1, -1);
     } catch (error) {
-      if (error instanceof Error && error.message.includes(denialMarker)) throw new HttpError(403, "Module authority changed; reload current state");
+      if (error instanceof Error && error.message.includes(denialMarker)) throw new HttpError(403, deniedMessage);
       throw error;
     }
   }
-  function wrap(original: D1Statement): D1Statement {
+  // Reads started in the same tick share one batch and one pair of guards; an authority denial fails them all.
+  const read = readCoalescer(execute, async (statement) => (await execute([statement]))[0]!, (error) => error instanceof HttpError);
+  function wrap(original: D1Statement, sql: string): D1Statement {
+    const coalesce = readOnlyStatement(sql);
     const statement: D1Statement = {
-      bind: (...values) => wrap(original.bind(...values)),
-      async first<T>() { return ((await execute([statement]))[0]?.results?.[0] as T | undefined) ?? null; },
-      async all<T>() { return (await execute([statement]))[0] as D1Result<T>; },
+      bind: (...values) => wrap(original.bind(...values), sql),
+      async first<T>() { return (((coalesce ? await read(statement) : (await execute([statement]))[0])?.results?.[0]) as T | undefined) ?? null; },
+      async all<T>() { return (coalesce ? await read(statement) : (await execute([statement]))[0]) as D1Result<T>; },
       async run() { return (await execute([statement]))[0] as D1Result; },
     };
     statements.set(statement, original);
     return Object.freeze(statement);
   }
-  return preserveDatabaseIdentity(Object.freeze({ prepare: (query: string) => wrap(db.prepare(query)), batch: execute }), db);
+  return preserveDatabaseIdentity(Object.freeze({ prepare: (query: string) => wrap(db.prepare(query), query), batch: execute }), db);
 }
 
 function moduleStatePredicate(moduleId: string, generation: number, requireSetup: boolean): Predicate {

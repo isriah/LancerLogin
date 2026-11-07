@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { prepareTestComposition } from "../scripts/test-plugin-sources.mjs";
 import { isolatedGitEnv } from "../scripts/git-env.mjs";
+import { passwordCredential } from "./fixtures/passwords.ts";
 
 const scratch = mkdtempSync(join(tmpdir(), "lancerlogin-plugin-worker-"));
 process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
@@ -168,7 +169,7 @@ test("first-Admin setup registers composed plugins at once, after earlier reques
   assert.equal((await fetch("/setup/status")).status, 200);
   assert.equal(db.count("SELECT COUNT(*) AS n FROM platform_module_catalog"), 0);
 
-  const created = await fetch("/setup/bootstrap", { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ setupCode, organizationName: "Synthetic", timeZone: "UTC", authMode: "local", localUsername: "admin", localPassword: "synthetic password 1234" }) });
+  const created = await fetch("/setup/bootstrap", { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ setupCode, organizationName: "Synthetic", timeZone: "UTC", authMode: "local", localUsername: "admin", localPasswordKey: await passwordCredential("synthetic password 1234") }) });
   assert.equal(created.status, 201, await created.clone().text());
   // Setup itself applies the plugin's migration and records the catalog; no scheduled pass is needed.
   assert.deepEqual(db.rows("SELECT module_id, name FROM platform_module_migrations WHERE module_id='example'"), [{ module_id: "example", name: "0001_create_example_tables.sql" }]);
@@ -258,4 +259,32 @@ test("a composed plugin sends email through Core's Resend connection and reads t
   assert.deepEqual(await call("/admin/example/notify", { body: { to: "guest@example.test", key: "2" }, dashboard: true }), { status: 502, body: { ready: true, timeZone, providerStatus: 422 } });
   assert.equal((await call("/admin/example/notify", { body: { to: "not an address", key: "3" }, dashboard: true })).status, 400);
   assert.equal(sent.length, 2);
+});
+
+test("a composed plugin's Discord rate limit arrives as a neutral 429 with Discord's delay, never as role sync", async (t) => {
+  const { db, call } = installation();
+  const { encryptIntegration } = await import("../apps/api/src/integration-crypto.ts");
+  let modules = await call("/platform/modules");
+  modules = await call("/admin/modules", { method: "PUT", body: { enabled: ["attendance", "example"], revision: modules.body.revision } });
+  db.raw.exec("INSERT INTO example_items(installation_id,id,title,created_at) VALUES ('primary','first','First item','2026-10-26T00:00:00.000Z')");
+  const generation = modules.body.modules.find((module: any) => module.id === "example").generation;
+  assert.equal((await call("/admin/modules/example/setup", { method: "PUT", body: { generation, stepId: "catalog", outcome: "completed" } })).status, 200);
+  const encrypted = await encryptIntegration({ botToken: "synthetic-bot-token", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  db.raw.exec("UPDATE installations SET discord_enabled=1 WHERE id='primary'");
+  db.raw.prepare("INSERT INTO encrypted_integrations(id,installation_id,provider,ciphertext,iv,updated_at,verified_at) VALUES ('discord','primary','discord',?,?,'2026-01-01','2026-01-02')").run(encrypted.ciphertext, encrypted.iv);
+
+  const asked: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (!url.startsWith("https://discord.com/api/")) throw new Error(`Unexpected provider request ${url}`);
+    asked.push(url);
+    return new Response(JSON.stringify({ message: "You are being rate limited.", retry_after: 9.2, global: false }), { status: 429, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  t.after(() => { globalThis.fetch = realFetch; });
+
+  const limited = await call("/admin/example/discord-events");
+  assert.deepEqual(limited, { status: 502, body: { providerStatus: 429, retryAfterMs: 9_200, message: "Discord is rate limiting requests. Try again in a few seconds." } });
+  assert.deepEqual(asked, ["https://discord.com/api/v10/guilds/123456789012345678/scheduled-events"], "a long delay is not waited out or retried in place");
+  assert.equal(JSON.stringify(limited.body).includes("synthetic-bot-token"), false);
 });

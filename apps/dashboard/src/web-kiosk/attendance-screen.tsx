@@ -322,8 +322,9 @@ export function AttendanceScreen({ api, store, pairing, releaseVersion, onPairin
 
   /** A PIN answer from the server: remember a lock it reports, and reload the roster where it is out of date. */
   function pinRefused(member: KioskMember, outcome: PinOutcome) {
-    if (outcome.kind !== "not_set" && outcome.lockedUntil) serverLocks.current.set(member.memberId, outcome.lockedUntil);
-    if (outcome.kind === "not_set" || outcome.kind === "locked" || outcome.lockedUntil) void loadRoster();
+    const lockedUntil = outcome.kind === "wrong" || outcome.kind === "locked" ? outcome.lockedUntil : undefined;
+    if (lockedUntil) serverLocks.current.set(member.memberId, lockedUntil);
+    if (outcome.kind === "not_set" || outcome.kind === "locked" || lockedUntil) void loadRoster();
     dispatch({ type: "pin_refused", outcome });
   }
 

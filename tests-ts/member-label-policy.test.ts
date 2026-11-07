@@ -51,7 +51,7 @@ test("regular attendance stays independent while percentage policies configure e
   const meetings = [1, 2, 3, 4, 5].map((value) => meeting(`required-${value}`, `2026-09-${20 + value}`, []));
   const observations = [observed("required-1", "a", "present"), observed("required-2", "a", "present"), observed("required-3", "a", "present"), observed("required-5", "a", "excused")];
   const excluded = evaluate({ members: [members[0]], changes, rules: [{ ...percentage(), labelId: "student", excusedHandling: "exclude", thresholdPercent: 75 }], meetings, observations, from: "2026-09-01" })[0];
-  assert.deepEqual(excluded.regularAttendance, { rate: 60, attended: 3, required: 5, from: "2026-09-01", to: "2026-10-01" });
+  assert.deepEqual(excluded.regularAttendance, { rate: 60, preciseRate: 60, attended: 3, required: 5, meetingsAttended: 3, meetingsRequired: 5, meetingsExcused: 1, from: "2026-09-01", to: "2026-10-01" });
   assert.equal(excluded.currentCompliance.rate, 75);
   assert.equal(excluded.currentCompliance.status, "met");
   assert.equal(excluded.historySummaries[0].rate, 75);
@@ -82,7 +82,7 @@ test("overlapping percentage policies are evaluated independently", () => {
 test("regular attendance uses required meeting weights even for a weekly policy", () => {
   const changes: LabelChange[] = [{ memberId: "a", labelId: "mentor", action: "add", effectiveDate: "2026-09-01" }];
   const result = evaluate({ members: [members[0]], changes, rules: [weekly("weekly", "2026-09-01", null, 1)], meetings: [meeting("heavy", "2026-09-21", [], true, 3), meeting("light", "2026-09-22", [], true, 1), meeting("optional", "2026-09-23", [], false, 20)], observations: [observed("light", "a", "present"), observed("optional", "a", "present")] })[0];
-  assert.deepEqual(result.regularAttendance, { rate: 25, attended: 1, required: 4, from: "2026-09-01", to: "2026-10-01" });
+  assert.deepEqual(result.regularAttendance, { rate: 25, preciseRate: 25, attended: 1, required: 4, meetingsAttended: 1, meetingsRequired: 2, meetingsExcused: 0, from: "2026-09-01", to: "2026-10-01" });
   assert.equal(result.currentCompliance.ruleType, "weekly_count");
 });
 

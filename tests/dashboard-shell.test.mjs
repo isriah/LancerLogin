@@ -402,16 +402,18 @@ test("reports are a routed workspace with a paginated leaderboard and saved repo
   assert.match(reports, /\/reports\/query/);
   assert.match(reports, /reportQuery\(filters\)/);
   assert.match(reports, /Historical membership/);
-  // Module filters such as Outreach labels render from the filter definitions their modules contribute.
-  assert.match(reports, /\{filter\.optionLabel\} matching/);
-  assert.match(reports, /searchLabel=\{`Search \$\{filter\.label\}`\}/);
+  // Module filters such as Outreach labels render from the filter definitions their modules contribute, as + Filter list filters.
+  const popovers = await readFile("apps/dashboard/src/report-filter-popover.tsx", "utf8");
+  assert.match(reports, /catalog\.reportFilters\.filter\(\(filter\) => supports\.has\(filter\.id\)\)/);
+  assert.match(reports, /<ReportChoiceFilter key=\{filter\.id\} title=\{filter\.label\}/);
+  assert.match(popovers, /<legend className="visually-hidden">\{title\} matching<\/legend>/);
   assert.match(reports, /moduleFilterSelection\(definition, filter\)/);
   assert.match(reports, /From<input type="date"/);
   assert.match(reports, /Meeting type<select/);
   assert.match(reports, /Active roster/);
-  assert.match(reports, /Team regular attendance trend/);
+  assert.match(reports, /Team overall rate trend/);
   const chart = await readFile("apps/dashboard/src/attendance-trend-chart.tsx", "utf8");
-  assert.match(chart, /role="group" aria-label="Team regular attendance trend"/);
+  assert.match(chart, /role="group" aria-label="Team overall rate trend"/);
   assert.match(chart, /<button[^>]+aria-label=\{`\$\{dates\[index\]\.full\}/);
   assert.match(chart, /aria-live="polite"/);
   assert.match(reports, /Review contest/);
@@ -428,7 +430,10 @@ test("reports are a routed workspace with a paginated leaderboard and saved repo
   assert.match(reports, /\/exports\/report-detail\.csv/);
   assert.match(reports, /ReportLeaveDialog/);
   assert.match(reports, /<span>Edit<\/span>/);
-  assert.match(reports, /Filters and report settings/);
+  // Filters live in the results table and the period in a heading chip; the old disclosure card is gone.
+  assert.doesNotMatch(reports, /Filters and report settings/);
+  assert.match(reports, /report-period-chip/);
+  assert.match(reports, /aria-label="Add filter"/);
   assert.doesNotMatch(reports, /className="tab-order"/);
   assert.match(styles, /\.report-filters/);
   assert.match(styles, /\.report-tabs/);
@@ -590,7 +595,8 @@ test("numeric organization settings can be cleared before they are normalized on
   assert.match(source, /lateScanMinutes\.trim\(\) === "" \? 0/);
   assert.match(source, /placeholder="0"/);
   assert.doesNotMatch(source, /discordContestWindowHours/);
-  assert.match(source, /Attendance reporting baseline/);
+  assert.match(source, /reportingStartLabel\("Attendance"\)/);
+  assert.match(source, /futureReportingStartWarning\(attendanceReportingStartsOn, initialBranding\.timeZone, "Attendance"\)/);
   assert.match(source, /attendanceReportingStartsOn: attendanceReportingStartsOn \|\| null/);
   assert.match(colors, /type="number"[^>]+placeholder="0"/);
 });

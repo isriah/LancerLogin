@@ -291,17 +291,28 @@ export async function requireModuleWorkspace(db: ModuleDatabase, userId: string,
   return row.generation;
 }
 
-export async function requireModuleService(db: ModuleDatabase, moduleId: string) {
-  const module = bundledModuleRegistry.get(moduleId);
-  if (!module?.available) throw new HttpError(409, "Module is unavailable in this release");
-  const row = await db.prepare(`SELECT m.generation FROM platform_modules m
+// The modules whose services may run: enabled, set up, and with the module selection completed.
+const serviceModulesFrom = `FROM platform_modules m
     JOIN platform_module_epochs me ON me.installation_id=m.installation_id AND me.module_id=m.module_id AND me.generation=m.generation
     JOIN platform_module_administration a ON a.installation_id=m.installation_id AND a.selection_completed=1
     JOIN platform_module_administration_epochs ae ON ae.installation_id=a.installation_id AND ae.revision=a.revision
-    WHERE m.installation_id=? AND m.module_id=? AND m.phase='enabled' AND m.setup_complete=1`)
+    WHERE m.installation_id=? AND m.phase='enabled' AND m.setup_complete=1`;
+
+export async function requireModuleService(db: ModuleDatabase, moduleId: string) {
+  const module = bundledModuleRegistry.get(moduleId);
+  if (!module?.available) throw new HttpError(409, "Module is unavailable in this release");
+  const row = await db.prepare(`SELECT m.generation ${serviceModulesFrom} AND m.module_id=?`)
     .bind(installationId, moduleId).first<{ generation: number }>();
   if (!row) throw new HttpError(409, `${module.label} is disabled`);
   return row.generation;
+}
+
+/** One read of every module requireModuleService would accept, for a scheduled pass: module ID to generation. */
+export function moduleServiceGenerationsStatement(db: ModuleDatabase) {
+  return db.prepare(`SELECT m.module_id AS moduleId, m.generation ${serviceModulesFrom}`).bind(installationId);
+}
+export function moduleServiceGenerations(rows: readonly { moduleId: string; generation: number }[] | undefined): ReadonlyMap<string, number> {
+  return new Map((rows ?? []).filter((row) => bundledModuleRegistry.get(row.moduleId)?.available).map((row) => [row.moduleId, Number(row.generation)]));
 }
 
 /** Service access while the module is enabled, before or after its setup is finished. */

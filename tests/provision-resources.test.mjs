@@ -28,6 +28,24 @@ test("generated Worker configuration is account-neutral until D1 discovery", () 
   assert.throws(() => buildProvisionConfig("example-club", [], "latest"), /Invalid release version/);
 });
 
+test("every generated Worker config has the scheduler Durable Object and its 5-minute watchdog cron together", async () => {
+  const { webUpgradeWorkerConfig } = await import("../scripts/run-web-upgrade.mjs");
+  const scheduler = { bindings: [{ name: "PLATFORM_SCHEDULER", class_name: "PlatformScheduler" }] };
+  const migrations = [{ tag: "platform-scheduler-v1", new_sqlite_classes: ["PlatformScheduler"] }];
+  const configs = {
+    "first provisioning": buildProvisionConfig("example-club", [], "1.2.3").config,
+    "provisioning with a D1 database": buildProvisionConfig("example-club", [{ name: "example-club-data", uuid: "fresh-adopter-database" }], "1.2.3").config,
+    // The alarm runs the jobs, but without the cron nothing re-arms an alarm a deploy or an error dropped.
+    "web update": webUpgradeWorkerConfig({ slug: "example-club", databaseId: "fresh-adopter-database", tag: "v1.2.3", repository: "example/private-install" }, "example-club-data", "marker"),
+  };
+  for (const [path, config] of Object.entries(configs)) {
+    assert.deepEqual(config.triggers, { crons: ["*/5 * * * *"] }, path);
+    assert.deepEqual(config.durable_objects, scheduler, path);
+    assert.deepEqual(config.migrations, migrations, path);
+  }
+  assert.equal(configs["web update"].vars.DEPLOYMENT_MARKER, "marker");
+});
+
 test("existing adopter D1 is bound after discovery", () => {
   const found = buildProvisionConfig("example-club", [{ name: "example-club-data", uuid: "fresh-adopter-database" }]);
   assert.equal(found.state, "exists");

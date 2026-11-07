@@ -346,6 +346,7 @@ function pinOutcome(member, result) {
   if (code === "pin_incorrect") setMemberFlow({ step: "wrong_pin", member, attemptsLeft: result.body.attemptsLeft, lockedUntil: result.body.lockedUntil }, { timeoutMs: pinIdleMs });
   else if (code === "pin_locked") setMemberFlow({ step: "locked", member, lockedUntil: result.body.lockedUntil }, { timeoutMs: pinIdleMs });
   else if (code === "pin_not_set") setMemberFlow({ step: "no_pin", member }, { timeoutMs: pinIdleMs });
+  else if (code === "pin_throttled") showFlowMessage("Please wait", result.body.error || "Too many wrong PINs. Try again in a few minutes.", member);
   else showFlowMessage("Input not accepted", result.body.error || "Ask an operator for help.");
 }
 async function submitDigits() {

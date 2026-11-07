@@ -113,8 +113,8 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /const backupSchemaVersion = 49;/);
-  assert.match(source, /backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49 }/);
+  assert.match(source, /const backupSchemaVersion = 50;/);
+  assert.match(source, /backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49, module_report_baselines: 50 }/);
   assert.match(source, /simulated_kiosk_sessions: { schema: 48, owner: "attendance" }/);
   assert.match(source, /tables\.simulated_kiosk_sessions = \[\];/);
   assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -16\)/);

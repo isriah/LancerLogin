@@ -1,3 +1,5 @@
+import { csvFieldFor, delimiterFor, mapCsvHeader, normaliseCsvHeader, parseDelimited } from "./csv-import.ts";
+
 export type RosterField = "memberId" | "firstName" | "lastName" | "email" | "discordUserId";
 export type RosterRecord = { memberId: string; firstName: string; lastName: string; email?: string; discordUserId?: string };
 export type RosterFieldHelp = { field: RosterField; label: string; required: boolean; example: string };
@@ -23,46 +25,21 @@ const rosterAliases: Record<string, RosterField> = {
   discorduserid: "discordUserId", discordid: "discordUserId", discord: "discordUserId",
 };
 
+const rosterHeaderSpec = { aliases: rosterAliases, labels: rosterFieldLabels, required: requiredRosterFields };
+
 export function normaliseRosterHeader(value: string): string {
-  return value.replace(/^﻿/, "").toLowerCase().replace(/[\s_.-]+/g, "");
+  return normaliseCsvHeader(value);
 }
 
 export function rosterFieldFor(header: string): RosterField | undefined {
-  return rosterAliases[normaliseRosterHeader(header)];
+  return csvFieldFor(rosterAliases, header);
 }
 
-export function delimiterFor(text: string): "," | "\t" {
-  return text.replace(/^﻿/, "").split(/\r\n|\n|\r/, 1)[0].includes("\t") ? "\t" : ",";
-}
-
-export function parseDelimited(text: string): string[][] {
-  const delimiter = delimiterFor(text);
-  const rows: string[][] = []; let row: string[] = []; let value = ""; let quoted = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (character === '"' && quoted && text[index + 1] === '"') { value += '"'; index += 1; }
-    else if (character === '"') quoted = !quoted;
-    else if (character === delimiter && !quoted) { row.push(value.trim()); value = ""; }
-    else if ((character === "\n" || character === "\r") && !quoted) { if (character === "\r" && text[index + 1] === "\n") index += 1; row.push(value.trim()); if (row.some(Boolean)) rows.push(row); row = []; value = ""; }
-    else value += character;
-  }
-  row.push(value.trim()); if (row.some(Boolean)) rows.push(row);
-  if (rows.length) rows[0][0] = rows[0][0].replace(/^﻿/, "");
-  return rows;
-}
+export { delimiterFor, parseDelimited };
 
 /** Maps a header row to roster fields. Unknown headers are ignored; duplicate and missing required fields are errors. */
 export function mapRosterHeader(header: string[]): { columns: (RosterField | undefined)[]; recognised: RosterField[]; ignored: string[]; errors: string[] } {
-  const columns = header.map(rosterFieldFor); const firstColumn = new Map<RosterField, string>(); const errors: string[] = []; const ignored: string[] = [];
-  header.forEach((name, index) => {
-    const field = columns[index];
-    if (!field) { if (name.trim()) ignored.push(name.trim()); return; }
-    const earlier = firstColumn.get(field);
-    if (earlier !== undefined) { errors.push(`Columns "${earlier}" and "${name}" both match ${rosterFieldLabels[field]}. Keep only one.`); columns[index] = undefined; }
-    else firstColumn.set(field, name);
-  });
-  for (const field of requiredRosterFields) if (!firstColumn.has(field)) errors.push(`Missing column: ${rosterFieldLabels[field]}`);
-  return { columns, recognised: columns.filter((field): field is RosterField => Boolean(field)), ignored, errors };
+  return mapCsvHeader(header, rosterHeaderSpec);
 }
 
 /** Parses pasted or uploaded roster text. Comma-separated text needs a header; tab-separated rows may omit it when they follow the template column order. */

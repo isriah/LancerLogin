@@ -446,7 +446,7 @@ async function recordPinAttendance(memberId, pin, generation) {
 async function onlinePinOutcome(member, result) {
   if (result.pinRefused) {
     if (result.lockedUntil) await pinFailures.recordLock(member.memberId, result.lockedUntil).catch(() => undefined);
-    return refusal({ pin_incorrect: 403, pin_locked: 423, pin_not_set: 409 }[result.code] ?? 400, result.code, result.error || "Wrong PIN.", { ...(Number.isInteger(result.attemptsLeft) ? { attemptsLeft: result.attemptsLeft } : {}), ...(result.lockedUntil ? { lockedUntil: result.lockedUntil } : {}) });
+    return refusal({ pin_incorrect: 403, pin_locked: 423, pin_not_set: 409, pin_throttled: 429 }[result.code] ?? 400, result.code, result.error || "Wrong PIN.", { ...(Number.isInteger(result.attemptsLeft) ? { attemptsLeft: result.attemptsLeft } : {}), ...(result.lockedUntil ? { lockedUntil: result.lockedUntil } : {}) });
   }
   await pinFailures.recordSuccess(member.memberId).catch(() => undefined);
   if (result.rejected) { await showDisplay("rejected", { detail: result.error || "Ask an operator for help." }); return { status: 200, body: { recorded: false, rejected: true } }; }

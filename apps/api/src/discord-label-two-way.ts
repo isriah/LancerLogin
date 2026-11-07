@@ -149,11 +149,19 @@ export async function hasTwoWayLabels(db: D1Database): Promise<boolean> {
   return Boolean(await db.prepare("SELECT 1 FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND x.sync_direction = 'two_way' AND l.active = 1 LIMIT 1").first());
 }
 
-/** Checks every active two-way label against one load of the server's members. */
-export async function pollTwoWayLabels(db: D1Database, server: TwoWayServer, deps: TwoWayDependencies): Promise<TwoWayPollResult[]> {
-  const rows = await db.prepare("SELECT x.label_id AS labelId FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND x.sync_direction = 'two_way' AND l.active = 1 ORDER BY l.name COLLATE NOCASE").all<{ labelId: string }>();
-  const results: TwoWayPollResult[] = [];
-  for (const row of rows.results ?? []) results.push(await pollTwoWayLabel(db, row.labelId, server, deps));
+/**
+ * Checks active two-way labels against one load of the server's members: up to `limit` of them, least recently checked
+ * first, so the next pass resumes with the labels this one left. `canContinue` ends the check early, for a pass budget.
+ */
+export async function pollTwoWayLabels(db: D1Database, server: TwoWayServer, deps: TwoWayDependencies, limit = Infinity, canContinue: () => boolean = () => true): Promise<TwoWayPollResult[]> {
+  const rows = await db.prepare("SELECT x.label_id AS labelId FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND x.sync_direction = 'two_way' AND l.active = 1 ORDER BY x.two_way_checked_at IS NOT NULL, x.two_way_checked_at, l.name COLLATE NOCASE").all<{ labelId: string }>();
+  const results: TwoWayPollResult[] = []; let checked = 0;
+  for (const row of rows.results ?? []) {
+    if (checked >= limit || !canContinue()) break;
+    const result = await pollTwoWayLabel(db, row.labelId, server, deps); results.push(result);
+    // A label that is busy or has a role sync running costs only its lease check, so it does not use up the limit.
+    if (result.status !== "busy" && result.status !== "syncing") checked += 1;
+  }
   return results;
 }
 

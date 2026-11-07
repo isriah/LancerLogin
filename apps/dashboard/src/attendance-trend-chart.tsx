@@ -27,10 +27,10 @@ export function AttendanceTrendChart({ points, timeZone }: { points: Point[]; ti
   }, [labelsKey]);
   const selected = points.findIndex((point) => point.meetingId === selectedId);
   const selectedIndex = selected < 0 ? points.length - 1 : selected;
-  return <><div className="trend-frame"><div className="trend-axis" aria-hidden="true"><span>100%</span><span>50%</span><span>0%</span></div><div ref={chart} className="trend-chart" data-split-dates={splitDates || undefined} role="group" aria-label="Team regular attendance trend">
+  return <><div className="trend-frame"><div className="trend-axis" aria-hidden="true"><span>100%</span><span>50%</span><span>0%</span></div><div ref={chart} className="trend-chart" data-split-dates={splitDates || undefined} role="group" aria-label="Team overall rate trend">
     {points.map((point, index) => <button className="ui-button trend-point" type="button" key={point.meetingId} aria-label={`${dates[index].full} - ${point.title}: ${point.rate}% attendance`} aria-pressed={selectedIndex === index} onFocus={() => setSelectedId(point.meetingId)} onClick={() => setSelectedId(point.meetingId)}>
       <span className="trend-plot"><span className="trend-bar" style={{ height: `${point.rate}%` }}><span className="trend-value">{point.rate}%</span></span></span>
       <small className="trend-date"><time dateTime={point.startsAt} aria-label={dates[index].full}><b className="trend-month">{dates[index].month}</b>{" "}<b className="trend-day">{dates[index].day}</b></time><i className="trend-date-measure" aria-hidden="true">{dates[index].month} {dates[index].day}</i></small>
     </button>)}
-  </div></div><p className="trend-detail" aria-live="polite">{points[selectedIndex] ? `${dates[selectedIndex].full} - ${points[selectedIndex].title}: ${points[selectedIndex].rate}% regular attendance` : "No eligible meetings in this period."}</p></>;
+  </div></div><p className="trend-detail" aria-live="polite">{points[selectedIndex] ? `${dates[selectedIndex].full} - ${points[selectedIndex].title}: ${points[selectedIndex].rate}% overall rate` : "No eligible meetings in this period."}</p></>;
 }

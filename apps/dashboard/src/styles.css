@@ -823,11 +823,14 @@ html[data-theme="dark"],html[data-theme="dark"] body { color: #f1f3f4; backgroun
 /* Compact help, operational tables, and settings controls. */
 .info-heading { display: inline-flex; align-items: center; gap: var(--space-2); margin: 0; }
 .info-heading h2 { margin: 0; }
+/* A term with its definition tip, such as a member-profile tile or report column heading. */
+.term-with-info { display: inline-flex; align-items: center; gap: var(--space-1); }
+.term-with-info .info-tip { color: var(--ui-text); font-size: var(--text-small); font-weight: 500; text-transform: none; }
 .info-tip { position: relative; display: inline-flex; flex: 0 0 auto; font-family: var(--font-body); }
 .info-tip > .info-tip-button { inline-size: var(--control-min-block-size); block-size: var(--control-min-block-size); min-inline-size: var(--control-min-block-size); min-block-size: var(--control-min-block-size); display: inline-grid; place-items: center; padding: 0; border: 0; color: var(--ui-text-muted); background: transparent; border-radius: 50%; font: 800 var(--text-caption)/1 var(--font-body); cursor: default; }
 .info-tip-glyph { inline-size: 1.35rem; block-size: 1.35rem; display: inline-grid; place-items: center; box-sizing: border-box; border: 1px solid var(--ui-border); background: var(--ui-surface-subtle); border-radius: 50%; cursor: help; }
 .info-tip-glyph:hover { border-color: var(--primary); color: var(--ui-text); }
-.info-tip-content { position: fixed; z-index: 70; inset: auto; left: var(--info-tip-left,1rem); top: var(--info-tip-top,1rem); width: min(20rem,calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; padding: var(--space-3); color: var(--ui-text); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--radius-card); box-shadow: 0 .75rem 2rem rgba(0,0,0,.25); font: 500 var(--text-small)/1.45 var(--font-body); text-transform: none; letter-spacing: normal; visibility: hidden; opacity: 0; pointer-events: none; }
+.info-tip-content { position: fixed; z-index: 70; inset: auto; left: var(--info-tip-left,1rem); top: var(--info-tip-top,1rem); width: min(20rem,calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; padding: var(--space-3); color: var(--ui-text); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--radius-card); box-shadow: 0 .75rem 2rem rgba(0,0,0,.25); font: 500 var(--text-small)/1.45 var(--font-body); text-align: start; white-space: normal; text-transform: none; letter-spacing: normal; visibility: hidden; opacity: 0; pointer-events: none; }
 .info-tip[data-open] .info-tip-content { visibility: visible; opacity: 1; }
 .field-label-with-info { display: flex; align-items: center; gap: var(--space-2); color: var(--ui-text); font-weight: 750; }
 .field-label-with-info > span:not(.info-tip) { color: var(--ui-text-muted); font-weight: 500; }
@@ -970,7 +973,7 @@ label { font-size: .9rem; }
   .report-row > span:first-child { grid-column: 1 / -1; }
   .report-row > span:nth-child(2),.report-row > span:nth-child(3),.report-row > span:nth-child(4) { display: grid; gap: .1rem; font-weight: 800; text-align: right; }
   .report-row > span:nth-child(2)::before,.report-row > span:nth-child(3)::before,.report-row > span:nth-child(4)::before { color: var(--muted); font-size: .68rem; font-weight: 700; text-transform: uppercase; }
-  .report-row > span:nth-child(2)::before { content: "Regular attendance"; }
+  .report-row > span:nth-child(2)::before { content: "Overall rate"; }
   .report-row > span:nth-child(3)::before { content: "Assigned policy"; }
   .report-row > span:nth-child(4)::before { content: "Policy history"; }
   .meeting-directory .responsive-table { overflow: hidden; }
@@ -2089,6 +2092,7 @@ input.ui-checkbox:disabled { cursor: not-allowed; opacity: .6; }
 .report-view-state { flex: 1 1 12rem; }
 .report-menu { position: relative; flex: 0 0 auto; }
 .report-menu-icon { flex: 0 0 auto; width: 1em; height: 1em; margin-left: auto; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.report-menu:not([open]) > .report-menu-panel { display: none; }
 .report-menu-panel { position: absolute; right: 0; top: calc(100% + var(--space-2)); z-index: 25; display: grid; gap: var(--space-2); width: min(23rem,calc(100vw - 3rem)); max-height: 50vh; overflow: auto; padding: var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-surface); border-radius: var(--radius-card); box-shadow: 0 var(--space-2) var(--space-6) color-mix(in srgb,var(--ui-text) 16%,transparent); }
 .report-results-toolbar > .report-menu:first-child .report-menu-panel { right: auto; left: 0; }
 .report-menu-panel p { margin: 0; font-size: var(--text-small); line-height: 1.5; }
@@ -2101,7 +2105,45 @@ input.ui-checkbox:disabled { cursor: not-allowed; opacity: .6; }
 .report-filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-width: 0; }
 .report-filter-chips:empty { display: none; }
 .report-filter-chips .report-filter-chip { display: inline-flex; gap: var(--space-2); align-items: center; max-width: 100%; text-align: left; overflow-wrap: anywhere; white-space: normal; font-size: var(--text-small); }
-.report-filter-chip > span { margin-left: auto; }
+.report-filter-chip > span { min-width: 0; }
+/* A report is one card: name, scope and period chip, row count and filter chips, then the toolbar and table. */
+.report-merged { gap: var(--space-3); }
+.report-merged .report-control-actions:empty { display: none; }
+.report-results-meta { margin: 0; color: var(--ui-text-muted); font-size: var(--text-small); line-height: 1.5; overflow-wrap: anywhere; }
+.report-results-body { display: grid; gap: var(--space-3); min-width: 0; }
+.report-merged .report-results-toolbar { border-top: 1px solid var(--ui-border); padding-top: var(--space-3); }
+.report-scope-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.app button.report-period-chip { gap: var(--space-2); min-height: 2.25rem; padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); }
+.app button.report-period-chip .report-action-icon { width: 1rem; height: 1rem; }
+.app button.report-period-chip .report-disclosure-icon { transform: rotate(90deg); margin-left: 0; }
+.report-results .report-column-header { gap: var(--space-1); }
+.app button.report-column-filter-button { display: inline-grid; place-items: center; flex: 0 0 2rem; width: 2rem; height: 2rem; min-height: 2rem; padding: 0; border: 1px solid transparent; color: var(--ui-text-muted); background: transparent; border-radius: var(--radius-control); cursor: pointer; }
+.app button.report-column-filter-button:hover,.app button.report-column-filter-button[aria-expanded="true"] { border-color: var(--primary); color: var(--ui-text); background: var(--ui-surface); }
+.app button.report-column-filter-button.is-active { border-color: var(--primary); color: var(--ui-text); background: color-mix(in srgb,var(--primary) 34%,var(--ui-surface)); }
+.app button.report-column-filter-button.is-active .report-column-icon { fill: currentColor; }
+.app button.report-column-filter-button:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: -1px; }
+.app button.report-add-filter-button { gap: var(--space-2); flex: 0 0 auto; }
+.report-column-filtered-mark { display: inline-flex; }
+/* Above the phone layout a filtered column's own funnel button is highlighted, so the trigger leaves out its mark. */
+@media (min-width: 761px) { .report-column-header:has(.report-column-filter-button) .report-column-filtered-mark { display: none; } }
+.report-filter-chips .report-filter-chip { justify-content: flex-start; }
+.report-filter-chip-group { display: inline-flex; align-items: stretch; max-width: 100%; }
+.report-filter-chips .report-filter-chip-group .report-filter-chip { border-radius: var(--radius-control) 0 0 var(--radius-control); border-right: 0; }
+.app button.report-filter-chip-remove { min-width: var(--control-min-block-size); padding: 0 var(--space-2); border-radius: 0 var(--radius-control) var(--radius-control) 0; font-size: 1.15rem; color: var(--ui-text-muted); }
+.report-filter-chip.is-active { border-color: var(--primary); }
+.report-filter-chip small { color: var(--ui-text-muted); font-size: var(--text-caption); font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.report-filter-chip .report-column-icon { color: var(--ui-text-muted); }
+/* Filter popovers reuse the column popover; each is a form whose Apply submits it. */
+.report-filter-form { display: grid; gap: var(--space-2); margin: 0; }
+.report-filter-popover-actions { display: flex; justify-content: flex-end; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--ui-border); }
+.report-filter-popover-help { margin: 0; color: var(--ui-text-muted); font-size: var(--text-small); line-height: 1.45; }
+.report-column-filter select { width: 100%; min-height: var(--control-min-block-size); padding: var(--space-2) var(--space-3); border: 1px solid var(--ui-border); color: var(--ui-text); background-color: var(--ui-surface-subtle); border-radius: var(--radius-control); }
+.report-column-category-heading > span { margin-left: auto; }
+.report-column-category .report-filter-tag { padding: 0 var(--space-2); border: 1px solid var(--primary); color: var(--ui-text); border-radius: var(--radius-pill); font-weight: 700; }
+.report-filter-match,.report-filter-choices { display: flex; flex-wrap: wrap; gap: var(--space-2); min-width: 0; margin: 0; padding: 0; border: 0; }
+.report-filter-choices { display: grid; gap: 0; }
+.report-filter-match label { display: flex; align-items: center; gap: var(--space-2); min-height: var(--control-min-block-size); font-weight: 500; }
+.report-column-popover .report-filter-option-list { max-height: 12rem; overflow: auto; }
 .report-results .report-pagination { padding: 0; }
 .report-results .report-table-scroll { max-height: min(60vh,40rem); overflow: auto; border: 1px solid var(--ui-border); border-radius: var(--radius-control); scroll-padding-top: 4rem; }
 .report-results .report-table-data { border-collapse: separate; border-spacing: 0; }
@@ -2134,6 +2176,15 @@ input.ui-checkbox:disabled { cursor: not-allowed; opacity: .6; }
   .report-results-search { flex-basis: 100%; }
   .report-pagination label { flex: 1 1 100%; white-space: nowrap; justify-content: space-between; }
   .report-results-toolbar > .report-menu,.report-results-toolbar > button { flex: 1; }
+  .app button.report-column-filter-button { display: none; }
+  /* Menus in the shared toolbar row and the heading open from the row's edge, so their panels stay on screen. */
+  .report-results-toolbar,.report-builder-heading { position: relative; }
+  .report-results-toolbar > .report-menu,.report-builder-heading-actions > .report-menu { position: static; }
+  .report-merged .report-builder-heading { align-items: stretch; }
+  .report-merged .report-builder-heading-actions { margin-left: 0; justify-content: flex-start; }
+  .report-results-toolbar > .report-add-column-button { flex: 1 1 100%; }
+  .report-filter-chip-group { flex: 1 1 100%; }
+  .report-filter-chips .report-filter-chip-group .report-filter-chip { flex: 1 1 auto; }
   .report-results-toolbar .report-menu-panel { right: auto; left: 0; }
   .report-control-actions > .report-menu { margin-left: 0; width: 100%; }
   .report-results .report-table-data th:first-child,.report-results .report-table-data td:first-child { min-width: 8rem; max-width: 10rem; }
@@ -2208,3 +2259,100 @@ input.ui-checkbox:disabled { cursor: not-allowed; opacity: .6; }
 .module-access-row[data-status="granted"] .module-access-status { color: var(--ui-success); }
 .module-access-row[data-status="outdated"] .module-access-status { color: var(--ui-warning); }
 .module-access .settings-notice:focus { outline: 2px solid var(--ui-focus); outline-offset: 2px; }
+
+/* CSV import previews (meetings; shared with module imports): skip and error badges, the Import CSV toolbar column, the
+   Matching rows switch, compact per-row Skip/Update selects, one-line fixed-height rows and old → new values. */
+.change-badge.skip { color: var(--muted); background: var(--surface-soft); }
+.change-badge.error { color: var(--ui-error); background: var(--ui-error-surface); }
+/* A third toolbar column for Import CSV, just left of the primary action. */
+.app .compact-table-controls.has-import-action { grid-template-columns: minmax(0,1fr) auto auto; }
+.meeting-browser-controls > button.ui-button:not(.ui-button--primary) { height: var(--control-min-block-size); }
+.import-row-flags { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.import-row-flags .ui-status { display: inline-block; padding: .22rem .42rem; border-radius: var(--radius-pill); font-size: .68rem; font-weight: 850; }
+.import-row-note { margin-left: var(--space-2); color: var(--ui-text-muted); font-size: var(--text-caption); }
+.import-preview-table td.import-issue-error { color: var(--ui-error); }
+/* Duplicate handling: the dashboard's segmented .meeting-view-toggle, with text choices. */
+/* "Matching rows: Skip all / Update all": a compact .meeting-view-toggle sharing a line with the recognised-columns note. */
+.import-preview-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); }
+.import-preview-bar > .roster-import-recognised { flex: 1 1 18rem; min-width: 0; }
+.import-match-bulk { display: flex; flex: 0 0 auto; align-items: center; gap: var(--space-2); }
+.meeting-view-toggle.import-match-choice { display: flex; align-items: center; gap: var(--space-2); min-width: 0; margin: 0; }
+.dashboard-page .meeting-view-toggle.import-match-choice legend { float: left; margin: 0; padding: 0; color: var(--ui-text-muted); font-size: var(--text-caption); font-weight: 750; }
+.meeting-view-toggle.import-match-choice > div { display: inline-grid; width: auto; height: auto; }
+.roster-import-dialog .meeting-view-toggle.import-match-choice label { display: flex; min-height: 0; padding: .22rem .6rem; font-size: var(--text-caption); font-weight: 850; line-height: 1.2; }
+.import-match-state { color: var(--ui-text-muted); font-size: var(--text-caption); }
+/* One-line rows: fixed Change column, no wrapping; the table scrolls inside .table-scroll. */
+.import-preview-table th,.import-preview-table td { white-space: nowrap; }
+.import-preview-table th:first-child,.import-preview-table td:first-child { width: 7.5rem; min-width: 7.5rem; max-width: 7.5rem; }
+.import-preview-table .import-row-flags { flex-wrap: nowrap; }
+/* A fixed row height, so badge, select and text rows match exactly instead of differing by sub-pixels. */
+.import-preview-table tbody td { height: 3rem; vertical-align: middle; }
+/* Per-row Skip/Update: a compact select sized and toned like .change-badge. */
+.roster-import-dialog select.import-row-select { display: inline-block; width: auto; min-width: 0; height: auto; min-height: 0; margin: 0; padding: .22rem 1.35rem .22rem .5rem; border: 0; border-radius: var(--radius-pill); font-size: .68rem; font-weight: 850; line-height: normal; vertical-align: baseline; background-image: linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%); background-position: calc(100% - .75rem) 55%,calc(100% - .52rem) 55%; background-size: .24rem .24rem,.24rem .24rem; background-repeat: no-repeat; }
+.roster-import-dialog select.import-row-select.skip { color: var(--muted); background-color: var(--surface-soft); }
+.roster-import-dialog select.import-row-select.update { color: #6f4b00; background-color: #fff0bf; }
+.roster-import-dialog select.import-row-select:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
+.import-row-select option { color: var(--ui-text); background: var(--ui-surface); }
+.import-change del { color: var(--ui-text-muted); text-decoration: line-through; }
+.import-change ins { color: var(--ui-text); text-decoration: none; font-weight: 700; }
+.import-change .import-arrow { color: var(--ui-text-muted); }
+.import-preview-summary { margin: 0; }
+@media (max-width: 760px) {
+  .app .compact-table-controls.has-import-action { grid-template-columns: 1fr; }
+  .meeting-browser-controls > button.ui-button { width: 100%; }
+}
+
+
+/* Attendance by label: a heading row over each label's column set, status pills and worked-example tips. */
+.report-label-sets .report-label-group-row th { color: var(--ui-text); font-size: var(--text-small); text-transform: none; padding-block: var(--space-2); white-space: normal; }
+.report-results .report-label-sets .report-label-group-row th { position: static; }
+.report-results .report-label-sets .report-label-group-row th:first-child { position: sticky; top: auto; }
+.report-label-sets .report-set-start { border-left: 1px solid var(--ui-border); }
+/* The heading slides along its set while the table scrolls sideways, just right of the sticky Member column. */
+.report-set-heading { position: sticky; left: calc(10rem + var(--space-3)); display: inline-flex; width: max-content; max-width: 100%; align-items: center; justify-content: flex-start; gap: var(--space-3); }
+@media (max-width: 760px) { .report-set-heading { left: calc(8rem + var(--space-3)); max-width: min(100%, 11rem); flex-wrap: wrap; gap: var(--space-1) var(--space-2); } }
+.report-set-heading > span:first-child { display: grid; gap: 0; }
+.report-set-heading small { color: var(--ui-text-muted); font-size: var(--text-caption); font-weight: 500; }
+.report-set-weighted { display: inline-flex; align-items: center; gap: 0; }
+.report-label-sets td .ui-status { white-space: nowrap; }
+.report-label-sets td[data-value-kind="number"] { font-variant-numeric: tabular-nums; }
+.report-weight-note { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.calc-tip { display: grid; gap: var(--space-2); white-space: normal; text-align: left; }
+.calc-tip > strong { font-weight: 700; }
+.calc-example { margin: 0; padding-top: var(--space-2); border-top: 1px solid var(--ui-border); }
+.calc-disclosure { margin-top: var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--ui-border); border-radius: var(--radius-card); background: var(--ui-surface-subtle); }
+.calc-disclosure > summary { min-height: var(--control-min-block-size); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); cursor: pointer; font-weight: 700; list-style: none; }
+.calc-disclosure > summary::-webkit-details-marker { display: none; }
+.calc-disclosure > summary::after { content: "+"; flex: none; }
+.calc-disclosure[open] > summary::after { content: "−"; }
+.calc-disclosure > summary:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
+.calc-disclosure[open] > summary { margin-bottom: var(--space-3); }
+.calc-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); gap: var(--space-4); }
+.calc-groups section { display: grid; align-content: start; gap: var(--space-2); }
+.calc-groups h3, .calc-preview h3 { margin: 0; font-family: var(--font-body); font-size: var(--text-body); font-weight: 700; display: flex; align-items: center; gap: var(--space-2); }
+.calc-groups p, .calc-preview p { margin: 0; line-height: 1.5; }
+.calc-steps { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; font-size: var(--text-small); }
+.calc-steps li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-height: 2rem; border-bottom: 1px solid var(--ui-border); }
+.calc-steps li:last-child { border-bottom: 0; }
+.calc-steps li > span:first-child { color: var(--ui-text-muted); }
+.calc-steps b { font-variant-numeric: tabular-nums; }
+.calc-steps .calc-result > span:first-child { color: var(--ui-text); font-weight: 700; }
+.calc-steps .calc-result b { color: var(--primary); }
+.calc-preview { grid-column: 1 / -1; display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--ui-border); border-left: 3px solid var(--primary); border-radius: var(--radius-card); background: var(--ui-surface-subtle); }
+.label-period-list .calc-inline { display: block; margin-top: var(--space-1); color: var(--ui-text-muted); font-size: var(--text-small); }
+.leaderboard-basis { margin: 0 0 var(--space-2); }
+.app .compact-leaderboard .report-row > span.leaderboard-rate-cell { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+.report-start-group { margin: var(--space-4) 0 var(--space-2); color: var(--ui-text-muted); font-family: var(--font-body); font-size: var(--text-caption); text-transform: uppercase; display: flex; align-items: center; gap: var(--space-2); }
+.report-preset-card.is-open { grid-column: 1 / -1; border-color: var(--primary); }
+.report-preset-card.is-open > div { width: 100%; gap: var(--space-3); }
+.report-preset-labels { margin: 0; padding: var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-card); }
+.report-preset-labels legend { padding: 0 var(--space-1); font-weight: 700; }
+.report-preset-labels .report-column-option span, .report-column-popover .report-column-option span:has(> small) { display: grid; gap: 0; }
+.report-preset-labels .report-column-option small { display: block; color: var(--ui-text-muted); font-size: var(--text-caption); }
+.report-preset-labels .report-column-option.is-unavailable { opacity: .6; cursor: not-allowed; }
+.report-preset-adds { display: grid; gap: var(--space-1); font-size: var(--text-small); }
+.report-preset-adds span { color: var(--ui-text-muted); }
+.report-preset-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: var(--space-3); }
+.report-preset-row label { display: grid; gap: var(--space-1); }
+.report-preset-actions { display: flex; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; }
+.report-column-category--set { border: 1px solid var(--primary); }

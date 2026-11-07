@@ -46,6 +46,12 @@ for (const { viewport, theme } of pairedViews) {
       await expect(page.getByRole("heading", { level: 2 })).toHaveCount(1);
       await expect(page.getByText(/Roster readiness/i)).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Back" })).toBeDisabled();
+      const reportingStart = page.getByLabel("Attendance reporting start date (operational baseline)");
+      await expect(page.getByText("This is a start date, not an end date.", { exact: false })).toBeVisible();
+      await reportingStart.fill("2026-12-31");
+      await expect(page.getByText(/Attendance reports that use the operational baseline will show nothing until 2026-12-31\./)).toBeVisible();
+      await reportingStart.fill("");
+      await expect(page.getByText(/will show nothing until/)).toHaveCount(0);
       const next = page.getByRole("button", { name: "Save and continue" });
       await expect(next).toBeVisible();
       await next.click();
@@ -224,6 +230,10 @@ test("first-Admin setup with a password signs the new Admin straight in", async 
   await expect(page.getByRole("heading", { name: "Welcome back" })).toHaveCount(0);
   expect(localSignIns).toBe(0);
   expect(payload).toMatchObject({ organizationName: "Reference Arts Collective", timeZone: "Europe/London", authMode: "local", localUsername: "director" });
+  // The browser hashes the password: setup sends a fresh salt and K, never the password itself.
+  expect(payload?.localPassword).toBeUndefined();
+  expect(payload?.localPasswordKey).toEqual({ salt: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/), key: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
+  expect(JSON.stringify(payload)).not.toContain("correct-horse-battery");
   // Without a Worker-reported default the new installation shows the release colors.
   await expect(page.locator(".app")).toHaveCSS("--primary", "#b80100");
   await expect(page.locator(".app")).toHaveCSS("--secondary", "#eeb822");
@@ -347,4 +357,29 @@ test("Admin can move back, skip optional integrations, and finish Attendance set
     { generation: 1, stepId: "discord", outcome: "skipped" },
   ]);
   await expectResponsiveFit(page, responsiveFit);
+});
+
+test("local sign-in hashes in the browser, loads scrypt only when it is needed, and upgrades a legacy account", async ({ page }) => {
+  await configureSignIn(page, "local");
+  const scryptRequests: string[] = [];
+  page.on("request", (request) => { if (/scrypt|password-key/.test(request.url())) scryptRequests.push(request.url()); });
+  const bodies: Record<string, unknown>[] = [];
+  let legacy = true;
+  await page.route("**/auth/local/params", (route) => route.fulfill({ json: { algorithm: "scrypt", N: 32768, r: 8, p: 1, dkLen: 32, salt: "AQEBAQEBAQEBAQEBAQEBAQ", legacy } }));
+  await page.route("**/auth/local", (route) => { bodies.push(route.request().postDataJSON() as Record<string, unknown>); return route.fulfill({ status: 401, json: { error: "Invalid username or password" } }); });
+  await page.goto("/dashboard");
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  expect(scryptRequests, "the sign-in page does not load scrypt until someone signs in").toEqual([]);
+  await page.getByLabel("Username").fill("admin");
+  await page.getByLabel("Password").fill("correct horse battery staple");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("alert")).toContainText("Invalid username or password");
+  expect(scryptRequests.length).toBeGreaterThan(0);
+  // Known answer: scrypt(N=32768, r=8, p=1) of this password with sixteen 0x01 bytes, as the Worker's legacy rows hold it.
+  const knownKey = "IFdK3Vz60pX0K9XA3OdzWkl1cNBPYBtHHZ6y-_JLnSU";
+  expect(bodies[0]).toEqual({ username: "admin", key: knownKey, salt: "AQEBAQEBAQEBAQEBAQEBAQ", password: "correct horse battery staple" });
+  legacy = false;
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect.poll(() => bodies.length).toBe(2);
+  expect(bodies[1], "a migrated account never sends its password").toEqual({ username: "admin", key: knownKey });
 });

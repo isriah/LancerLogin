@@ -15,8 +15,10 @@ import { omitContestResubmissionFields } from "./fixtures/backup-versions.ts";
 import { syntheticAddonModule, syntheticNotesModule } from "./fixtures/synthetic-plugin/external-manifests.ts";
 import { syntheticAddonApiModule, syntheticNotesApiModule } from "./fixtures/synthetic-plugin/external-modules.ts";
 
-// The envelope Core exports now, at schema 49.
+// The envelope Core exports now, at schema 50.
 const golden = JSON.parse(readFileSync(new URL("./fixtures/first-party-backup-envelope.json", import.meta.url), "utf8"));
+// The envelope Core exported at schema 49, before each module's reporting start date joined installation backups.
+const schema49Golden = JSON.parse(readFileSync(new URL("./fixtures/first-party-backup-envelope-schema-49.json", import.meta.url), "utf8"));
 // The envelope Core exported at schema 48, before Core's FIRST credentials joined installation backups.
 const schema48Golden = JSON.parse(readFileSync(new URL("./fixtures/first-party-backup-envelope-schema-48.json", import.meta.url), "utf8"));
 // The envelope Core exported at schema 47, before the browser simulator was removed.
@@ -30,6 +32,8 @@ const schema44 = (envelope: any) => ({ ...envelope, ownership: { ...envelope.own
 // Tables removed after the schema 47 envelope: the browser simulator's sessions (schema 48, migration 0092).
 const schema48 = (envelope: any) => ({ ...envelope, ownership: { ...envelope.ownership, modules: envelope.ownership.modules.map((module: { tables: string[] }) => ({ ...module, tables: module.tables.filter((table) => table !== "simulated_kiosk_sessions") })) }, tables: envelope.tables.filter((table: string) => table !== "simulated_kiosk_sessions") });
 // Core tables added after the schema 48 envelope: the FIRST connection's credentials (schema 49, migration 0093).
+// Core tables added after the schema 49 envelope: each module's reporting start date (schema 50, migration 0096).
+const schema50 = (envelope: any) => ({ ...envelope, ownership: { ...envelope.ownership, core: { ...envelope.ownership.core, tables: envelope.ownership.core.tables.filter((table: string) => table !== "module_report_baselines") } }, tables: envelope.tables.filter((table: string) => table !== "module_report_baselines") });
 const schema49 = (envelope: any) => ({ ...envelope, ownership: { ...envelope.ownership, core: { ...envelope.ownership.core, tables: envelope.ownership.core.tables.filter((table: string) => table !== "first_credentials") } }, tables: envelope.tables.filter((table: string) => table !== "first_credentials") });
 const without = (envelope: any, moduleId: string, prefix: string) => ({ ...envelope, ownership: { ...envelope.ownership, modules: envelope.ownership.modules.filter((module: { id: string }) => module.id !== moduleId) }, tables: envelope.tables.filter((table: string) => !table.startsWith(prefix)) });
 const pluginRegistry = createModuleRegistry([...firstPartyModules, syntheticNotesModule, syntheticAddonModule]);
@@ -51,16 +55,17 @@ test("plugin-free builds keep the first-party backup envelope and an empty plugi
   const db = new BackupDatabase(); t.after(() => db.raw.close()); const client = backupClient(worker, db);
   for (const scope of ["meetings", "roster", "installation"] as const) {
     const backup = await client.backup(scope);
-    assert.equal(backup.schemaVersion, 49);
-    assert.deepEqual(backup.ownership, golden[scope].ownership, `${scope} ownership matches the schema 49 envelope`);
+    assert.equal(backup.schemaVersion, 50);
+    assert.deepEqual(backup.ownership, golden[scope].ownership, `${scope} ownership matches the schema 50 envelope`);
     assert.deepEqual(Object.keys(backup.tables), golden[scope].tables);
     // Schema 43 differs from the schema 41 and 42 envelope only by Carpool, and schema 44 from schema 43 only by Outreach:
     // each moved into a plugin with its own section. Schema 48 differs from schema 47 only by the simulator's sessions, and
-    // schema 49 from schema 48 only by the FIRST credentials.
+    // schema 49 from schema 48 only by the FIRST credentials, and schema 50 from schema 49 only by the reporting start dates.
     assert.deepEqual(without(historicalGolden[scope], "carpool", "carpool_"), schema43Golden[scope]);
     assert.deepEqual(without(schema43Golden[scope], "hour-tracking", "hours_"), schema44(schema47Golden[scope]));
     assert.deepEqual(schema48(schema47Golden[scope]), schema48Golden[scope]);
-    assert.deepEqual(schema49(golden[scope]), schema48Golden[scope]);
+    assert.deepEqual(schema49(schema49Golden[scope]), schema48Golden[scope]);
+    assert.deepEqual(schema50(golden[scope]), schema49Golden[scope]);
     // Core still recognizes the historical metadata and Core-section tables of both modules exactly.
     assert.deepEqual(historicalGolden[scope].ownership.modules.slice(1), extractedModuleOwnership(scope, 42));
     assert.deepEqual(schema43Golden[scope].ownership.modules.slice(1), extractedModuleOwnership(scope, 43));
@@ -88,14 +93,14 @@ test("a schema 47 installation backup restores and ignores its browser simulator
   assert.equal((await client.restore(incomplete)).status, 400);
 });
 
-test("schema 49 installation backups carry the FIRST credential; older backups restore without one", async (t) => {
+test("schema 50 installation backups carry the FIRST credential; older backups restore without one", async (t) => {
   const db = new BackupDatabase(); t.after(() => db.raw.close()); const client = backupClient(worker, db);
   const encrypted = await encryptIntegration({ token: "synthetic-frc-token" }, sessionSecret);
   db.raw.prepare("INSERT INTO first_credentials(installation_id,program,username,ciphertext,iv,checked_at,updated_at) VALUES('primary','FRC','test-frc-user',?,?,'2026-10-31T00:00:00.000Z','2026-10-31T00:00:00.000Z')").run(encrypted.ciphertext, encrypted.iv);
   db.raw.exec("INSERT INTO first_team_cache(installation_id,program,number,name,location,season,source,checked_ms) VALUES('primary','FRC','321','Test Robotics A','Testville, PA',2026,'events-api',1); INSERT INTO first_seasons VALUES('primary','FRC',2026,1); INSERT INTO first_requests VALUES('primary','events-api','synthetic',1)");
   const credential = db.rows("SELECT * FROM first_credentials")[0];
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 49);
+  assert.equal(backup.schemaVersion, 50);
   assert.deepEqual(backup.tables.first_credentials, [credential]);
   assert.equal(JSON.stringify(backup).includes("synthetic-frc-token"), false, "only the ciphertext travels");
   for (const table of ["first_team_cache", "first_seasons", "first_requests"]) assert.equal(table in backup.tables, false, `${table} is never backed up`);

@@ -50,7 +50,7 @@ test("Saved reports retain summary and detailed attendance CSV exports", async (
     status: 200,
     contentType: "text/csv",
     headers: { "content-disposition": 'attachment; filename="report.csv"' },
-    body: "Member,Regular attendance\nAvery Stone,100%\n",
+    body: "Member,Overall rate\nAvery Stone,100%\n",
   }));
   await page.route("**/exports/report-detail.csv", (route) => route.fulfill({
     status: 200,
@@ -69,7 +69,7 @@ test("Saved reports retain summary and detailed attendance CSV exports", async (
   await page.getByRole("button", { name: "Download report CSV" }).click();
   const summaryFile = await summary;
   expect(summaryFile.suggestedFilename()).toMatch(/^lancerlogin-attendance-review-\d{4}-\d{2}-\d{2}\.csv$/);
-  expect(await readFile((await summaryFile.path())!, "utf8")).toBe("Member,Regular attendance\nAvery Stone,100%\n");
+  expect(await readFile((await summaryFile.path())!, "utf8")).toBe("Member,Overall rate\nAvery Stone,100%\n");
   await exportMenu.locator("summary").click();
   const detail = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download detailed attendance CSV" }).click();

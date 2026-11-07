@@ -25,8 +25,13 @@ export type CoreModuleServices = {
   readonly discord: {
     ready(): Promise<boolean>;
     client(): Promise<{ readonly guildId: string; request<T = Record<string, unknown>>(path: string, init: RequestInit): Promise<{ readonly body: T }> }>;
-    /** HTTP status of a Discord response failure, or undefined for any other error. */
+    /**
+     * HTTP status of a Discord response failure, or undefined for any other error. A rate limit is 429; its message says
+     * "Discord is rate limiting requests", so a module can show its own wording instead.
+     */
     providerStatus(error: unknown): number | undefined;
+    /** Milliseconds Discord asked to wait after a rate limit, or undefined for any other error (SDK 1.3.0). */
+    retryAfterMs(error: unknown): number | undefined;
   };
   /** One message at a time through the installation's verified Resend connection. Core keeps the API key and From address. */
   readonly email: {
@@ -87,7 +92,14 @@ export type ModuleRouteContext<Environment> = {
 /** Return undefined when the route family is declared but this exact request is not handled. */
 export type ModuleRouteHandler<Environment> = (context: ModuleRouteContext<Environment>) => Promise<Response | undefined>;
 
-export type ModuleJobContext<Environment> = { readonly env: Environment; readonly db: D1Database; readonly services: CoreModuleServices };
+/**
+ * The scheduler slice a job runs in (module SDK 1.6.0). `steps` is true when the job may do one step of its work per
+ * slice: it resolves `{ more: true, cursor: "<next step>" }` and gets that `cursor` back on its next run, a second later.
+ * Each Durable Object slice must fit the Workers Free plan's 10 ms CPU, and every D1 query and provider request costs
+ * part of it. Without `steps` (the cron fallback), the job does all its steps in one run.
+ */
+export type ModuleJobScheduler = { readonly steps: boolean; readonly cursor?: string };
+export type ModuleJobContext<Environment> = { readonly env: Environment; readonly db: D1Database; readonly services: CoreModuleServices; readonly scheduler?: ModuleJobScheduler };
 export type ModuleSetupBinding = {
   readonly predicates: Readonly<Record<string, (installationId: string) => SqlPredicate>>;
   readonly stepValid: (db: D1Database, stepId: string) => Promise<boolean>;

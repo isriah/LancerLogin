@@ -3,6 +3,9 @@ import { createServer } from "node:http";
 import { defaultModuleSnapshot } from "./default-module-snapshot.mjs";
 
 const port = Number(process.env.LANCERLOGIN_MOCK_PORT ?? 8787);
+// Browser-side password hashing: the dashboard asks for the account's salt before it computes K and signs in.
+const passwordParamsPaths = new Set(["/auth/local/params", "/admin/plugins/reauthenticate/params"]);
+const previewPasswordParams = { algorithm: "scrypt", N: 32768, r: 8, p: 1, dkLen: 32, salt: "AQEBAQEBAQEBAQEBAQEBAQ", legacy: false };
 const now = Date.now();
 const iso = (offsetMinutes) => new Date(now + offsetMinutes * 60_000).toISOString();
 const logo = `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="120"><text x="80" y="82" fill="white" font-size="72" font-family="sans-serif" font-weight="700">NOVA</text></svg>').toString("base64")}`;
@@ -26,9 +29,9 @@ const reportColumns = [
   { key: "core.member.name", label: "Member", group: "Roster", sortable: true, filterKind: "text" },
   { key: "core.member.id", label: "Member ID", group: "Roster", sortable: true, filterKind: "text" },
   { key: "core.member.email", label: "Email", group: "Roster", sortable: true, filterKind: "text" },
-  { key: "attendance.member.regular-rate", label: "Regular attendance", group: "Regular attendance", sortable: true, filterKind: "number" },
-  { key: "attendance.member.assigned-policies", label: "Assigned policies", group: "Policies", sortable: false, filterKind: "text" },
-  { key: "attendance.detail.absent-dates", label: "Absent dates", group: "Attendance detail", sortable: false, filterKind: "text" },
+  { key: "attendance.member.regular-rate", label: "Overall rate", group: "Overall attendance", sortable: true, filterKind: "number" },
+  { key: "attendance.member.assigned-policies", label: "Last 30 days: policy results (all labels)", group: "Attendance policies (per label)", sortable: false, filterKind: "text" },
+  { key: "attendance.detail.absent-dates", label: "Absent dates", group: "Meetings by outcome", sortable: false, filterKind: "text" },
 ].map((column) => ({ ...column, datasets: ["attendance.members"] }));
 const attendanceDataset = {
   id: "attendance.members", label: "Members - Attendance", description: "Member-level Attendance measures with Community roster fields.", available: true,
@@ -39,7 +42,7 @@ const attendanceDataset = {
 };
 const defaultReportDefinition = { version: 2, dataset: "attendance.members", groupBy: ["core.member.identity"], period: { type: "all" }, roster: "active", meetingType: "all", labelIds: [], labelMatch: "any", membership: "current", columns: attendanceDataset.defaultColumns.map((key) => ({ key })), columnFilters: [], sort: { column: { key: "core.member.name" }, direction: "asc" } };
 const leaderboardReport = { ...report, pagination: { page: 1, pageSize: 25, totalRows: report.members.length, totalPages: 1, rangeStart: 1, rangeEnd: report.members.length }, insights: { policyAlerts: [], trend: completedMeetings.filter((meeting) => meeting.required).map((meeting) => ({ meetingId: meeting.id, title: meeting.title, startsAt: meeting.startsAt, rate: 50 })) } };
-const customReport = { definition: defaultReportDefinition, warnings: [], resolvedPeriod: { to: new Date().toISOString().slice(0, 10) }, columns: [{ id: "core.member.name", key: "core.member.name", label: "Member" }, { id: "attendance.member.regular-rate", key: "attendance.member.regular-rate", label: "Regular attendance" }, { id: "attendance.member.assigned-policies", key: "attendance.member.assigned-policies", label: "Assigned policies" }], rows: report.members.map((item) => ({ id: item.member.id, label: `${item.member.firstName} ${item.member.lastName}`, href: `/roster/${item.member.memberId}`, cells: { "core.member.name": { text: `${item.member.firstName} ${item.member.lastName}`, sortValue: item.member.lastName }, "attendance.member.regular-rate": { text: `${item.regularAttendance.rate}%`, sortValue: item.regularAttendance.rate }, "attendance.member.assigned-policies": { text: "No assigned policy", sortValue: null } } })), pagination: { page: 1, pageSize: 25, totalRows: report.members.length, totalPages: 1, rangeStart: 1, rangeEnd: report.members.length } };
+const customReport = { definition: defaultReportDefinition, warnings: [], resolvedPeriod: { to: new Date().toISOString().slice(0, 10) }, columns: [{ id: "core.member.name", key: "core.member.name", label: "Member" }, { id: "attendance.member.regular-rate", key: "attendance.member.regular-rate", label: "Overall rate" }, { id: "attendance.member.assigned-policies", key: "attendance.member.assigned-policies", label: "Last 30 days: policy results (all labels)" }], rows: report.members.map((item) => ({ id: item.member.id, label: `${item.member.firstName} ${item.member.lastName}`, href: `/roster/${item.member.memberId}`, cells: { "core.member.name": { text: `${item.member.firstName} ${item.member.lastName}`, sortValue: item.member.lastName }, "attendance.member.regular-rate": { text: `${item.regularAttendance.rate}%`, sortValue: item.regularAttendance.rate }, "attendance.member.assigned-policies": { text: "No assigned policy", sortValue: null } } })), pagination: { page: 1, pageSize: 25, totalRows: report.members.length, totalPages: 1, rangeStart: 1, rangeEnd: report.members.length } };
 const memberDetail = (member) => ({ member, labels, labelHistory: [], attendancePolicy: report.members.find((item) => item.member.id === member.id), history: [{ meetingId: "past-regular", title: "Completed build session", startsAt: meetings[0].startsAt, endsAt: meetings[0].endsAt, checkedInAt: iso(-4 * 24 * 60 + 5), checkedOutAt: iso(-4 * 24 * 60 + 115), disposition: "present", eligibility: "required", audience: "All", policy: "standard" }] });
 // Kiosk management state for the web kiosk contract. Each browser test sends its own x-preview-scenario header so parallel
 // tests never share kiosks; requests without one use a "default" scenario holding only the Pi kiosk below.
@@ -176,11 +179,13 @@ const server = createServer(async (request, response) => {
   response.setHeader("access-control-allow-origin", origin); response.setHeader("access-control-allow-credentials", "true"); response.setHeader("content-type", "application/json");
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`); const path = url.pathname;
   // Only the kiosk write routes answer preflights, so other unmocked writes still fail as before.
-  if (request.method === "OPTIONS") { if (path === "/admin/pairing-codes" || path.startsWith("/admin/kiosks/") || path.startsWith("/admin/pin-requests/") || /^\/admin\/members\/[^/]+\/pin(\/unlock)?$/.test(path) || path === "/admin/settings/pin-lockout" || path === "/preview/pin-requests") { response.setHeader("access-control-allow-methods", "GET, POST, PATCH, PUT, DELETE"); response.setHeader("access-control-allow-headers", "content-type, x-preview-scenario"); } response.statusCode = 204; response.end(); return; }
+  if (request.method === "OPTIONS") { if (passwordParamsPaths.has(path) || path === "/admin/pairing-codes" || path.startsWith("/admin/kiosks/") || path.startsWith("/admin/pin-requests/") || /^\/admin\/members\/[^/]+\/pin(\/unlock)?$/.test(path) || path === "/admin/settings/pin-lockout" || path === "/preview/pin-requests") { response.setHeader("access-control-allow-methods", "GET, POST, PATCH, PUT, DELETE"); response.setHeader("access-control-allow-headers", "content-type, x-preview-scenario"); } response.statusCode = 204; response.end(); return; }
   const kioskResult = await pinRoute(request, path) ?? await kioskRoute(request, path);
   if (kioskResult) { response.statusCode = kioskResult[0]; response.end(JSON.stringify(kioskResult[1])); return; }
   const requestedMeeting = path.startsWith("/meetings/") ? meetings.find((meeting) => meeting.id === decodeURIComponent(path.slice("/meetings/".length))) : undefined;
   const walkthroughPage = path.startsWith("/auth/walkthroughs/") ? path.slice("/auth/walkthroughs/".length) : "";
+  // The salt lookups before a sign-in or identity confirmation; specs that check the exchange route their own.
+  if (passwordParamsPaths.has(path) && request.method === "POST") { response.end(JSON.stringify(previewPasswordParams)); return; }
   const payload = path === "/setup/status" ? { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Nova Arts Collective", subtitle: "Make things together", logoData: logo, primaryColor: "#8b2f72", secondaryColor: "#e9b949", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } }
     : Object.hasOwn(walkthroughLastSteps, walkthroughPage) ? { progress: { pageId: walkthroughPage, version: 1, status: "completed", stepId: walkthroughLastSteps[walkthroughPage] } }
     : path === "/auth/session" ? { user: { id: "admin-1", role: "admin", debugMode: false } }
@@ -191,7 +196,7 @@ const server = createServer(async (request, response) => {
     : path === "/integrations/capabilities" ? { integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: true } } }
     : path === "/meetings" ? { meetings, lateScanMinutes: 30 }
     : path === "/labels" ? labelData
-    : path === "/reports/catalog" ? { datasets: [attendanceDataset], columns: reportColumns, labels, reportFilters: [], baseline: null, timeZone: "UTC", defaultDefinition: defaultReportDefinition, role: "admin", attendanceAvailable: true }
+    : path === "/reports/catalog" ? { datasets: [attendanceDataset], columns: reportColumns, recentDays: 30, labels, reportFilters: [], baseline: null, timeZone: "UTC", defaultDefinition: defaultReportDefinition, role: "admin", attendanceAvailable: true }
     : path === "/reports/views" ? { reports: [] }
     : path === "/reports/tabs" ? { reportIds: [] }
     : path === "/reports/leaderboard" ? leaderboardReport

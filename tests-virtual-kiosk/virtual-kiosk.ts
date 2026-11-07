@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { passwordProof } from "../packages/shared/src/password-key.mjs";
 
 // Helpers for the virtual kiosk scenarios. The panel (scripts/virtual-kiosk.mjs) reports each kiosk and drives its
 // virtual reader; the local Worker is called as the virtual Admin.
@@ -22,7 +23,9 @@ export async function adminApi(request: APIRequestContext) {
   const admin = JSON.parse(readFileSync(adminFile, "utf8")) as { username: string; password: string };
   const origin = "http://localhost:" + (Number(new URL(apiUrl).port) + 1);
   const headers = { origin };
-  const signIn = await request.post(`${apiUrl}/auth/local`, { headers, data: { username: admin.username, password: admin.password } });
+  const params = await request.post(`${apiUrl}/auth/local/params`, { headers, data: { username: admin.username } });
+  expect(params.ok(), await params.text()).toBe(true);
+  const signIn = await request.post(`${apiUrl}/auth/local`, { headers, data: { username: admin.username, ...await passwordProof(admin.password, await params.json()) } });
   expect(signIn.ok(), await signIn.text()).toBe(true);
   return {
     get: async (path: string) => (await request.get(`${apiUrl}${path}`, { headers })).json(),

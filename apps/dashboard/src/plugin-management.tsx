@@ -4,6 +4,7 @@ import { readDashboardReleaseState, type DashboardReleaseState } from "./dashboa
 import { useModalFocus } from "./modal-focus";
 import { WebUpdateCard } from "./web-update-card";
 import { diagnosticUrl, type WebUpdateResponse } from "./web-update";
+import { passwordProof, type PasswordParams } from "./password-hashing";
 
 type Phase = "disabled" | "enabled" | "retained" | "deleting" | "deleted" | null;
 type Track = "stable" | "nightly";
@@ -39,6 +40,14 @@ export async function request<T>(path: string, body?: unknown): Promise<T> {
   const result = await response.json().catch(() => ({})) as T & { error?: string; code?: string };
   if (!response.ok) throw new RequestError(result.error ?? "The request could not be completed.", result.code);
   return result;
+}
+/**
+ * Identity confirmation with the Admin's own password: the Worker gives this Admin's salt, the browser computes the scrypt
+ * result, and the Worker compares a SHA-256 of it. The caller's busy state covers the hashing.
+ */
+export async function confirmIdentityWithPassword(password: string, purpose?: "module_access"): Promise<{ freshUntil: number | null }> {
+  const proof = await passwordProof(password, await request<PasswordParams>("/admin/plugins/reauthenticate/params", {}));
+  return request<{ freshUntil: number | null }>("/admin/plugins/reauthenticate", { ...proof, ...(purpose ? { purpose } : {}) });
 }
 const short = (sha?: string | null) => sha ? sha.slice(0, 12) : "";
 // A release version when the commit is a known release, otherwise the short commit.
@@ -107,7 +116,7 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
   useEffect(() => { if (draft.action === "remove") void inspect(); else if (draft.action === "upgrade" && canLookup) void findRelease(form, false); }, []);
   async function reauthenticate(password: string) {
     let confirmed = false;
-    await run(async () => { const result = await request<{ freshUntil: number | null }>("/admin/plugins/reauthenticate", { password }); setFreshUntil(result.freshUntil); confirmed = true; });
+    await run(async () => { const result = await confirmIdentityWithPassword(password); setFreshUntil(result.freshUntil); confirmed = true; });
     return confirmed;
   }
   async function commit() {

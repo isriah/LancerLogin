@@ -195,6 +195,8 @@ export function flowReducer(flow: Flow, action: FlowAction): Flow {
       const { member } = flow, { outcome } = action;
       if (outcome.kind === "not_set") return { step: "no_pin", member };
       if (outcome.kind === "locked") return { step: "pin_locked", member, ...(outcome.lockedUntil ? { lockedUntil: outcome.lockedUntil } : {}) };
+      // Too many wrong tries online: the result screen says when to try again, then the kiosk returns to the start.
+      if (outcome.kind === "throttled") return { step: "result", display: kioskState("rejected", { message: "Please wait", name: memberName(member), detail: outcome.message, durationMs: 4_000 }) };
       return { step: "wrong_pin", member, ...(outcome.lockedUntil ? { lockedUntil: outcome.lockedUntil } : {}), ...(outcome.attemptsLeft !== undefined ? { attemptsLeft: outcome.attemptsLeft } : {}) };
     }
     // A wrong try that locked the member can't be tried again.

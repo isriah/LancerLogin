@@ -117,3 +117,28 @@ test("mobile empty Labels keeps section picker and add action without empty pagi
   const bounds = await add.boundingBox(); expect(bounds!.height).toBeGreaterThanOrEqual(44);
   await add.click(); await expect(page.getByRole("dialog", { name: "Add Outreach label" })).toBeVisible();
 });
+
+test("Admins set Outreach's own reporting start date in General and are warned about a future date", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-11-03T15:00:00Z"));
+  await settingsFixture(page);
+  let stored = { moduleId: "hour-tracking", label: "Outreach", startsOn: "2026-08-15" as string | null, revision: 1, timeZone: "America/New_York", today: "2026-11-03" }; const writes: unknown[] = [];
+  await page.route("**/admin/modules/hour-tracking/report-baseline", (route) => {
+    if (route.request().method() === "PUT") { const body = route.request().postDataJSON() as { startsOn: string | null; revision: number }; writes.push(body); stored = { ...stored, startsOn: body.startsOn, revision: stored.revision + 1 }; }
+    return route.fulfill({ json: stored });
+  });
+  await page.goto("/settings/outreach-setup?section=general");
+  await expect(page.getByRole("heading", { name: "Reporting defaults", level: 2 })).toBeVisible();
+  // The field ships with module SDK 1.5.0; an Outreach build pinned before it has no such card.
+  test.skip(await page.getByRole("heading", { name: "Reporting start date", level: 2 }).count() === 0, "the composed Outreach plugin predates its reporting start date");
+  await expect(page.getByText("The window limits how far back participation can be logged; it does not affect reports.", { exact: false })).toBeVisible();
+  const field = page.getByLabel("Outreach reporting start date (operational baseline)");
+  await expect(field).toHaveValue("2026-08-15");
+  await expect(page.getByText(/^Outreach reports that use the operational baseline count records from this date through today\..*This is a start date, not an end date\./)).toBeVisible();
+  await field.fill("2026-12-31");
+  await expect(page.getByText("This date is in the future. Outreach reports that use the operational baseline will show nothing until 2026-12-31. To include records up to today, choose an earlier date or leave it blank.", { exact: true })).toBeVisible();
+  await field.fill("2026-09-01");
+  await expect(page.getByText(/will show nothing until/)).toHaveCount(0);
+  await page.getByRole("button", { name: "Save reporting start date", exact: true }).click();
+  await expect(page.getByText("Reporting start date saved.", { exact: true })).toBeVisible();
+  expect(writes).toEqual([{ startsOn: "2026-09-01", revision: 1 }]);
+});

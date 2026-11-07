@@ -13,6 +13,8 @@ Create the token from scratch under **Manage account > Account API tokens**, sco
 | Pages | Edit | Pages Write | Create and deploy the dashboard |
 | Account Settings | Read | Account Settings Read | Verify that the token belongs to the selected account |
 
+The generated Worker configuration also binds the background scheduler's Durable Object (`PLATFORM_SCHEDULER`, class `PlatformScheduler`, migration tag `platform-scheduler-v1`, SQLite-backed). Durable Objects are covered by the Workers Scripts permission, so the token needs nothing more; the first deploy with this configuration creates the namespace.
+
 Account-owned token values start with `cfat_`. The installation uses the default Pages and Workers URLs, so the token needs no zone, DNS, billing, member or user-management permission.
 
 ## Secrets

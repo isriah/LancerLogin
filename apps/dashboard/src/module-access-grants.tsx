@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useModalFocus } from "./modal-focus";
-import { IdentityConfirmation, request, RequestError, type PluginState } from "./plugin-management";
+import { confirmIdentityWithPassword, IdentityConfirmation, request, RequestError, type PluginState } from "./plugin-management";
 
 type ProviderState = "missing" | "unsupported" | "disabled" | "setup-required" | "ready";
 export type ModuleAccessUse = {
@@ -56,7 +56,7 @@ function AccessDialog({ review, state, freshUntil, onFresh, onReload, onClose, o
     }
     finally { setBusy(false); }
   }
-  const confirmIdentity = (password: string) => run(async () => { onFresh((await request<{ freshUntil: number | null }>("/admin/plugins/reauthenticate", { password, purpose: "module_access" })).freshUntil); });
+  const confirmIdentity = (password: string) => run(async () => { onFresh((await confirmIdentityWithPassword(password, "module_access")).freshUntil); });
   const submit = () => run(async () => {
     const next = action === "grant"
       ? await request<ModuleAccessState>("/admin/modules/grants", { consumer: use.consumer.id, interface: use.interface.id, version: use.interface.version, operations: use.grantable })

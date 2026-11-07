@@ -8,6 +8,8 @@ import { createHash, pbkdf2Sync, randomUUID } from "node:crypto";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { omitContestResubmissionFields } from "./fixtures/backup-versions.ts";
+import { verifyMemberPin } from "../apps/dashboard/src/web-kiosk/member-pin.ts";
+import { verifyCachedPin } from "../apps/kiosk/src/member-pins.mjs";
 
 const secret = "A".repeat(43);
 const hash = (value: string) => createHash("sha256").update(value).digest("base64url");
@@ -563,26 +565,27 @@ test("real SQLite member PINs: Require PIN, setup by approval and at the kiosk, 
   const chosen = await call(`/kiosk/pin-requests/${request.id}/pin`, { pin: "2468" }, a.kioskToken); assert.equal(chosen.status, 201, await chosen.clone().text());
   assert.equal((await json(await call(`/kiosk/pin-requests/${request.id}`, undefined, a.kioskToken))).request.status, "used");
   const stored = database.sqlite.prepare("SELECT * FROM member_pins WHERE member_id = 'member'").get()!;
-  assert.equal(stored.pin_iterations, 100_000); assert.equal(stored.set_kiosk_id, a.kioskId); assert.equal(stored.failed_attempts, 0);
+  assert.equal(stored.pin_iterations, 2_000); assert.equal(stored.set_kiosk_id, a.kioskId); assert.equal(stored.failed_attempts, 0);
   assert.equal(Buffer.from(String(stored.pin_salt), "base64").length, 16);
-  assert.equal(pbkdf2Sync("2468", Buffer.from(String(stored.pin_salt), "base64"), 100_000, 32, "sha256").toString("base64"), stored.pin_hash, "kiosks can check the cached hash with the same PBKDF2 parameters");
+  assert.equal(pbkdf2Sync("2468", Buffer.from(String(stored.pin_salt), "base64"), 2_000, 32, "sha256").toString("base64"), stored.pin_hash, "kiosks can check the cached hash with the same PBKDF2 parameters");
   assert.deepEqual(audits("pin_request.approved"), [{ kioskId: a.kioskId, memberId: "member" }]);
   assert.deepEqual(audits("member_pin.set"), [{ via: "pin_request", requestId: request.id, kioskId: a.kioskId, kioskName: "Test Web Kiosk A" }]);
 
   // The roster carries the hash once it is set, under a new ETag.
   const pinRoster = await call("/kiosk/roster", undefined, a.kioskToken); const pinEtag = pinRoster.headers.get("etag");
   assert.notEqual(pinEtag, firstEtag);
-  assert.deepEqual((await rosterMember(pinRoster)).pin, { hash: stored.pin_hash, salt: stored.pin_salt, iterations: 100_000 });
+  assert.deepEqual((await rosterMember(pinRoster)).pin, { hash: stored.pin_hash, salt: stored.pin_salt, iterations: 2_000 });
   assert.equal(await pinCode(await call("/kiosk/pin-requests", { memberId: "SYN-001" }, a.kioskToken)), "pin_already_set");
 
   // A correct PIN records the scan. With lockout off, wrong tries count but never lock, and a correct PIN clears them.
+  // (The throttle's free tries; the throttle itself has its own test.)
   const recorded = await scan({ pin: "2468" }); assert.ok(recorded.status === 202 || recorded.status === 200, String(recorded.status)); assert.equal(await pinCode(recorded), undefined);
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     const wrong = await scan({ pin: "1111" }); assert.equal(wrong.status, 403);
     assert.deepEqual(await json(wrong), { error: "Wrong PIN.", code: "pin_incorrect" });
   }
-  assert.deepEqual(pinRow(), { failed_attempts: 6, locked_until: null });
-  assert.equal((await json(await call("/admin/members/member/pin"))).pin.failedAttempts, 6);
+  assert.deepEqual(pinRow(), { failed_attempts: 4, locked_until: null });
+  assert.equal((await json(await call("/admin/members/member/pin"))).pin.failedAttempts, 4);
   assert.equal(await pinCode(await scan({ pin: "2468" })), undefined);
   assert.equal(pinRow().failed_attempts, 0);
 
@@ -682,6 +685,135 @@ test("real SQLite member PINs: Require PIN, setup by approval and at the kiosk, 
   assert.equal(await pinCode(await scan({})), undefined, "without Require PIN the scan goes straight to attendance");
 });
 
+test("real SQLite member PINs: 2,000 iterations, rehash of older PINs on a correct PIN, and the online throttle", async context => {
+  const { database, call } = await fixture(context);
+  const { code } = await (await call("/admin/pairing-codes", { kioskName: "Test Web Kiosk A", kind: "web" })).json() as { code: string };
+  const kiosk = await (await call("/kiosk/pair", { code })).json() as { kioskId: string; kioskToken: string; pairingId: string };
+  assert.equal((await call(`/admin/kiosks/${kiosk.kioskId}/authentication-method`, { authenticationMethod: "member_id", requirePin: true }, undefined, "PATCH")).status, 200);
+  const json = async (result: Response) => await result.json() as any;
+  // Later correct scans may be refused by attendance (checked out, complete); only the PIN step matters here.
+  const pinCode = async (result: Response) => { const body = await json(result); return typeof body.code === "string" && body.code.startsWith("pin_") ? body.code : undefined; };
+  let event = 0;
+  const scan = (pin: string) => call("/kiosk/attendance", { eventId: `test-throttle-${++event}`, memberId: "SYN-001", occurredAt: new Date().toISOString(), pairingId: kiosk.pairingId, pin }, kiosk.kioskToken);
+  const row = () => ({ ...database.sqlite.prepare("SELECT pin_hash, pin_salt, pin_iterations, set_at, failed_attempts, locked_until, throttle_failures, throttle_until, updated_at FROM member_pins WHERE member_id = 'member'").get() }) as Record<string, any>;
+  const revision = () => Number(database.sqlite.prepare("SELECT revision FROM kiosk_roster_revision WHERE installation_id = 'primary'").get()?.revision);
+  const derived = context.mock.method(crypto.subtle, "deriveBits");
+  const writes: string[] = []; const prepare = database.prepare.bind(database);
+  context.mock.method(database, "prepare", (sql: string) => { if (/^\s*(?:INSERT|UPDATE|DELETE)\b[\s\S]*member_pins/i.test(sql)) writes.push(sql); return prepare(sql); });
+
+  // New PINs are hashed at 2,000 iterations, and both kiosk verifiers accept them.
+  assert.equal((await call("/kiosk/pins", { memberId: "SYN-001", pin: "2468" }, kiosk.kioskToken)).status, 201);
+  const created = row();
+  assert.equal(created.pin_iterations, 2_000);
+  assert.equal(pbkdf2Sync("2468", Buffer.from(created.pin_salt, "base64"), 2_000, 32, "sha256").toString("base64"), created.pin_hash);
+  const cached = { hash: created.pin_hash, salt: created.pin_salt, iterations: 2_000 };
+  assert.equal(await verifyMemberPin("2468", cached), true); assert.equal(await verifyMemberPin("2469", cached), false);
+  assert.equal(await verifyCachedPin("2468", cached), true); assert.equal(await verifyCachedPin("2469", cached), false);
+
+  // An older 100,000-iteration hash still checks. A wrong PIN never rehashes it.
+  const oldSalt = Buffer.alloc(16, 7);
+  database.sqlite.prepare("UPDATE member_pins SET pin_hash = ?, pin_salt = ?, pin_iterations = 100000, set_at = '2026-01-01T00:00:00.000Z', failed_attempts = 2 WHERE member_id = 'member'")
+    .run(pbkdf2Sync("2468", oldSalt, 100_000, 32, "sha256").toString("base64"), oldSalt.toString("base64"));
+  const legacy = row(); const legacyRevision = revision();
+  const wrongOld = await scan("1111"); assert.equal(wrongOld.status, 403); assert.deepEqual(await json(wrongOld), { error: "Wrong PIN.", code: "pin_incorrect" });
+  assert.deepEqual([row().pin_hash, row().pin_salt, row().pin_iterations, row().failed_attempts], [legacy.pin_hash, legacy.pin_salt, 100_000, 3]);
+  assert.equal(revision(), legacyRevision, "a wrong try that only counts does not bump the roster");
+  // The correct PIN is accepted and rehashed at 2,000 with a new salt; set_at stays and the roster revision moves on.
+  const rosterBefore = (await call("/kiosk/roster", undefined, kiosk.kioskToken)).headers.get("etag");
+  const right = await scan("2468"); assert.ok(right.status === 202 || right.status === 200, String(right.status));
+  const rehashed = row();
+  assert.equal(rehashed.pin_iterations, 2_000); assert.notEqual(rehashed.pin_salt, legacy.pin_salt);
+  assert.equal(pbkdf2Sync("2468", Buffer.from(rehashed.pin_salt, "base64"), 2_000, 32, "sha256").toString("base64"), rehashed.pin_hash);
+  assert.equal(rehashed.set_at, "2026-01-01T00:00:00.000Z", "the member did not set a PIN");
+  assert.deepEqual([rehashed.failed_attempts, rehashed.locked_until, rehashed.throttle_failures, rehashed.throttle_until], [0, null, 0, null]);
+  assert.equal(revision(), legacyRevision + 1);
+  const rosterAfter = await call("/kiosk/roster", undefined, kiosk.kioskToken);
+  assert.notEqual(rosterAfter.headers.get("etag"), rosterBefore);
+  assert.deepEqual((await json(rosterAfter)).members.find((member: { memberId: string }) => member.memberId === "SYN-001").pin, { hash: rehashed.pin_hash, salt: rehashed.pin_salt, iterations: 2_000 });
+  assert.equal(await verifyCachedPin("2468", { hash: legacy.pin_hash, salt: legacy.pin_salt, iterations: 100_000 }), true, "a kiosk's older cached hash still matches until it syncs");
+  // A correct PIN already at 2,000 with nothing to clear writes nothing.
+  writes.length = 0;
+  assert.equal(await pinCode(await scan("2468")), undefined, "the PIN step passed"); assert.deepEqual(writes, []); assert.equal(row().pin_hash, rehashed.pin_hash);
+
+  // The throttle: five wrong PINs in a row are free, then each try waits 30 s, 1 min, then 5 min, repeating.
+  for (let attempt = 1; attempt <= 4; attempt += 1) assert.deepEqual(await json(await scan("1111")), { error: "Wrong PIN.", code: "pin_incorrect" });
+  const fifth = await scan("1111"); assert.equal(fifth.status, 403);
+  assert.deepEqual(await json(fifth), { error: "Wrong PIN.", code: "pin_incorrect", retryAt: new Date(Date.now() + 30_000).toISOString() });
+  const refuse = async (pin: string, seconds: number, message: string) => {
+    const hashes = derived.mock.callCount(); writes.length = 0; const before = row();
+    const refused = await scan(pin); assert.equal(refused.status, 429);
+    assert.deepEqual(await json(refused), { error: message, code: "pin_throttled", retryAt: before.throttle_until, retryAfterSeconds: seconds });
+    assert.equal(derived.mock.callCount(), hashes, "refused before any PBKDF2 work"); assert.deepEqual(writes, [], "a refused try changes nothing"); assert.deepEqual(row(), before);
+  };
+  // Refused the same way whether the PIN is right or wrong.
+  await refuse("2468", 30, "Too many wrong PINs. Try again in 30 seconds.");
+  await refuse("1111", 30, "Too many wrong PINs. Try again in 30 seconds.");
+  context.mock.timers.tick(29_000);
+  await refuse("2468", 1, "Too many wrong PINs. Try again in 1 second.");
+  context.mock.timers.tick(1_000);
+  assert.deepEqual(await json(await scan("1111")), { error: "Wrong PIN.", code: "pin_incorrect", retryAt: new Date(Date.now() + 60_000).toISOString() });
+  await refuse("2468", 60, "Too many wrong PINs. Try again in 1 minute.");
+  context.mock.timers.tick(60_000);
+  assert.deepEqual(await json(await scan("1111")), { error: "Wrong PIN.", code: "pin_incorrect", retryAt: new Date(Date.now() + 300_000).toISOString() });
+  await refuse("2468", 300, "Too many wrong PINs. Try again in 5 minutes.");
+  context.mock.timers.tick(239_000);
+  await refuse("2468", 61, "Too many wrong PINs. Try again in 2 minutes.");
+  context.mock.timers.tick(61_000);
+  assert.deepEqual(await json(await scan("1111")), { error: "Wrong PIN.", code: "pin_incorrect", retryAt: new Date(Date.now() + 300_000).toISOString() }, "capped at 5 minutes");
+  assert.deepEqual([row().throttle_failures, row().failed_attempts], [8, 8]);
+  // A correct PIN once the wait is over resets it: the next wrong PIN is free again.
+  context.mock.timers.tick(300_000);
+  assert.equal(await pinCode(await scan("2468")), undefined, "the PIN step passed");
+  assert.deepEqual([row().throttle_failures, row().throttle_until, row().failed_attempts], [0, null, 0]);
+  assert.deepEqual(await json(await scan("1111")), { error: "Wrong PIN.", code: "pin_incorrect" });
+  // An Operator unlock also ends the wait.
+  for (let attempt = 2; attempt <= 5; attempt += 1) await scan("1111");
+  assert.equal((await scan("2468")).status, 429);
+  assert.equal((await call("/admin/members/member/pin/unlock", {})).status, 200);
+  assert.deepEqual([row().throttle_failures, row().throttle_until], [0, null]);
+  assert.equal(await pinCode(await scan("2468")), undefined, "the PIN step passed");
+  // Wrong tries reported from offline checks count toward lockout but never toward the throttle.
+  assert.deepEqual(await json(await call("/kiosk/pin-failures", { failures: [{ memberId: "SYN-001", count: 9, lastAt: new Date().toISOString() }] }, kiosk.kioskToken)), { recorded: 9 });
+  assert.deepEqual([row().failed_attempts, row().throttle_failures, row().throttle_until], [9, 0, null]);
+  assert.equal(await pinCode(await scan("2468")), undefined, "the PIN step passed");
+
+  // Lockout still works when an Admin turns it on: here it locks on the seventh wrong try, and the lock wins.
+  assert.equal((await call("/admin/settings/pin-lockout", { enabled: true, attempts: 7, minutes: 10 }, undefined, "PUT")).status, 200);
+  for (let attempt = 1; attempt <= 4; attempt += 1) assert.deepEqual(await json(await scan("1111")), { error: "Wrong PIN.", code: "pin_incorrect", attemptsLeft: 7 - attempt });
+  assert.deepEqual(await json(await scan("1111")), { error: "Wrong PIN.", code: "pin_incorrect", attemptsLeft: 2, retryAt: new Date(Date.now() + 30_000).toISOString() });
+  context.mock.timers.tick(30_000);
+  assert.deepEqual(await json(await scan("1111")), { error: "Wrong PIN.", code: "pin_incorrect", attemptsLeft: 1, retryAt: new Date(Date.now() + 60_000).toISOString() });
+  context.mock.timers.tick(60_000);
+  const lockedUntil = new Date(Date.now() + 600_000).toISOString();
+  assert.deepEqual(await json(await scan("1111")), { error: "Wrong PIN.", code: "pin_incorrect", attemptsLeft: 0, lockedUntil, retryAt: new Date(Date.now() + 300_000).toISOString() });
+  const locked = await scan("2468"); assert.equal(locked.status, 423);
+  assert.deepEqual(await json(locked), { error: "This PIN is locked after too many wrong tries.", code: "pin_locked", lockedUntil });
+  // After the lock runs out the correct PIN is accepted and clears both.
+  context.mock.timers.tick(600_000);
+  assert.equal(await pinCode(await scan("2468")), undefined, "the PIN step passed");
+  assert.deepEqual([row().failed_attempts, row().locked_until, row().throttle_failures, row().throttle_until], [0, null, 0, null]);
+});
+
+test("migration 0098 adds the throttle columns to existing member PINs without bumping the kiosk roster", () => {
+  const sqlite = new DatabaseSync(":memory:");
+  for (const name of readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql") && name < "0098").sort()) sqlite.exec(readFileSync(join("apps/api/migrations", name), "utf8"));
+  sqlite.exec(`INSERT INTO installations(id,created_at,auth_mode) VALUES ('primary','2026-01-01','local');
+    INSERT INTO members(id,installation_id,external_id,first_name,last_name,created_at) VALUES ('member','primary','SYN-001','Synthetic','Member','2026-01-01');
+    INSERT INTO member_pins(installation_id,member_id,pin_hash,pin_salt,pin_iterations,set_at,failed_attempts,updated_at) VALUES ('primary','member','aGFzaA==','c2FsdA==',100000,'2026-01-01',2,'2026-01-01');
+    INSERT OR IGNORE INTO kiosk_roster_revision(installation_id,revision) VALUES ('primary',0);`);
+  const revision = () => Number(sqlite.prepare("SELECT revision FROM kiosk_roster_revision").get()?.revision);
+  const before = revision();
+  sqlite.exec(readFileSync("apps/api/migrations/0098_member_pin_throttle.sql", "utf8"));
+  assert.deepEqual({ ...sqlite.prepare("SELECT pin_iterations, failed_attempts, throttle_failures, throttle_until FROM member_pins").get() }, { pin_iterations: 100_000, failed_attempts: 2, throttle_failures: 0, throttle_until: null });
+  sqlite.exec("UPDATE member_pins SET throttle_failures = 6, throttle_until = '2026-01-01T00:05:00.000Z'");
+  assert.equal(revision(), before, "throttle changes never bump the kiosk roster");
+  assert.throws(() => sqlite.exec("UPDATE member_pins SET throttle_failures = -1"), /CHECK/);
+  sqlite.exec("UPDATE member_pins SET pin_iterations = 2000");
+  assert.equal(revision(), before + 1, "a rehash does");
+  assert.throws(() => sqlite.exec("UPDATE member_pins SET pin_iterations = 100001"), /CHECK/);
+  sqlite.close();
+});
+
 test("real SQLite installation backups carry member PINs, Require PIN and lockout, and schema 46 backups restore without them", async context => {
   const { database, call } = await fixture(context);
   database.sqlite.exec(`INSERT INTO platform_module_assignment_epochs VALUES ('primary', 'admin', 0);
@@ -697,11 +829,13 @@ test("real SQLite installation backups carry member PINs, Require PIN and lockou
   assert.equal((await call("/kiosk/pins", { memberId: "SYN-001", pin: "2468" }, kiosk.kioskToken)).status, 201);
   assert.equal((await call("/kiosk/pin-requests", { memberId: "TEST-B" }, kiosk.kioskToken)).status, 201);
   assert.equal((await call("/admin/settings/pin-lockout", { enabled: true, attempts: 4, minutes: 30 }, undefined, "PUT")).status, 200);
-  const pin = { ...database.sqlite.prepare("SELECT * FROM member_pins").get() };
+  // The online throttle's state is operational and never travels in a backup; a restore starts it over.
+  database.sqlite.exec("UPDATE member_pins SET throttle_failures = 6, throttle_until = '2026-09-30T12:05:00.000Z'");
+  const { throttle_failures: _failures, throttle_until: _until, ...pin } = { ...database.sqlite.prepare("SELECT * FROM member_pins").get() };
 
   const exported = await call("/admin/data/backup?scope=installation"); assert.equal(exported.status, 200, await exported.clone().text());
   const backup = await exported.json() as any;
-  assert.equal(backup.schemaVersion, 49);
+  assert.equal(backup.schemaVersion, 50);
   assert.deepEqual(backup.tables.member_pins, [pin]);
   assert.equal(backup.tables.kiosks[0].require_pin, 1);
   assert.deepEqual([backup.tables.organization_settings[0].pin_lockout_enabled, backup.tables.organization_settings[0].pin_lockout_attempts, backup.tables.organization_settings[0].pin_lockout_minutes], [1, 4, 30]);
@@ -723,7 +857,7 @@ test("real SQLite installation backups carry member PINs, Require PIN and lockou
   }
   database.sqlite.exec("DELETE FROM member_pins; UPDATE organization_settings SET pin_lockout_enabled = 0");
   const restored = await restore(backup); assert.equal(restored.status, 200, await restored.clone().text());
-  assert.deepEqual({ ...database.sqlite.prepare("SELECT * FROM member_pins").get() }, pin);
+  assert.deepEqual({ ...database.sqlite.prepare("SELECT * FROM member_pins").get() }, { ...pin, throttle_failures: 0, throttle_until: null });
   assert.equal(database.sqlite.prepare("SELECT require_pin AS requirePin FROM kiosks").get()?.requirePin, 1);
   assert.deepEqual({ ...database.sqlite.prepare("SELECT pin_lockout_enabled AS enabled, pin_lockout_attempts AS attempts, pin_lockout_minutes AS minutes FROM organization_settings").get() }, { enabled: 1, attempts: 4, minutes: 30 });
   assert.equal(database.sqlite.prepare("SELECT COUNT(*) AS n FROM pin_setup_requests").get()?.n, 0);

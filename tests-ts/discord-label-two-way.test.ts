@@ -100,6 +100,18 @@ test("a label that drives attendance needs the warning acknowledged before two-w
   assert.equal(confirmed.enabled, true); assert.equal(confirmed.jobId, undefined, "nothing to push");
 });
 
+test("a scheduled pass checks a limited number of two-way labels, least recently checked first", async () => {
+  const db = seed(); const discord = server(new Set([ids.ada, ids.cy, ids.gus]));
+  db.sqlite.exec(`INSERT INTO member_labels (id, installation_id, name, created_at) VALUES ('label-art', 'primary', 'Art Team', '2026-09-01T00:00:00Z'), ('label-code', 'primary', 'Code Team', '2026-09-01T00:00:00Z');
+    INSERT INTO discord_label_role_mappings (installation_id, label_id, guild_id, role_id, role_name, created_at) VALUES ('primary', 'label-art', '${guildId}', '423456789012345679', 'Artists', '2026-09-01T00:00:00Z'), ('primary', 'label-code', '${guildId}', '423456789012345680', 'Coders', '2026-09-01T00:00:00Z');
+    UPDATE discord_label_role_mappings SET sync_direction = 'two_way', two_way_enabled_at = '2026-10-30T09:00:00.000Z';
+    UPDATE discord_label_role_mappings SET two_way_checked_at = CASE label_id WHEN 'label-build' THEN '2026-10-30T11:00:00.000Z' WHEN 'label-code' THEN '2026-10-30T10:00:00.000Z' END;`);
+  // Art Team was never checked, then Code Team (10:00) before Build Team (11:00).
+  assert.deepEqual((await pollTwoWayLabels(db, discord, deps(1), 2)).map((result) => result.labelId), ["label-art", "label-code"]);
+  assert.deepEqual((await pollTwoWayLabels(db, discord, deps(6), 2)).map((result) => result.labelId), ["label-build", "label-art"], "the next pass starts with the label this one left");
+  assert.equal((await pollTwoWayLabels(db, discord, deps(11))).length, 3, "without a limit every label is checked");
+});
+
 test("the scheduled check follows Discord, pushes dashboard changes, never ping-pongs and records unmatched users", async () => {
   const db = seed(); const holders = new Set([ids.ada, ids.cy, ids.gus, ids.stranger]); const discord = server(holders);
   const preview = await previewTwoWay(db, "admin-1", "label-build", discord, deps(0));

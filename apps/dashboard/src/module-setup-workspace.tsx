@@ -1,4 +1,5 @@
 import { attendanceSetupInterval } from "./attendance-setup-interval";
+import { futureReportingStartWarning, reportingStartHelp, reportingStartLabel } from "./reporting-baseline";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { ModuleSnapshotItem } from "../../../packages/shared/src/module-platform.ts";
 import { api } from "./dashboard-api";
@@ -87,7 +88,7 @@ export function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSe
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [finished, setFinished] = useState(false);
-  const [rules, setRules] = useState<Rules>();
+  const [rules, setRules] = useState<Rules>(); const [rulesTimeZone, setRulesTimeZone] = useState<string>();
   const [storedRules, setStoredRules] = useState<Rules>();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [meeting, setMeeting] = useState<ReturnType<typeof defaultMeeting>>();
@@ -131,7 +132,7 @@ export function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSe
   useEffect(() => {
     if (!step) return;
     setNotice("");
-    if (step.id === "rules") void api<{ values: Rules }>("/module-setup/attendance/rules").then((result) => { setRules(result.values); setStoredRules(result.values); }).catch((error: Error) => setNotice(error.message));
+    if (step.id === "rules") void api<{ values: Rules; timeZone?: string }>("/module-setup/attendance/rules").then((result) => { setRules(result.values); setStoredRules(result.values); setRulesTimeZone(result.timeZone); }).catch((error: Error) => setNotice(error.message));
     if (step.id === "meeting") void api<{ meetings: Meeting[]; timeZone: string }>("/module-setup/attendance/meeting").then((result) => { if (!result.timeZone) throw new Error("The organization time zone is unavailable. Reload setup."); setMeeting((current) => current ?? defaultMeeting(result.timeZone)); setMeetings(result.meetings); setCreateAnotherMeeting(false); }).catch((error: Error) => setNotice(error.message));
     if (step.id === "input") void loadInput();
   }, [step?.id]);
@@ -193,7 +194,7 @@ export function AttendanceSetupWorkspace({ module, navigate, onReady }: ModuleSe
       <div className="module-setup-summary" role="status"><strong>Step {current + 1} of {cards.length}</strong><span>{requiredDone === required.length ? "Every required step is complete. Optional steps can be set up now or later." : `${requiredDone} of ${required.length} required steps complete`}</span></div>
       <article className="module-setup-card" aria-labelledby={`module-step-${step.id}`}>
         <div className="module-setup-card-heading"><div><p className="kicker">Step {current + 1} - {step.required ? "Required" : "Optional"}</p><h2 id={`module-step-${step.id}`}>{step.label}</h2></div><span className="ui-status" data-tone={badge.tone}>{badge.text}</span></div>
-        {step.id === "rules" && <RulesStep value={rules} onChange={setRules} />}
+        {step.id === "rules" && <RulesStep value={rules} timeZone={rulesTimeZone} onChange={setRules} />}
         {step.id === "meeting" && <MeetingStep meetings={meetings} value={meeting} onChange={setMeeting} createAnother={createAnotherMeeting} onCreateAnother={setCreateAnotherMeeting} />}
         {step.id === "roster" && <RosterStep members={roster} onChanged={rosterChanged} />}
         {step.id === "input" && <InputStep state={input} valid={step.valid} setupComplete={state.ready} onAddKiosk={() => setPairing(true)} onRefresh={() => void refreshInput()} navigate={navigate} />}
@@ -225,11 +226,12 @@ function AttendanceSetupComplete({ navigate }: { navigate: (path: string) => voi
   </section>;
 }
 
-function RulesStep({ value, onChange }: { value?: Rules; onChange: (value: Rules) => void }) {
+function RulesStep({ value, timeZone, onChange }: { value?: Rules; timeZone?: string; onChange: (value: Rules) => void }) {
   if (!value) return <p role="status">Loading current Attendance rules...</p>;
+  const reportingStartWarning = futureReportingStartWarning(value.attendanceReportingStartsOn, timeZone, "Attendance");
   return <div className="form-grid module-setup-rules">
     <div className="module-setup-field"><label htmlFor="setup-late-scan">Late scan minutes<input id="setup-late-scan" type="number" min={0} max={180} step={1} value={value.lateScanMinutes} aria-describedby="setup-late-scan-help" onChange={(event) => onChange({ ...value, lateScanMinutes: Number(event.target.value) })} /></label><p id="setup-late-scan-help" className="field-help">How many minutes after a meeting ends check-ins are still accepted, from 0 to 180. Example: with 30, a meeting that ends at 5:00 PM accepts scans until 5:30 PM.</p></div>
-    <div className="module-setup-field"><label htmlFor="setup-reporting-start">Reporting starts on <span>(optional)</span><input id="setup-reporting-start" type="date" value={value.attendanceReportingStartsOn ?? ""} aria-describedby="setup-reporting-start-help" onChange={(event) => onChange({ ...value, attendanceReportingStartsOn: event.target.value || null })} /></label><p id="setup-reporting-start-help" className="field-help">Reports count completed meetings on or after this date. Leave it blank to include all history.</p></div>
+    <div className="module-setup-field"><label htmlFor="setup-reporting-start">{reportingStartLabel("Attendance")} <span>(optional)</span><input id="setup-reporting-start" type="date" value={value.attendanceReportingStartsOn ?? ""} aria-describedby={reportingStartWarning ? "setup-reporting-start-help setup-reporting-start-warning" : "setup-reporting-start-help"} onChange={(event) => onChange({ ...value, attendanceReportingStartsOn: event.target.value || null })} /></label><p id="setup-reporting-start-help" className="field-help">{reportingStartHelp("Attendance")}</p>{reportingStartWarning && <p id="setup-reporting-start-warning" className="ui-status" data-tone="warning" role="status">{reportingStartWarning}</p>}</div>
     <div className="module-setup-field"><label htmlFor="setup-late-anomaly">Late anomaly threshold (minutes)<input id="setup-late-anomaly" type="number" min={0} max={180} step={1} value={value.anomalyLateThresholdMinutes} aria-describedby="setup-late-anomaly-help" onChange={(event) => onChange({ ...value, anomalyLateThresholdMinutes: Number(event.target.value) })} /></label><p id="setup-late-anomaly-help" className="field-help">A check-in more than this many minutes after the meeting starts is flagged as a late arrival in anomaly reports. Example: with 10, checking in at 4:11 PM for a 4:00 PM meeting is flagged.</p></div>
     <div className="module-setup-field"><label htmlFor="setup-early-anomaly">Early anomaly threshold (minutes)<input id="setup-early-anomaly" type="number" min={0} max={180} step={1} value={value.anomalyEarlyThresholdMinutes} aria-describedby="setup-early-anomaly-help" onChange={(event) => onChange({ ...value, anomalyEarlyThresholdMinutes: Number(event.target.value) })} /></label><p id="setup-early-anomaly-help" className="field-help">A check-out more than this many minutes before the meeting ends is flagged as an early departure in anomaly reports. Example: with 10, checking out at 4:49 PM from a meeting that ends at 5:00 PM is flagged.</p></div>
   </div>;

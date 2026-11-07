@@ -3,8 +3,12 @@ import { omitContestResubmissionFields } from "./fixtures/backup-versions.ts";
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
-import worker, { type Env } from "../apps/api/src/index.ts";
-import { createSessionCodec, createSignedStateCodec, hashPassword } from "../apps/api/src/runtime-security.ts";
+import worker, { registeredCoreSchedulerJobs, registeredModuleSchedulerJobs, type Env } from "../apps/api/src/index.ts";
+const schedulerJobIds = [...registeredCoreSchedulerJobs, ...registeredModuleSchedulerJobs].map((job) => job.id);
+/** A scheduledTime whose pass starts with this job. */
+const schedulerSlotFor = (jobId: string) => schedulerJobIds.indexOf(jobId) * 300_000;
+import { createSessionCodec, createSignedStateCodec } from "../apps/api/src/runtime-security.ts";
+import { localSignIn, passwordCredential, randomKey, storedPassword } from "./fixtures/passwords.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
 import { defaultReportDefinition } from "../apps/api/src/report-builder.ts";
 import { FakeDatabase, request, seedInstallationBackupFoundation, sessionCookie, sessionSecret, sessionUserLookup, setupCode, setupCodeHash } from "./fixtures/worker-fake-database.ts";
@@ -68,7 +72,7 @@ test("first setup rejects simple cross-origin media types before any D1 write", 
 test("first-Admin bootstrap requires the private one-time setup code", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", BOOTSTRAP_CODE_HASH: setupCodeHash, DB: database } as unknown as Env;
-  const input = { setupCode: "incorrect setup code", organizationName: "Example Club", timeZone: "UTC", authMode: "local", localUsername: "admin", localPassword: "correct horse battery staple" };
+  const input = { setupCode: "incorrect setup code", organizationName: "Example Club", timeZone: "UTC", authMode: "local", localUsername: "admin", localPasswordKey: await passwordCredential("correct horse battery staple") };
   const result = await worker.fetch(request("/setup/bootstrap", input), env);
   assert.equal(result.status, 403);
   assert.equal(database.batches.length, 0);
@@ -76,9 +80,9 @@ test("first-Admin bootstrap requires the private one-time setup code", async () 
 
 test("local login applies generic constant-work failure and temporary account locking", async () => {
   const database = new FakeDatabase();
-  database.user = { id: "admin-1", role: "admin", passwordHash: await hashPassword("correct horse battery staple"), failedLoginCount: 4 };
+  database.user = { id: "admin-1", role: "admin", passwordHash: await storedPassword("correct horse battery staple"), failedLoginCount: 4 };
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const failed = await worker.fetch(request("/auth/local", { username: "director", password: "incorrect password" }), env);
+  const failed = await worker.fetch(request("/auth/local", { username: "director", key: randomKey() }), env);
   assert.equal(failed.status, 401);
   assert.equal((await failed.json() as { error: string }).error, "Invalid username or password");
   // The count is incremented in SQL, so concurrent failures cannot overwrite each other; the fifth one locks.
@@ -90,22 +94,22 @@ test("local login applies generic constant-work failure and temporary account lo
 
   const lockedDatabase = new FakeDatabase();
   lockedDatabase.user = { id: "admin-1", role: "admin", passwordHash: "scrypt$unused", lockedUntil: new Date(Date.now() + 60_000).toISOString() };
-  const locked = await worker.fetch(request("/auth/local", { username: "director", password: "correct horse battery staple" }), { ...env, DB: lockedDatabase } as unknown as Env);
+  const locked = await worker.fetch(request("/auth/local", { username: "director", key: randomKey(), salt: "AQEBAQEBAQEBAQEBAQEBAQ", password: "correct horse battery staple" }), { ...env, DB: lockedDatabase } as unknown as Env);
   assert.equal(locked.status, 401);
   assert.equal((await locked.json() as { error: string }).error, "Invalid username or password");
   assert.equal(lockedDatabase.calls.some((call) => call.sql.startsWith("UPDATE users")), false, "a locked account is refused before hashing or counting");
 
   const unknownDatabase = new FakeDatabase();
-  const unknown = await worker.fetch(request("/auth/local", { username: "unknown", password: "incorrect password" }), { ...env, DB: unknownDatabase } as unknown as Env);
+  const unknown = await worker.fetch(request("/auth/local", { username: "unknown", key: randomKey() }), { ...env, DB: unknownDatabase } as unknown as Env);
   assert.equal(unknown.status, 401);
   assert.equal(unknownDatabase.calls.some((call) => call.sql.includes("UPDATE users SET failed_login_count")), false);
 });
 
 test("successful local login clears prior failed-login state", async () => {
   const database = new FakeDatabase();
-  database.user = { id: "admin-1", role: "admin", passwordHash: await hashPassword("correct horse battery staple"), failedLoginCount: 2 };
+  database.user = { id: "admin-1", role: "admin", passwordHash: await storedPassword("correct horse battery staple"), failedLoginCount: 2 };
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/auth/local", { username: "director", password: "correct horse battery staple" }), env);
+  const result = await localSignIn((path, body) => worker.fetch(request(path, body), env), "director", "correct horse battery staple");
   assert.equal(result.status, 200);
   assert.match(result.headers.get("set-cookie") ?? "", /lancerlogin_session=/);
   assert.ok(database.calls.some((call) => call.sql.includes("failed_login_count = 0")));
@@ -126,19 +130,22 @@ test("Debug mode and scheduler visibility have no server preference: the endpoin
   assert.equal(database.calls.some((call) => /debug_mode|user_preferences/.test(call.sql)), false);
 });
 
-test("durable scheduler controls are Admin-only, fixed, and unavailable without an explicit binding", async () => {
+test("scheduler controls are Admin-only, accept no fields, and work with or without the Durable Object", async () => {
   const database = new FakeDatabase();
   const base = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const admin = await sessionCookie("admin");
-  assert.equal((await worker.fetch(request("/admin/scheduler", undefined, { cookie: admin }), base)).status, 503);
-  assert.equal((await worker.fetch(request("/admin/scheduler", undefined, { cookie: await sessionCookie("operator") }), { ...base, PLATFORM_SCHEDULER_MODE: "durable" } as Env)).status, 403);
+  // A cron-only deployment (no binding) reports its status instead of 503.
+  const cron = await worker.fetch(request("/admin/scheduler", undefined, { cookie: admin }), base);
+  assert.equal(cron.status, 200); assert.equal((await cron.json() as { mode: string }).mode, "cron");
+  assert.equal((await worker.fetch(request("/admin/scheduler", undefined, { cookie: await sessionCookie("operator") }), base)).status, 403);
   const seen: string[] = [];
-  const env = { ...base, PLATFORM_SCHEDULER_MODE: "durable", PLATFORM_SCHEDULER: { idFromName(name: string) { assert.equal(name, "primary"); return name; }, get() { return { fetch: async (input: Request) => { seen.push(`${input.method} ${new URL(input.url).pathname}`); return Response.json({ enabled: input.url.endsWith("/start"), jobs: {} }); } }; } } } as Env;
+  const env = { ...base, PLATFORM_SCHEDULER: { idFromName(name: string) { assert.equal(name, "primary"); return name; }, get() { return { fetch: async (input: Request) => { seen.push(`${input.method} ${new URL(input.url).pathname}`); return Response.json({ alarm: 1 }); } }; } } } as unknown as Env;
   assert.equal((await worker.fetch(request("/admin/scheduler/start", { interval: 1 }, { method: "POST", cookie: admin }), env)).status, 400);
   const started = await worker.fetch(request("/admin/scheduler/start", {}, { method: "POST", cookie: admin }), env);
-  assert.equal(started.status, 200); assert.deepEqual(await started.json(), { enabled: true, jobs: {} });
+  assert.equal(started.status, 200); assert.equal((await started.json() as { enabled: boolean; mode: string }).mode, "durable");
   const status = await worker.fetch(request("/admin/scheduler", undefined, { cookie: admin }), env);
-  assert.equal(status.status, 200); assert.deepEqual(seen, ["POST /start", "GET /status"]);
+  // Start pokes every job so work the Stop held goes out now; each status read re-arms a lost alarm.
+  assert.equal(status.status, 200); assert.deepEqual(seen, ["POST /poke", "POST /watchdog", "POST /watchdog"]);
   assert.ok(database.calls.some((call) => call.values.includes("scheduler.start")));
 });
 
@@ -860,6 +867,16 @@ test("Reports may request inactive roster history without changing the default a
   assert.equal(attendanceQuery?.values.at(-1), 1);
 });
 
+test("a new report defaults to all history while the operational baseline is still in the future", async () => {
+  const database = new FakeDatabase(); seedPolicy(database, { baseline: "2999-01-01" });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
+  const catalog = await worker.fetch(request("/reports/catalog", undefined, { cookie }), env); assert.equal(catalog.status, 200);
+  const body = await catalog.json() as { baseline: string; defaultDefinition: { period: { type: string } } };
+  assert.equal(body.baseline, "2999-01-01"); assert.equal(body.defaultDefinition.period.type, "all");
+  const queried = await worker.fetch(request("/reports/query", { definition: defaultReportDefinition(true), page: 1, pageSize: 25 }, { cookie }), env); assert.equal(queried.status, 200);
+  assert.match((await queried.json() as { warnings: string[] }).warnings.join(" "), /2999-01-01\) is after today/);
+});
+
 test("report catalog and paginated queries are authenticated for both dashboard roles", async () => {
   for (const role of ["admin", "operator"] as const) {
     const database = new FakeDatabase(); seedPolicy(database, { baseline: "2026-09-01" });
@@ -1567,6 +1584,45 @@ test("manual Discord role job applies only its mapped role and reports completed
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("Discord role jobs apply eight members per pass and finish on a later pass", async () => {
+  const database = new FakeDatabase(); const guildId = "123456789012345678", roleId = "423456789012345678", botId = "523456789012345678", botRoleId = "623456789012345678";
+  const roster = [{ id: "m1", memberId: "A1", firstName: "Ada", lastName: "One", discordUserId: "111111111111111111", active: 1, labelAction: "add" }];
+  const today = new Date().toISOString().slice(0, 10);
+  const sourceFingerprint = createHash("sha256").update(JSON.stringify({ labelId: "label-1", roleId, guildId, today, active: 1, roster })).digest("base64url");
+  const job = { id: "job-1", labelId: "label-1", guildId, roleId, status: "pending", sourceFingerprint, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  const items = Array.from({ length: 12 }, (_, index) => ({ discordUserId: `7000000000000000${String(index).padStart(2, "0")}`, action: "add", status: "pending", attempts: 0 }));
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...await encryptIntegration({ botToken: "secret", guildId }, sessionSecret), verifiedAt: new Date().toISOString(), enabled: 1 });
+  database.rows.set("SELECT id FROM discord_label_role_jobs", (sql: string) => sql.includes("label_id =") ? null : { id: job.id });
+  database.rows.set("source_fingerprint AS sourceFingerprint", () => ["pending", "running"].includes(job.status) ? job : null);
+  database.rows.set("SELECT id, label_id AS labelId, guild_id AS guildId, role_id AS roleId, status", job);
+  database.rows.set("FROM discord_label_role_mappings x JOIN", { labelId: "label-1", labelName: "FRC 321", active: 1, guildId, roleId, roleName: "FRC 321", createdAt: new Date().toISOString() });
+  database.rows.set("SELECT time_zone AS timeZone", { timeZone: "UTC" });
+  database.rows.set("SUM(CASE WHEN status = 'pending'", () => ({ pending: items.filter((item) => item.status === "pending").length, failed: 0 }));
+  database.lists.set("FROM members m WHERE m.installation_id", roster);
+  database.lists.set("status = 'pending' ORDER BY discord_user_id", (_sql: string, values: unknown[]) => items.filter((item) => item.status === "pending").slice(0, Number(values.at(-1))));
+  database.lists.set("ORDER BY action, discord_user_id", items);
+  database.runChangeHandler = (sql, values) => { if (sql.includes("UPDATE discord_label_role_job_items SET status = 'completed'")) items.find((item) => item.discordUserId === values[1])!.status = "completed"; if (sql.includes("UPDATE discord_label_role_jobs SET status = ?")) job.status = String(values[0]); return 1; };
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const writes: string[] = [];
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/roles")) return Response.json([{ id: guildId, name: "@everyone", position: 0, permissions: "0" }, { id: botRoleId, name: "Bot", position: 10, permissions: String(1 << 28) }, { id: roleId, name: "FRC 321", position: 2, permissions: "0" }]);
+    if (url.endsWith("/users/@me")) return Response.json({ id: botId });
+    if (url.endsWith(`/members/${botId}`)) return Response.json({ user: { id: botId }, roles: [botRoleId] });
+    if (url.includes(`/roles/${roleId}`)) { writes.push(url); return new Response(null, { status: 204 }); }
+    throw new Error(`Unexpected Discord request: ${url}`);
+  };
+  try {
+    const first = await worker.fetch(request(`/admin/integrations/discord/label-role-jobs/${job.id}/advance`, {}, { method: "POST", cookie: await sessionCookie("admin") }), env);
+    assert.equal((await first.json() as { status: string }).status, "pending");
+    assert.equal(writes.length, 8);
+    const second = await worker.fetch(request(`/admin/integrations/discord/label-role-jobs/${job.id}/advance`, {}, { method: "POST", cookie: await sessionCookie("admin") }), env);
+    assert.equal((await second.json() as { status: string }).status, "completed");
+    assert.equal(writes.length, 12);
+    assert.equal(new Set(writes).size, 12, "a later pass continues with the members the first pass left");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("Discord role jobs defer rate limits and retry only unresolved failed changes", async () => {
   const database = new FakeDatabase(); const guildId = "123456789012345678", roleId = "423456789012345678", botId = "523456789012345678", botRoleId = "623456789012345678", userId = "111111111111111111";
   const roster = [{ id: "m1", memberId: "A1", firstName: "Ada", lastName: "One", discordUserId: userId, active: 1, labelAction: "add" }];
@@ -1684,7 +1740,7 @@ test("signed Discord attendance reports match canonical reporting and attendance
   assert.equal(result.status, 200);
   const body = await result.json() as { type: number; data: { content: string; flags: number; allowed_mentions: { parse: string[] } } };
   assert.equal(body.type, 4); assert.equal(body.data.flags, 64); assert.deepEqual(body.data.allowed_mentions, { parse: [] });
-  assert.match(body.data.content, /Regular attendance: 33% from 2026-08-15 to \d{4}-\d{2}-\d{2}\. No assigned attendance policy\./);
+  assert.match(body.data.content, /Overall rate: 33% from 2026-08-15 to \d{4}-\d{2}-\d{2}\. No assigned attendance policy\./);
   for (const expected of ["No scan", "Corrected absent", "Partial scan"]) assert.match(body.data.content, new RegExp(expected));
   assert.doesNotMatch(body.data.content, /Optional meetup|Complete attendance|Corrected present|Excused meeting/);
   assert.ok(database.calls.some((call) => call.sql.includes("FROM attendance_events e JOIN meetings mt")));
@@ -1700,7 +1756,7 @@ test("Discord attendance reports handle empty and provider-bounded histories", a
     const result = await worker.fetch(signedDiscordInteraction({ type: 2, guild_id: "123456789012345678", data: { name: "attendance-report" }, member: { user: { id: "323456789012345678" } } }, privateKey), env);
     return (await result.json() as { data: { content: string } }).data.content;
   };
-  const empty = await run([]); assert.match(empty, /Regular attendance: N\/A from 2026-01-01 to \d{4}-\d{2}-\d{2}\. No assigned attendance policy\./); assert.match(empty, /No missed required meetings/);
+  const empty = await run([]); assert.match(empty, /Overall rate: N\/A from 2026-01-01 to \d{4}-\d{2}-\d{2}\. No assigned attendance policy\./); assert.match(empty, /No missed required meetings/);
   const long = await run(Array.from({ length: 80 }, (_, index) => ({ title: `Very long required or optional meeting ${index + 1} ${"x".repeat(90)}`, startsAt: `2026-08-${String(index % 28 + 1).padStart(2, "0")}T20:00:00Z`, endsAt: "2020-01-01T21:00:00Z" })));
   assert.ok(long.length <= 2_000); assert.match(long, /More meetings omitted to fit Discord/); assert.ok((long.match(/^• /gm) ?? []).length < 80);
 });
@@ -1848,11 +1904,11 @@ test("Google OAuth uses signed state and validates identity before issuing a ses
 test("Admin can create a least-privilege local Operator without exposing its hash", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/admin/users", { localUsername: "front-desk", localPassword: "correct horse battery staple", role: "operator" }, { cookie: await sessionCookie("admin") }), env);
+  const result = await worker.fetch(request("/admin/users", { localUsername: "front-desk", localPasswordKey: await passwordCredential("correct horse battery staple"), role: "operator" }, { cookie: await sessionCookie("admin") }), env);
   assert.equal(result.status, 201);
-  assert.equal((await result.text()).includes("scrypt$"), false);
+  assert.equal((await result.text()).includes("scrypt"), false);
   const insert = database.batches.at(-1)?.find((call) => call.sql.includes("INSERT INTO users"));
-  assert.match(String(insert?.values[3]), /^scrypt\$/);
+  assert.match(String(insert?.values[3]), /^scrypt-c\$/);
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("user.created")));
 });
 
@@ -2307,6 +2363,52 @@ test("scheduled Discord absence delivery waits for the late-scan cutoff and retr
   assert.ok(retry.database.calls.some((call) => call.sql.includes("attempts = attempts + 1")));
 });
 
+test("a scheduled pass posts at most two absence notices and three anomaly reports, then continues with its backlog", async () => {
+  const now = Date.now();
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 0 });
+  database.rows.set("late_scan_minutes AS lateScanMinutes, discord_contest_window_hours", { lateScanMinutes: 30, contestWindowHours: 24, channelManagerEnabled: 0 });
+  database.rows.set("anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes", { lateScanMinutes: 30, anomalyLateThresholdMinutes: 10, anomalyEarlyThresholdMinutes: 10, enabled: 1, channelId: "323456789012345678", enabledAt: new Date(now - 24 * 3_600_000).toISOString() });
+  const meetings = Array.from({ length: 4 }, (_, index) => ({ id: `meeting-${index + 1}`, title: `Studio ${index + 1}`, startsAt: new Date(now - (4 + index) * 3_600_000).toISOString(), endsAt: new Date(now - (3 + index) * 3_600_000).toISOString() }));
+  const posted = new Set<string>();
+  database.lists.set("LEFT JOIN discord_attendance_notifications", () => meetings.map((meeting) => ({ ...meeting, notificationStatus: posted.has(`notice:${meeting.id}`) ? "delivered" : undefined })));
+  database.lists.set("LEFT JOIN discord_anomaly_reports", () => meetings.filter((meeting) => !posted.has(`report:${meeting.id}`)));
+  // Each member arrived 20 minutes late to whichever meeting is being reported.
+  database.lists.set("SELECT m.external_id AS memberId", (_sql: string, values: unknown[]) => { const meeting = meetings.find((item) => values.includes(item.id))!; return [{ memberId: "A-101", firstName: "Avery", lastName: "Stone", checkedInAt: new Date(Date.parse(meeting.startsAt) + 20 * 60_000).toISOString(), checkedOutAt: meeting.endsAt }]; });
+  database.lists.set("FROM members m WHERE", [{ id: "member-1", discordUserId: "423456789012345678" }]);
+  database.lists.set("SELECT id, discord_user_id AS discordUserId FROM members", [{ id: "member-1", discordUserId: "423456789012345678" }]);
+  database.lists.set("FROM discord_attendance_notifications WHERE", []);
+  seedPolicy(database, { members: [{ id: "member-1", memberId: "A-101", firstName: "Avery", lastName: "Stone", active: 1, attendanceRequiredFrom: "2026-01-01" }], meetings: meetings.map((meeting) => ({ ...meeting, required: 1, attendanceWeight: 1, audienceMode: "all", isTest: 0 })) });
+  database.runChangeHandler = (sql, values) => {
+    if (sql.includes("UPDATE discord_attendance_notifications SET status = 'delivered'")) posted.add(`notice:${values.find((value) => String(value).startsWith("meeting-"))}`);
+    if (sql.includes("UPDATE discord_anomaly_reports SET status = 'delivered'")) posted.add(`report:${values.find((value) => String(value).startsWith("meeting-"))}`);
+    return 1;
+  };
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; let created = 0; const notices: string[] = []; const reports: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input); const content = init?.body ? String((JSON.parse(String(init.body)) as { content?: string }).content ?? "") : "";
+    if (init?.method === "POST" && url.endsWith("/channels/223456789012345678/messages") && content.includes("Attendance has closed")) notices.push(content);
+    if (init?.method === "POST" && url.endsWith("/channels/323456789012345678/messages")) reports.push(content);
+    created += 1; return Response.json({ id: `message-${created}` });
+  };
+  try {
+    // Consecutive slots: each pass starts one job later, and each stays within its caps and the shared budget.
+    const perPass: { notices: number; reports: number }[] = [];
+    for (let slot = 0; slot < schedulerJobIds.length && (notices.length < 4 || reports.length < 4); slot += 1) {
+      const before = { notices: notices.length, reports: reports.length };
+      await worker.scheduled({ cron: "*/5 * * * *", scheduledTime: slot * 300_000 } as ScheduledController, env);
+      perPass.push({ notices: notices.length - before.notices, reports: reports.length - before.reports });
+    }
+    assert.ok(perPass.every((pass) => pass.notices <= 2 && pass.reports <= 3), JSON.stringify(perPass));
+    assert.equal(notices.length, 4); assert.equal(reports.length, 4);
+    assert.ok(perPass.length > 1, "one pass never sends the whole backlog");
+    assert.equal(new Set(reports.map((content) => content.match(/Studio \d/)?.[0])).size, 4, "later passes pick up the reports earlier ones left");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("scheduled Discord anomaly delivery uses the private channel, separate values, and an enforced retry nonce", async () => {
   const now = Date.now();
   const database = new FakeDatabase();
@@ -2551,6 +2653,27 @@ test("Discord calendar sync retries a rate limit only after Discord's retry dela
   } finally { globalThis.fetch = originalFetch; globalThis.setTimeout = originalSetTimeout; }
 });
 
+test("a long Discord calendar rate limit is reported as calendar sync, not role sync, and is not retried in place", async (context) => {
+  calendarClock(context);
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null });
+  database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", { eventId: null, active: 1 });
+  database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, actorUserId: "operator-1" }]);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; let calls = 0;
+  globalThis.fetch = async () => { calls += 1; return new Response(JSON.stringify({ retry_after: 9.2 }), { status: 429, headers: { "content-type": "application/json" } }); };
+  try {
+    const result = await worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(result.status, 200);
+    assert.equal(calls, 1);
+    const reason = "Discord is rate limiting calendar sync. Try again in a few seconds.";
+    assert.deepEqual(await result.json(), { synced: 0, queued: 0, skipped: 0, failed: 1, outcomes: [{ meetingId: "meeting-1", title: "Studio", status: "failed", reason }] });
+    assert.ok(database.batches.flat().some((call) => call.sql.includes("UPDATE discord_calendar_operations SET status = 'failed'") && call.values.includes(reason)));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("Discord calendar recovery reconciles an ambiguously created event without another POST", async (context) => {
   calendarClock(context);
   const database = new FakeDatabase();
@@ -2675,7 +2798,8 @@ test("Discord sync-all pages a large meeting set across bounded provider batches
     const start = afterId ? meetings.findIndex((meeting) => meeting.id === afterId) + 1 : 0;
     return meetings.slice(start, start + Number(values[4]));
   });
-  database.lists.set("FROM discord_calendar_operations o", (_sql: string, values: unknown[]) => values.slice(0, -1).map((meetingId) => ({ meetingId, generation: 1, action: "upsert", eventId: `event-${meetingId}`, status: "pending", attempts: 0, revision: 1, actorUserId: "admin-1" })));
+  // The bound values are the requested meeting IDs, then the lease cutoff and the 60-day horizon.
+  database.lists.set("FROM discord_calendar_operations o", (_sql: string, values: unknown[]) => values.slice(0, -2).map((meetingId) => ({ meetingId, generation: 1, action: "upsert", eventId: `event-${meetingId}`, status: "pending", attempts: 0, revision: 1, actorUserId: "admin-1" })));
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const originalFetch = globalThis.fetch; let providerCalls = 0;
   globalThis.fetch = async () => { providerCalls += 1; return new Response(JSON.stringify({ id: "event" }), { headers: { "content-type": "application/json" } }); };
@@ -2686,18 +2810,73 @@ test("Discord sync-all pages a large meeting set across bounded provider batches
       const result = await worker.fetch(request(`/admin/integrations/discord/calendar/sync-all${cursor ? `?after=${encodeURIComponent(cursor)}` : ""}`, {}, { cookie: await sessionCookie("admin") }), env);
       assert.equal(result.status, 200);
       const body = await result.json() as { selected: number; synced: number; nextCursor?: string | null; batchLimit: number; limit: number };
-      assert.equal(body.batchLimit, 10);
+      assert.equal(body.batchLimit, 3);
       assert.equal(body.limit, 100);
       pageSizes.push(body.selected); providerBatchSizes.push(providerCalls - before); selected += body.selected; synced += body.synced;
       if (body.nextCursor) assert.equal(seen.has(body.nextCursor), false);
       if (body.nextCursor) seen.add(body.nextCursor);
       cursor = body.nextCursor;
     } while (cursor);
-    assert.deepEqual(pageSizes, [10, 10, 3]);
-    assert.deepEqual(providerBatchSizes, [10, 10, 3]);
+    // Each page fits one Free-plan invocation: three meetings, one Discord request each.
+    assert.deepEqual(pageSizes, [3, 3, 3, 3, 3, 3, 3, 2]);
+    assert.deepEqual(providerBatchSizes, [3, 3, 3, 3, 3, 3, 3, 2]);
     assert.equal(selected, 23);
     assert.equal(synced, 23);
-    assert.ok(database.calls.filter((call) => call.sql.includes("FROM discord_calendar_operations o")).every((call) => call.sql.includes("LIMIT 10")));
+    assert.ok(database.calls.filter((call) => call.sql.includes("FROM discord_calendar_operations o")).every((call) => call.sql.includes("LIMIT 3")));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("a scheduled Discord calendar pass handles three operations and lists scheduled events once", async (context) => {
+  calendarClock(context);
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 0 });
+  database.rows.set("FROM meetings WHERE", (_sql: string, values: unknown[]) => ({ id: String(values[0]), title: `Meeting ${values[0]}`, startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null }));
+  database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", { eventId: null, active: 1 });
+  // Interrupted creates: each one must be reconciled against the server's events before it is created again.
+  database.lists.set("FROM discord_calendar_operations o", ["meeting-1", "meeting-2", "meeting-3"].map((meetingId) => ({ meetingId, generation: 1, action: "upsert", eventId: null, status: "processing", attempts: 1, revision: 1, actorUserId: "admin-1" })));
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const calendar: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("/scheduled-events")) { calendar.push(String(init?.method)); return Response.json(init?.method === "GET" ? [] : { id: `event-${calendar.length}` }); }
+    return Response.json({ id: "message-1" });
+  };
+  try {
+    // The slot that puts the Discord calendar job first, so the rest of the pass cannot have used its budget.
+    await worker.scheduled({ cron: "*/5 * * * *", scheduledTime: schedulerSlotFor("attendance.discord-calendar") } as ScheduledController, env);
+    assert.deepEqual(calendar, ["GET", "POST", "POST", "POST"]);
+    assert.ok(database.calls.filter((call) => call.sql.includes("FROM discord_calendar_operations o")).every((call) => call.sql.includes("LIMIT 3")));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Google Calendar sync-all delivers one bounded batch and leaves the rest queued", async () => {
+  const database = new FakeDatabase();
+  const encrypted = await encryptIntegration({ clientId: "calendar-client", clientSecret: "calendar-secret", refreshToken: "calendar-refresh", calendarId: "calendar@example.test" }, sessionSecret);
+  database.rows.set("google_calendar_enabled AS enabled", { ...encrypted, enabled: 1, authorizedAt: "2026-09-05", verifiedAt: "2026-09-05" });
+  const meetings = Array.from({ length: 7 }, (_, index) => ({ id: `meeting-${index + 1}` }));
+  database.lists.set("SELECT id FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at ASC LIMIT 100", meetings);
+  database.rows.set("SELECT active FROM google_calendar_event_mappings", { active: 1 });
+  database.rows.set("SELECT m.event_id AS eventId, mt.starts_at AS startsAt", (_sql: string, values: unknown[]) => ({ eventId: `event-${values[0]}`, startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z" }));
+  database.rows.set("SELECT title, notes, required, attendance_weight AS attendanceWeight FROM meetings", { title: "Studio", notes: null, required: 1, attendanceWeight: 1 });
+  // The fake returns rows whatever the LIMIT says, so it hands back the five rows the query's LIMIT allows.
+  database.lists.set("FROM google_calendar_operations o", (_sql: string, values: unknown[]) => values.slice(0, 5).map((eventId) => ({ meetingId: String(eventId).slice(6), eventId, action: "upsert", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", status: "pending", attempts: 0, syncedAt: "2026-09-06", generation: 1 })));
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const originalFetch = globalThis.fetch; const patches: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("oauth2")) return Response.json({ access_token: "calendar-access", expires_in: 3600 });
+    if (init?.method === "PATCH") patches.push(url);
+    return Response.json({ id: "event" });
+  };
+  try {
+    const result = await worker.fetch(request("/admin/integrations/google-calendar/sync-all", {}, { cookie: await sessionCookie("admin") }), env);
+    assert.equal(result.status, 200, await result.clone().text());
+    const body = await result.json() as { selected: number; synced: number; queued: number; failed: number };
+    assert.deepEqual({ selected: body.selected, synced: body.synced, queued: body.queued, failed: body.failed }, { selected: 7, synced: 5, queued: 2, failed: 0 });
+    assert.equal(patches.length, 5);
+    assert.ok(database.calls.filter((call) => call.sql.includes("FROM google_calendar_operations o")).every((call) => call.sql.includes("LIMIT 5")));
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -2936,7 +3115,7 @@ test("destructive data operations are scoped and require exact confirmation", as
 test("Admin can link roster members to dashboard accounts while non-rostered accounts remain supported", async () => {
   const database = new FakeDatabase(); database.rows.set("SELECT id FROM members", { id: "member-1" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/admin/users", { localUsername: "member.operator", localPassword: "temporary password", memberId: "member-1", role: "operator" }, { cookie: await sessionCookie("admin") }), env);
+  const result = await worker.fetch(request("/admin/users", { localUsername: "member.operator", localPasswordKey: await passwordCredential("temporary password"), memberId: "member-1", role: "operator" }, { cookie: await sessionCookie("admin") }), env);
   assert.equal(result.status, 201); const statements = database.batches.at(-1) ?? []; const insert = statements.find((call) => call.sql.includes("INSERT INTO users")); assert.ok(insert?.sql.includes("member_id")); assert.ok(insert?.values.includes("member-1"));
   const unlinked = await worker.fetch(request("/admin/users", { email: "staff@example.test", memberId: null, role: "admin" }, { cookie: await sessionCookie("admin") }), env); assert.equal(unlinked.status, 201);
 });
@@ -3120,7 +3299,7 @@ test("roster backup and restore retain label definitions, dated history, and att
   database.rows.set("SELECT attendance_recent_days AS recentDays", { recentDays: 30, policyActivatedOn: "2026-09-22" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
   const exported = await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env); assert.equal(exported.status, 200);
-  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 49); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
+  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 50); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
   assert.deepEqual(Object.keys(backup.tables).sort(), ["label_attendance_rules", "label_weekly_targets", "member_label_changes", "member_labels", "members"]);
   assert.deepEqual(backup.tables.label_attendance_rules, [{ id: "class-rule", installation_id: "primary", label_id: "mentor:primary", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", excused_handling: "count_missed" }]);
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie }), env)).status, 200);
@@ -3140,7 +3319,7 @@ test("installation backup retains Discord role mappings while roster backup omit
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
   const roster = await (await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env)).json() as { tables: Record<string, unknown[]> };
-  assert.equal(installation.schemaVersion, 49); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.schemaVersion, 50); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
   assert.equal(installation.tables.saved_report_views.length, 1); assert.equal(installation.tables.saved_report_tabs.length, 1);
   assert.equal(Object.hasOwn(roster.tables, "discord_label_role_mappings"), false);
   assert.equal(Object.hasOwn(roster.tables, "saved_report_views"), false);
@@ -3174,13 +3353,14 @@ test("custom report queries and exports apply current membership to past periods
   };
   const current = await query();
   assert.equal(current.rows[0].cells["attendance.member.regular-rate"].text, "50%");
-  assert.equal(current.rows[0].cells["attendance.policy.report-result:class"].text, "Class: 75% · met");
-  assert.equal(current.rows[0].cells["attendance.policy.official-result:class"].text, "Class: N/A");
+  assert.equal(current.rows[0].cells["attendance.policy.report-result:class"].text, "Class: 75% · Met");
+  assert.equal(current.rows[0].cells["attendance.policy.official-result:class"].text, "Class: Not enough meetings yet");
   assert.deepEqual((await query({ membership: "historical" })).rows, []);
-  assert.equal((await query({ membership: "historical", labelIds: [] })).rows[0].cells["attendance.policy.report-result:class"].text, "Class: N/A");
+  assert.equal((await query({ membership: "historical", labelIds: [] })).rows[0].cells["attendance.policy.report-result:class"].text, "Class: Not enough meetings yet");
   const summary = await worker.fetch(request("/exports/report.csv", { definition }, { cookie }), env);
   assert.equal(summary.status, 200);
-  assert.match(await summary.text(), /Avery Stone,50%,Class: 75% · met,Class: N\/A/);
+  // Rates export as plain numbers with one decimal; the unit is in the header.
+  assert.match(await summary.text(), /^Member,Overall rate \(%\),Class - Policy result,Class - Last 30 days: policy result\r\nAvery Stone,50\.0,Class: 75% · Met,Class: Not enough meetings yet/);
   const detail = await worker.fetch(request("/exports/report-detail.csv", { definition }, { cookie }), env);
   assert.equal(detail.status, 200);
   const lines = (await detail.text()).trim().split("\r\n");
@@ -3200,6 +3380,29 @@ test("custom report exports include every filtered row and neutralize selected v
   const summary = await worker.fetch(request("/exports/report.csv", { definition }, { cookie: await sessionCookie("operator") }), env); assert.equal(summary.status, 200); const summaryCsv = await summary.text(); assert.match(summaryCsv, /Member,Member ID,Email/); assert.match(summaryCsv, /'\+Avery Stone,'=MEMBER\(\),'=EMAIL\(\)/); assert.doesNotMatch(summaryCsv, /Blair/);
   const detail = await worker.fetch(request("/exports/report-detail.csv", { definition }, { cookie: await sessionCookie("operator") }), env); assert.equal(detail.status, 200); const detailCsv = await detail.text(); assert.match(detailCsv, /"Studio, weekly"/); assert.doesNotMatch(detailCsv, /Blair/);
   assert.equal(database.calls.filter((call) => call.values.includes("report.exported")).length, 2);
+});
+
+test("custom reports filter on fields that aren't columns without extra queries, and return only displayed cells", async () => {
+  const database = new FakeDatabase(); seedPolicy(database, { members: [{ id: "member-1", memberId: "T-001", firstName: "Test", lastName: "Student A", email: "student.a@example.test", active: 1, attendanceRequiredFrom: "2026-01-01" }, { id: "member-2", memberId: "T-002", firstName: "Test", lastName: "Student B", email: "student.b@example.test", active: 1, attendanceRequiredFrom: "2026-01-01" }], meetings: [{ id: "meeting-1", title: "Test meeting", startsAt: "2026-09-01T20:00:00Z", endsAt: "2026-09-01T22:00:00Z", required: 1, attendanceWeight: 1, audienceMode: "all", isTest: 0 }] });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("operator");
+  const filter = { column: { key: "core.member.email" }, operator: "contains" as const, value: "student.b" };
+  const hidden = { ...defaultReportDefinition(false), columns: [{ key: "core.member.name" }, { key: "core.member.id" }], columnFilters: [filter] };
+  const shown = { ...hidden, columns: [...hidden.columns, { key: "core.member.email" }] };
+  const run = async (definition: typeof hidden) => {
+    const before = database.calls.length;
+    const result = await worker.fetch(request("/reports/query", { definition }, { cookie }), env); assert.equal(result.status, 200, await result.clone().text());
+    return { body: await result.json() as { definition: typeof hidden; columns: { id: string }[]; rows: { label: string; cells: Record<string, unknown> }[] }, queries: database.calls.length - before };
+  };
+  const filtered = await run(hidden); const visible = await run(shown);
+  assert.deepEqual(filtered.body.rows.map((row) => row.label), ["Test Student B"]);
+  assert.deepEqual(filtered.body.columns.map((column) => column.id), ["core.member.name", "core.member.id"]);
+  assert.deepEqual(Object.keys(filtered.body.rows[0].cells).sort(), ["core.member.id", "core.member.name"]);
+  assert.deepEqual(filtered.body.definition.columnFilters, [filter]);
+  assert.deepEqual(visible.body.rows.map((row) => row.label), ["Test Student B"]);
+  // The hidden field comes from the same source the displayed column would, so the query count is the same.
+  assert.equal(filtered.queries, visible.queries);
+  const csv = await (await worker.fetch(request("/exports/report.csv", { definition: hidden }, { cookie }), env)).text();
+  assert.equal(csv, "Member,Member ID\r\nTest Student B,T-002\r\n");
 });
 
 test("schema 17 installation backups default fields added by parallel attendance and Discord upgrades", async () => {
@@ -3341,7 +3544,7 @@ test("contest backups retain rejected submission history, default schema40 and r
   const history = JSON.stringify([{ messageId: "original-message", createdAt: "2026-10-15T10:00:00Z", status: "rejected", resolvedBy: "admin-1", resolvedAt: "2026-10-15T11:00:00Z", reviewNote: "Original review", submittedByDiscordUserId: "synthetic-discord" }]);
   database.lists.set("FROM discord_attendance_contests WHERE", [{ installation_id: "primary", meeting_id: "meeting", member_id: "member", message_id: "new-message", status: "open", resolved_by: null, resolved_at: null, created_at: "2026-10-15T12:00:00Z", submitted_by_discord_user_id: "synthetic-discord", review_note: null, prior_reviews_json: history }]);
   const backup = await (await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie }), env)).json() as any;
-  assert.equal(backup.schemaVersion, 49); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
+  assert.equal(backup.schemaVersion, 50); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
   const restore = (value: unknown) => worker.fetch(request("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup: value }, { cookie }), env);
   const restored = await restore(backup); assert.equal(restored.status, 200, await restored.clone().text());
   assert.ok(database.batches.at(-1)?.some(call => call.sql.includes("INSERT INTO discord_attendance_contests") && call.values.includes(history)));

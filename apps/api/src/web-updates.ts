@@ -183,10 +183,13 @@ export async function startWebUpdate(env: WebUpdateEnv, input: Record<string, un
   }
   return updateView(await requestRow(env, row.id), env);
 }
+const maintenanceSql = "SELECT id FROM web_update_requests WHERE installation_id = 'primary' AND maintenance = 1 LIMIT 1";
 export async function webUpdateMaintenance(env: WebUpdateEnv): Promise<boolean> {
   if (!env.DB) return false;
-  return Boolean(await db(env).prepare("SELECT id FROM web_update_requests WHERE installation_id = 'primary' AND maintenance = 1 LIMIT 1").first());
+  return Boolean(await db(env).prepare(maintenanceSql).first());
 }
+/** The webUpdateMaintenance read as a statement, for a batch; any row means maintenance is on. */
+export function webUpdateMaintenanceStatement<S>(database: { prepare(sql: string): S }): S { return database.prepare(maintenanceSql); }
 /** The controller workflow name that supports update channels; earlier controllers cannot install betas. */
 export const updateChannelControllerName = "Upgrade LancerLogin web (update channels v2)";
 /** current: supports update channels. upgrade_required: an earlier controller. missing: absent or inactive. unknown: not checked. */

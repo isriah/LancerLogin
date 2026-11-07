@@ -1,0 +1,15 @@
+export type PasswordScrypt = { readonly N: 32768; readonly r: 8; readonly p: 1; readonly dkLen: 32 };
+export const passwordScrypt: PasswordScrypt;
+export const passwordSaltBytes: number;
+export const minimumPasswordLength: number;
+export const passwordVerifierLabel: string;
+export const clientPasswordFormat: "scrypt-c";
+export const legacyPasswordFormat: "scrypt";
+export function encodeBase64Url(bytes: Uint8Array): string;
+export function decodeBase64Url(text: unknown): Uint8Array | undefined;
+export function decodeFixedBytes(text: unknown, length: number): Uint8Array | undefined;
+export function constantTimeEqual(left: Uint8Array, right: Uint8Array): boolean;
+export function passwordVerifier(key: Uint8Array): Promise<Uint8Array>;
+export function clientPasswordHash(salt: Uint8Array, key: Uint8Array): Promise<string>;
+export type ParsedPasswordHash = { format: "scrypt-c"; salt: Uint8Array; verifier: Uint8Array } | { format: "scrypt"; salt: Uint8Array; key: Uint8Array };
+export function parsePasswordHash(encoded: unknown): ParsedPasswordHash | undefined;

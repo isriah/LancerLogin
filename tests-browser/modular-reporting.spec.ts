@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { filterAndSortReportRows, combinedMemberDataset, reportFieldSourceDataset } from "../apps/api/src/report-builder.ts";
+import { filterAndSortReportRows, combinedMemberDataset, formatReportCellForColumn, reportDatasetDefinition, reportFieldSourceDataset } from "../apps/api/src/report-builder.ts";
 import { reportColumnLabel } from "../apps/dashboard/src/saved-reports.ts";
 import { attendanceModule, bundledModuleRegistry, coreReportDatasets, type ReportDatasetDefinition } from "../packages/shared/src/module-platform.ts";
 import { outreachSnapshot } from "./module-fixtures";
@@ -15,7 +15,7 @@ const definitions = [
   combinedMemberDataset,
   ...(attendanceModule.reportDatasets ?? []),
   ...(outreachModule?.reportDatasets ?? []),
-];
+].map((dataset) => reportDatasetDefinition(dataset.id) ?? dataset); // Core's catalog form, which adds H:MM to duration fields.
 const accessible = new Set(["core.members", combinedMemberDataset.id, ...(outreachModule?.reportDatasets ?? []).map((dataset) => dataset.id)]);
 const datasets = definitions.map((dataset) => ({ ...dataset, available: accessible.has(dataset.id), fields: dataset.fields.map((field) => { const sourceDataset = reportFieldSourceDataset(dataset.id, field.id) ?? dataset.id; const available = accessible.has(sourceDataset); return { ...field, sourceDataset, available, explanation: available ? undefined : "Attendance is unavailable for your current module access. It will return when access is restored." }; }) }));
 const fieldCatalog = new Map<string, { field: ReportDatasetDefinition["fields"][number]; datasets: string[] }>();
@@ -46,9 +46,9 @@ type Definition = {
   labelIds: string[];
   labelMatch: "any" | "all";
   membership: "current" | "historical";
-  columns: { key: string; labelId?: string; unit?: "minutes" | "hours" }[];
-  columnFilters: { column: { key: string; labelId?: string; unit?: "minutes" | "hours" }; operator: "contains" | "minimum" | "equals" | "maximum" | "between" | "empty" | "not_empty"; value: string; upperValue?: string }[];
-  sort: { column: { key: string; labelId?: string; unit?: "minutes" | "hours" }; direction: "asc" | "desc" };
+  columns: { key: string; labelId?: string; unit?: "minutes" | "hours" | "hours_minutes" }[];
+  columnFilters: { column: { key: string; labelId?: string; unit?: "minutes" | "hours" | "hours_minutes" }; operator: "contains" | "minimum" | "equals" | "maximum" | "between" | "empty" | "not_empty"; value: string; upperValue?: string }[];
+  sort: { column: { key: string; labelId?: string; unit?: "minutes" | "hours" | "hours_minutes" }; direction: "asc" | "desc" };
 };
 
 function definitionFor(datasetId: string): Definition {
@@ -107,8 +107,7 @@ function reportResult(definition: Definition, pageSize: number | "all" = 25, sou
     href: row.href,
     cells: Object.fromEntries(definition.columns.map((column) => {
       const field = availability.get(column.key)!; const value = row.values[column.key] ?? "N/A";
-      const displayed = column.unit === "hours" && typeof value === "number" ? Math.round(value / 60 * 100) / 100 : value;
-      return [column.key, field.available ? { text: column.unit === "hours" && typeof displayed === "number" ? displayed.toFixed(2) : String(displayed), sortValue: displayed === "N/A" ? null : displayed } : { text: "Unavailable", sortValue: null, unavailable: true, explanation: field.explanation }];
+      return [column.key, field.available ? formatReportCellForColumn(column, { text: String(value), sortValue: value === "N/A" ? null : value }) : { text: "Unavailable", sortValue: null, unavailable: true, explanation: field.explanation }];
     })),
   }));
   rows = filterAndSortReportRows(definition, rows);
@@ -209,7 +208,7 @@ test("combined reports mute unavailable columns and pause unavailable controls",
   await expect(table).toContainText("Avery Member");
   await expect(table).toContainText("2.75");
   await expect(table).toContainText("Unavailable");
-  const unavailable = page.getByRole("button", { name: /Regular attendance is unavailable/ });
+  const unavailable = page.getByRole("button", { name: /Overall rate is unavailable/ });
   await expect(unavailable).toHaveAttribute("title", /Attendance is unavailable/);
   const exportMenu = page.locator(".report-menu").filter({ has: page.locator("summary").filter({ hasText: /^Export$/ }) });
   // Native details opens synchronously, before its queued toggle event updates React.
@@ -226,8 +225,9 @@ test("combined reports mute unavailable columns and pause unavailable controls",
   await expect(page.getByRole("button", { name: "Download report CSV" })).toBeEnabled();
   await page.keyboard.press("Escape");
   await expect(exportMenu).not.toHaveAttribute("open");
-  await page.getByText("Filters and report settings", { exact: true }).click();
-  await page.getByRole("combobox", { name: "Membership" }).selectOption("historical");
+  await page.getByRole("button", { name: /^Report period:/ }).click();
+  await page.getByRole("dialog", { name: "Report period" }).getByRole("combobox", { name: "Membership" }).selectOption("historical");
+  await page.getByRole("dialog", { name: "Report period" }).getByRole("button", { name: "Apply", exact: true }).click();
   await expect.poll(() => seen.at(-1)?.membership).toBe("historical");
   await expect(table).toContainText("Avery Member");
   await openReportExport(page);
@@ -260,7 +260,7 @@ test("saved reports keep unavailable module definitions editable while results a
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "Report type" })).toHaveValue("core.combined-members");
   expect(seen[0].dataset).toBe("attendance.members");
-  await expect(page.getByRole("button", { name: /Regular attendance is unavailable/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Overall rate is unavailable/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
   await page.getByLabel("Report name").fill("Revised attendance history");
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
@@ -286,12 +286,20 @@ test("saved Outreach member reports can add Roster and Attendance columns from t
   await expect(page.getByRole("table", { name: /Report results/ })).toContainText("2.75");
   expect(seen[0].dataset).toBe("outreach.members");
   await page.getByRole("button", { name: "Add column", exact: true }).click();
-  for (const field of combinedMemberDataset.fields.filter((field) => field.id !== "core.member.name")) {
-    const label = reportColumnLabel({ key: field.id, unit: field.defaultDurationUnit }, field.label);
-    await expect(field.requiresLabel ? page.getByRole("button", { name: `Choose labels for ${label}` }) : page.getByRole("checkbox", { name: label, exact: true })).toBeEnabled();
+  const pickerFields = combinedMemberDataset.fields.filter((field) => field.id !== "core.member.name");
+  const labelFields = pickerFields.filter((field) => field.requiresLabel);
+  expect(labelFields.length).toBeGreaterThan(0);
+  for (const field of pickerFields.filter((field) => !field.requiresLabel)) {
+    await expect(page.getByRole("checkbox", { name: reportColumnLabel({ key: field.id, unit: field.defaultDurationUnit }, field.label), exact: true })).toBeEnabled();
   }
+  // Label-policy columns sit behind the "Single policy column" drill-in rather than the top-level list.
+  await page.getByRole("button", { name: "Choose a single policy column", exact: true }).click();
+  for (const field of labelFields) {
+    await expect(page.getByRole("button", { name: `Choose labels for ${reportColumnLabel({ key: field.id, unit: field.defaultDurationUnit }, field.label)}`, exact: true })).toBeEnabled();
+  }
+  await page.getByRole("dialog", { name: "Add report column" }).getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("checkbox", { name: "Email", exact: true }).check();
-  await page.getByRole("checkbox", { name: "Regular attendance", exact: true }).check();
+  await page.getByRole("checkbox", { name: "Overall rate", exact: true }).check();
   await page.keyboard.press("Escape");
   await expect.poll(() => seen.at(-1)?.dataset).toBe("core.combined-members");
   await expect(page.getByRole("table", { name: /Report results/ })).toContainText("92");
@@ -312,7 +320,7 @@ test("legacy member reports keep their definition until a column edit and offer 
   expect(seen[0]).toMatchObject(definition);
   await page.getByRole("button", { name: "Add column", exact: true }).click();
   await expect(page.getByRole("checkbox", { name: "Email", exact: true })).toBeEnabled();
-  await expect(page.getByRole("checkbox", { name: /Regular attendance/ })).toBeDisabled();
+  await expect(page.getByRole("checkbox", { name: /Overall rate/ })).toBeDisabled();
   await page.getByRole("checkbox", { name: "Outreach hours", exact: true }).check();
   await page.keyboard.press("Escape");
   await expect.poll(() => seen.at(-1)?.dataset).toBe("core.combined-members");
@@ -331,50 +339,114 @@ test("saved report column filters support ranges, empty values and unit conversi
   await page.goto("/reports/view/filters");
   const table = page.getByRole("table", { name: /Report results/ });
   await expect(table).toContainText("Community open house");
+  // Column menus keep sort, units, move and remove; filters open from each column's funnel button.
   await page.getByRole("button", { name: "Minutes column options" }).click();
-  await page.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("between");
-  await page.getByLabel("From (minutes)", { exact: true }).fill("45");
-  await expect(page.getByRole("button", { name: "Apply range" })).toBeDisabled();
-  await page.getByLabel("To (minutes)", { exact: true }).fill("120");
-  await page.getByRole("button", { name: "Apply range" }).click();
+  await expect(page.getByRole("combobox", { name: "Filter condition", exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Filter Minutes", exact: true }).click();
+  const minutes = page.getByRole("dialog", { name: "Filter Minutes" });
+  await minutes.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("between");
+  await minutes.getByLabel("From (minutes)", { exact: true }).fill("45");
+  await expect(minutes.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
+  await minutes.getByLabel("To (minutes)", { exact: true }).fill("120");
+  await minutes.getByRole("button", { name: "Apply", exact: true }).click();
   await expect.poll(() => seen.at(-1)?.columnFilters).toEqual([{ column: { key: "outreach.activity.minutes", unit: "minutes" }, operator: "between", value: "45", upperValue: "120" }]);
+  await expect(page.getByRole("button", { name: "Filter Minutes", exact: true })).toHaveClass(/is-active/);
+  await page.getByRole("button", { name: "Minutes column options" }).click();
   await page.getByRole("combobox", { name: "Units", exact: true }).selectOption("hours");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Filter Hours", exact: true }).click();
   await expect(page.getByLabel("From (hours)", { exact: true })).toHaveValue("0.75");
   await expect(page.getByLabel("To (hours)", { exact: true })).toHaveValue("2");
-  await page.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("maximum");
+  await page.keyboard.press("Escape");
+  // H:MM shows hours and minutes but filters on minutes, so the range converts back and reads as H:MM.
+  await page.getByRole("button", { name: "Hours column options" }).click();
+  await page.getByRole("combobox", { name: "Units", exact: true }).selectOption("hours_minutes");
+  await expect(page.getByRole("combobox", { name: "Units", exact: true }).locator("option:checked")).toHaveText("Hours and minutes (H:MM)");
+  await page.keyboard.press("Escape");
+  await expect.poll(() => seen.at(-1)?.columnFilters).toEqual([{ column: { key: "outreach.activity.minutes", unit: "hours_minutes" }, operator: "between", value: "45", upperValue: "120" }]);
+  await expect(page.getByRole("button", { name: "Edit filter: Hours (H:MM) 0:45 to 2:00", exact: true })).toBeVisible();
+  await expect(table.getByRole("columnheader", { name: /Hours \(H:MM\)/ })).toBeVisible();
+  await expect(table).toContainText("2:00"); await expect(table).toContainText("0:45");
+  await page.getByRole("button", { name: "Filter Hours (H:MM)", exact: true }).click();
+  const hoursMinutes = page.getByRole("dialog", { name: "Filter Hours (H:MM)" });
+  await expect(hoursMinutes.getByLabel("From (H:MM)", { exact: true })).toHaveValue("0:45");
+  await expect(hoursMinutes.getByLabel("To (H:MM)", { exact: true })).toHaveValue("2:00");
+  await hoursMinutes.getByLabel("From (H:MM)", { exact: true }).fill("1:5");
+  await expect(hoursMinutes.getByRole("alert")).toHaveText("Enter hours and minutes, like 1:30.");
+  await expect(hoursMinutes.getByRole("button", { name: "Apply", exact: true })).toBeDisabled();
+  await hoursMinutes.getByLabel("From (H:MM)", { exact: true }).fill("1:00");
+  await hoursMinutes.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect.poll(() => seen.at(-1)?.columnFilters).toEqual([{ column: { key: "outreach.activity.minutes", unit: "hours_minutes" }, operator: "between", value: "60", upperValue: "120" }]);
+  await page.getByRole("button", { name: "Hours (H:MM) column options" }).click();
+  await page.getByRole("combobox", { name: "Units", exact: true }).selectOption("hours");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Filter Hours", exact: true }).click();
+  const hours = page.getByRole("dialog", { name: "Filter Hours" });
+  await expect(hours.getByLabel("From (hours)", { exact: true })).toHaveValue("1");
+  await hours.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("maximum");
+  await hours.getByLabel("Maximum (hours)", { exact: true }).fill("0.75");
+  await hours.getByRole("button", { name: "Apply", exact: true }).click();
   await expect.poll(() => seen.at(-1)?.columnFilters[0]?.operator).toBe("maximum");
   await expect(table).not.toContainText("Community open house");
-  await page.getByRole("button", { name: "Clear filter", exact: true }).click();
-  await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Activity column options", exact: true }).click();
-  await page.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("equals");
-  await page.getByLabel("Equals", { exact: true }).fill("community open house");
+  await page.getByRole("button", { name: "Filter Hours", exact: true }).click();
+  await hours.getByRole("button", { name: "Clear", exact: true }).click();
+  await expect.poll(() => seen.at(-1)?.columnFilters).toEqual([]);
+  const activity = page.getByRole("dialog", { name: "Filter Activity" });
+  await page.getByRole("button", { name: "Filter Activity", exact: true }).click();
+  await activity.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("equals");
+  await activity.getByLabel("Equals", { exact: true }).fill("community open house");
+  await activity.getByLabel("Equals", { exact: true }).press("Enter");
   await expect(table).not.toContainText("Team 901 design review");
-  await page.getByRole("button", { name: "Clear filter", exact: true }).click();
-  await page.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("empty");
-  await expect(page.getByLabel("Equals", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Edit filter: Activity = community open house", exact: true }).click();
+  await activity.getByRole("button", { name: "Clear", exact: true }).click();
+  await expect(table).toContainText("Team 901 design review");
+  await page.getByRole("button", { name: "Filter Activity", exact: true }).click();
+  await activity.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("empty");
+  await expect(activity.getByLabel("Equals", { exact: true })).toHaveCount(0);
+  await activity.getByRole("button", { name: "Apply", exact: true }).click();
   await expect.poll(() => seen.at(-1)?.columnFilters[0]).toMatchObject({ operator: "empty", value: "" });
   await expect(table).not.toContainText("Community open house");
-  await page.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("not_empty");
+  await page.getByRole("button", { name: "Filter Activity", exact: true }).click();
+  await activity.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("not_empty");
+  await activity.getByRole("button", { name: "Apply", exact: true }).click();
   await expect(table).toContainText("Community open house");
+  await expect(page.getByRole("button", { name: "Filter Activity", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(activity).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("button", { name: "Activity column options", exact: true })).toBeFocused();
-  await page.getByRole("button", { name: "Service date column options", exact: true }).click();
-  await page.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("between");
-  await page.getByLabel("From", { exact: true }).fill("2026-09-19");
-  await page.getByLabel("To", { exact: true }).fill("2026-09-20");
-  await page.getByRole("button", { name: "Apply range" }).click();
+  await expect(activity).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Filter Activity", exact: true })).toBeFocused();
+  // Outreach labels are a module list filter: a field in + Filter, not a column, with a "Not shown" chip.
+  await page.getByRole("button", { name: "Add filter", exact: true }).click();
+  const picker = page.getByRole("dialog", { name: "Add a filter" });
+  await expect(picker.getByRole("button", { name: "Outreach labels (text)", exact: true })).toBeVisible();
+  await picker.getByRole("button", { name: "Outreach labels (choose from a list)", exact: true }).click();
+  const labels = page.getByRole("dialog", { name: "Filter Outreach labels" });
+  await labels.getByRole("checkbox", { name: "Community", exact: true }).check();
+  await labels.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect.poll(() => seen.at(-1)?.outreachLabelIds).toEqual(["community"]);
+  await expect(page.getByRole("button", { name: "Edit filter: Outreach labels: Community", exact: true })).toContainText("Not shown");
+  await page.getByRole("button", { name: "Remove filter: Outreach labels: Community", exact: true }).click();
+  await expect.poll(() => seen.at(-1)?.outreachLabelIds).toEqual([]);
+  const serviceDate = page.getByRole("dialog", { name: "Filter Service date" });
+  await page.getByRole("button", { name: "Filter Service date", exact: true }).click();
+  await serviceDate.getByRole("combobox", { name: "Filter condition", exact: true }).selectOption("between");
+  await serviceDate.getByLabel("From", { exact: true }).fill("2026-09-19");
+  await serviceDate.getByLabel("To", { exact: true }).fill("2026-09-20");
+  await serviceDate.getByRole("button", { name: "Apply", exact: true }).click();
   await expect(table).toContainText("Community open house");
   await expect(table).not.toContainText("Team 901 design review");
+  await page.getByRole("button", { name: "Edit filter: Service date 2026-09-19 to 2026-09-20", exact: true }).click();
   for (const theme of ["light", "dark"]) for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
     await page.locator(".app").evaluate((element, theme) => { element.setAttribute("data-theme", theme); (element as HTMLElement).style.setProperty("--primary", "#176b55"); (element as HTMLElement).style.setProperty("--secondary", "#a16f32"); }, theme);
-    const apply = page.getByRole("button", { name: "Apply range" });
-    await apply.scrollIntoViewIfNeeded();
+    const clear = serviceDate.getByRole("button", { name: "Clear", exact: true });
+    await clear.scrollIntoViewIfNeeded();
     await page.mouse.move(0, 0);
-    await apply.focus();
-    await expect(apply).toBeFocused();
-    const style = await apply.evaluate((element) => {
+    await clear.focus();
+    await expect(clear).toBeFocused();
+    const style = await clear.evaluate((element) => {
       const actual = getComputedStyle(element); const probe = document.createElement("span"); element.append(probe);
       probe.style.cssText = "background:var(--ui-surface-subtle);color:var(--ui-text);border:1px solid var(--ui-border);border-radius:var(--radius-control)";
       const expected = getComputedStyle(probe);
@@ -382,7 +454,54 @@ test("saved report column filters support ranges, empty values and unit conversi
       probe.remove(); return result;
     });
     expect(style.background).toBe(style.expectedBackground); expect(style.text).toBe(style.expectedText); expect(style.border).toBe(style.expectedBorder); expect(style.radius).toBe(style.expectedRadius); expect(style.height).toBeGreaterThanOrEqual(44);
+    const bounds = (await serviceDate.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width);
     const width = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
     expect(width.scrollWidth).toBeLessThanOrEqual(width.clientWidth);
   }
+});
+
+test("each report names its module's baseline and a mixed Members report chooses one for the whole report", async ({ page }) => {
+  const seen: Definition[] = [];
+  await routeOutreachReports(page, seen);
+  const owner = (id: string) => id === "attendance.members" ? "attendance" : id.startsWith("outreach.") ? "hour-tracking" : undefined;
+  const sources = datasets.map((dataset) => ({ ...dataset, baselineModule: owner(dataset.id), available: true, fields: dataset.fields.map((field) => ({ ...field, available: true, explanation: undefined })) }));
+  const baseline = { type: "baseline" } as unknown as Definition["period"];
+  const combined = { ...definitionFor("core.combined-members"), period: baseline };
+  const activities = { ...definitionFor("outreach.activities"), period: baseline };
+  await page.route("**/reports/catalog", (route) => route.fulfill({ json: { datasets: sources, columns, labels: [], reportFilters: outreachLabelFilter ? [{ ...outreachLabelFilter, options: [] }] : [], baseline: "2026-09-01", baselines: [{ moduleId: "attendance", label: "Attendance", startsOn: "2026-09-01" }, { moduleId: "hour-tracking", label: "Outreach", startsOn: "2026-08-15" }], today: "2026-11-03", timeZone: "America/New_York", defaultDefinition: combined, role: "admin", attendanceAvailable: true } }));
+  const saved = (id: string, name: string, definition: Definition, pinnedPosition: number) => ({ id, ownerUserId: "admin-1", scope: "shared", name, definition, revision: 1, createdAt: "2026-09-20T00:00:00Z", updatedAt: "2026-09-28T00:00:00Z", pinnedPosition, warnings: [], errors: [] });
+  await page.route("**/reports/views", (route) => route.fulfill({ json: { reports: [saved("combined", "Members by module", combined, 0), saved("activities", "Outreach activities", activities, 1)] } }));
+  await page.route("**/reports/query", async (route) => {
+    const body = route.request().postDataJSON(); seen.push(structuredClone(body.definition));
+    await route.fulfill({ json: reportResult(body.definition, body.pageSize, sources) });
+  });
+
+  const scope = page.locator(".report-period-chip");
+  const periodDialog = page.getByRole("dialog", { name: "Report period" });
+  await page.goto("/reports/view/activities");
+  await expect(scope).toContainText("Outreach baseline (2026-08-15)");
+  await scope.click();
+  await expect(periodDialog.getByRole("combobox", { name: "Period", exact: true }).locator("option:checked")).toHaveText("Outreach baseline");
+  await expect(periodDialog.getByRole("combobox", { name: "Baseline", exact: true })).toHaveCount(0);
+  // Outreach activities have no label membership, so the period popover offers none.
+  await expect(periodDialog.getByRole("combobox", { name: "Membership", exact: true })).toHaveCount(0);
+
+  await page.goto("/reports/view/combined");
+  await expect(scope).toContainText("Attendance baseline (2026-09-01)");
+  await scope.click();
+  await expect(periodDialog.getByRole("combobox", { name: "Period", exact: true }).locator("option:checked")).toHaveText("Attendance baseline");
+  const choice = periodDialog.getByRole("combobox", { name: "Baseline", exact: true });
+  await expect(choice.locator("option")).toHaveText(["Attendance baseline (2026-09-01)", "Outreach baseline (2026-08-15)"]);
+  await expect(periodDialog.getByText("This report has columns from more than one module, so one baseline sets the period for every column.")).toBeVisible();
+  await choice.selectOption("hour-tracking");
+  await periodDialog.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect.poll(() => seen.at(-1)?.period).toEqual({ type: "baseline", module: "hour-tracking" });
+  await expect(scope).toContainText("Outreach baseline (2026-08-15)");
+  await scope.click();
+  await periodDialog.getByRole("combobox", { name: "Period", exact: true }).selectOption("last_30");
+  await expect(choice).toHaveCount(0);
+  await periodDialog.getByRole("button", { name: "Apply", exact: true }).click();
+  await expect.poll(() => seen.at(-1)?.period).toEqual({ type: "last_days", days: 30 });
+
 });

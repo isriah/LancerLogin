@@ -470,6 +470,26 @@
       "name": "0094_module_update_failures.sql",
       "sha256": "c6f45f4ef281c3084881b2fdef2cbe4baaab07cacf200e90bbc1af5fd631bf1d",
       "forwardCompatible": true
+    },
+    {
+      "name": "0095_discord_notice_skipped.sql",
+      "sha256": "63c048ae276d2963b2c83e2186a5041db954c5bc276504b3a35ae1087c983a58",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0096_module_report_baselines.sql",
+      "sha256": "4e1b58ba6916ec627c6c84039a590a5617a899a2a74681a6fb6f1dfdf16cb967",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0097_platform_scheduler_state.sql",
+      "sha256": "fbf3cb05b5c242d73ba08571f842e098db3103949500d17a11eb25028377fdcb",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0098_member_pin_throttle.sql",
+      "sha256": "50fc31f607671611ade75e544826285cf41896f964277e6f213ae3806f25886c",
+      "forwardCompatible": true
     }
   ]
 }

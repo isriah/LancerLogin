@@ -25,6 +25,10 @@ import type { ModuleDefinition } from "../../shared/src/module-platform.ts";
 export { addCalendarDays, CivilTimeError, elapsedIntegerMinutes, instantToCivil, resolveCivilTime, selectCivilTime } from "../../shared/src/civil-time.ts";
 export type { CivilTimeCandidate, CivilTimeErrorCode, CivilTimeFields, CivilTimeInput, CivilTimeOccurrence } from "../../shared/src/civil-time.ts";
 
+// The CSV import kit's parsers (SDK 1.4.0), for a module Worker that checks imported rows again. The dashboard entry adds the template download.
+export { csvFieldFor, csvText, delimiterFor, formatCsvDate, formatCsvTime, formatCsvTimeRange, mapCsvHeader, normaliseCsvHeader, parseCsvDate, parseCsvDuration, parseCsvTime, parseDelimited } from "../../shared/src/csv-import.ts";
+export type { CsvHeaderMapping, CsvHeaderSpec, CsvValue } from "../../shared/src/csv-import.ts";
+
 /** Identity helper that type-checks a module manifest. */
 export function defineModuleManifest<const Manifest extends ModuleDefinition>(manifest: Manifest): Manifest {
   return manifest;

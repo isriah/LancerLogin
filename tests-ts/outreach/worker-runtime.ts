@@ -6,6 +6,7 @@ import worker, { type Env } from "../../apps/api/src/index.ts";
 import { encryptIntegration } from "../../apps/api/src/integration-crypto.ts";
 import { defaultReportDefinition } from "../../apps/api/src/report-builder.ts";
 import { FakeDatabase, request, seedInstallationBackupFoundation, sessionCookie, sessionSecret, setupCodeHash } from "../fixtures/worker-fake-database.ts";
+import { passwordCredential } from "../fixtures/passwords.ts";
 
 function seedPolicy(database: FakeDatabase, options: {
   members?: Record<string, unknown>[]; meetings?: Record<string, unknown>[]; labels?: Record<string, unknown>[];
@@ -53,7 +54,7 @@ test("public form privacy is Admin-only and HTTP lookup responses are noncacheab
 test("local Worker bootstrap creates a salted Admin and ignores legacy telemetry consent", async () => {
   const database = new FakeDatabase();
   const env = { APP_MODE: "unconfigured", ALLOWED_ORIGIN: "https://dashboard.example.test", BOOTSTRAP_CODE_HASH: setupCodeHash, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/setup/bootstrap", { organizationName: "Example Arts Club", timeZone: "America/New_York", authMode: "local", localUsername: "director", localPassword: "correct horse battery staple", telemetryAccepted: true }), env);
+  const result = await worker.fetch(request("/setup/bootstrap", { organizationName: "Example Arts Club", timeZone: "America/New_York", authMode: "local", localUsername: "director", localPasswordKey: await passwordCredential("correct horse battery staple"), telemetryAccepted: true }), env);
   assert.equal(result.status, 201);
   assert.equal(database.batches.length, 1);
   // Attendance and official Outreach registration plus the setup-code claim; plugins register here and through
@@ -65,7 +66,7 @@ test("local Worker bootstrap creates a salted Admin and ignores legacy telemetry
   assert.equal(database.batches[0].some((statement) => statement.sql.includes("INSERT INTO hours_publication_settings")), false);
   assert.deepEqual(database.batches[0].filter((statement) => statement.sql.includes("INSERT INTO platform_modules ")).map((statement) => statement.values), [["attendance", 1, 2], ["hour-tracking", 1, 1]]);
   const userInsert = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO users"));
-  assert.match(String(userInsert?.values[4]), /^scrypt\$/);
+  assert.match(String(userInsert?.values[4]), /^scrypt-c\$/);
   const installationInsert = database.batches[0].find((statement) => statement.sql.includes("INSERT INTO installations"));
   assert.equal(installationInsert?.values[3], null);
   assert.equal(installationInsert?.values[4], null);
@@ -174,6 +175,52 @@ test("Admins and Operators can create shared reports with duration units and cre
     assert.deepEqual(JSON.parse(String(stored)).columnFilters, definition.columnFilters);
     assert.ok(database.batches[0].some((call) => call.sql.includes("INSERT INTO saved_report_tabs") && call.values.includes(2))); assert.ok(database.calls.some((call) => call.values.includes("report.created")));
   }
+});
+
+test("Outreach H:MM durations reach the table, CSV export and saved report library", async () => {
+  const database = new FakeDatabase();
+  seedPolicy(database, { members: ["Avery", "Blair", "Casey"].map((firstName, index) => ({ id: `member-${index}`, memberId: `M-${index}`, firstName, lastName: "Member", email: null, discordUserId: null, active: 1, attendanceRequiredFrom: "2026-09-01" })) });
+  database.lists.set("SELECT c.member_id AS memberId, c.label_id AS labelId", []);
+  database.lists.set("FROM hours_entries e JOIN hours_activities", [30, 1505, 725].map((durationMinutes, index) => ({ id: `entry-${index}`, memberId: `member-${index}`, activityId: "activity-1", activityTitle: "Community event", serviceDate: "2026-09-02", durationMinutes, channel: "staff", status: "counted", activityMode: "event", teamId: null, activityLabels: "[]" })));
+  database.rows.set("COALESCE(MAX(position)", { position: 0 });
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
+  const column = { key: "outreach.member.minutes", unit: "hours_minutes" as const };
+  const base = defaultReportDefinition(false, "outreach.members");
+  const definition = { ...base, columns: base.columns.map((item) => item.key === column.key ? column : item), sort: { column, direction: "desc" as const }, columnFilters: [{ column, operator: "minimum" as const, value: "60" }] };
+  const queried = await worker.fetch(request("/reports/query", { definition }, { cookie }), env); assert.equal(queried.status, 200);
+  const body = await queried.json() as { columns: Array<{ key: string; label: string; unit?: string }>; rows: Array<{ label: string; cells: Record<string, { text: string; sortValue: number }> }> };
+  assert.deepEqual(body.columns.find((item) => item.key === column.key), { ...body.columns.find((item) => item.key === column.key), label: "Outreach hours (H:MM)", unit: "hours_minutes" });
+  // Sorted and filtered on minutes: 1505 and 725 pass the 60-minute minimum, 30 does not.
+  assert.deepEqual(body.rows.map((row) => [row.label, row.cells[column.key]!.text, row.cells[column.key]!.sortValue]), [["Blair Member", "25:05", 1505], ["Casey Member", "12:05", 725]]);
+  const csv = await worker.fetch(request("/exports/report.csv", { definition }, { cookie }), env); assert.equal(csv.status, 200);
+  const lines = (await csv.text()).trim().split("\r\n").map((row) => row.split(",")); const index = lines[0]!.indexOf("Outreach hours (H:MM)");
+  assert.notEqual(index, -1); assert.deepEqual(lines.slice(1).map((cells) => cells[index]), ["25:05", "12:05"]);
+  database.rows.set("SELECT id, owner_user_id AS ownerUserId", { id: "report-1", ownerUserId: "admin-1", scope: "shared", name: "Outreach H:MM", definitionJson: JSON.stringify(definition), revision: 1, createdBy: "admin-1", updatedBy: "admin-1", createdAt: "2026-09-25", updatedAt: "2026-09-25" });
+  const saved = await worker.fetch(request("/reports/views", { name: "Outreach H:MM", scope: "shared", definition }, { cookie }), env); assert.equal(saved.status, 201);
+  assert.deepEqual((await saved.json() as { report: { definition: typeof definition } }).report.definition.columns.find((item) => item.key === column.key), column);
+  const stored = database.batches[0]?.find((call) => call.sql.includes("INSERT INTO saved_report_views"))?.values.find((value) => typeof value === "string" && value.startsWith('{"version"'));
+  assert.deepEqual((JSON.parse(String(stored)) as typeof definition).columns.find((item) => item.key === column.key), column);
+});
+
+test("Outreach reports use Outreach's reporting start date and a combined report uses the one it chose", async () => {
+  const database = new FakeDatabase(); seedPolicy(database);
+  database.rows.set("SELECT attendance_reporting_starts_on AS baseline, time_zone AS timeZone", { timeZone: "UTC", baseline: "2026-09-01", moduleBaselines: JSON.stringify({ "hour-tracking": "2026-08-15" }) });
+  database.lists.set("FROM hours_activities a LEFT JOIN", []); database.lists.set("SELECT c.member_id AS memberId, c.label_id AS labelId", []); database.lists.set("FROM hours_entries e JOIN hours_activities", []);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
+  const run = async (definition: unknown) => { const result = await worker.fetch(request("/reports/query", { definition }, { cookie }), env); assert.equal(result.status, 200, await result.clone().text()); return await result.json() as { resolvedPeriod: { from?: string; baselineModule?: string }; warnings: string[] }; };
+  const activities = await run({ ...defaultReportDefinition(false, "outreach.activities"), period: { type: "baseline" } });
+  assert.deepEqual(activities.resolvedPeriod.from, "2026-08-15"); assert.equal(activities.resolvedPeriod.baselineModule, "hour-tracking");
+  assert.equal(database.calls.find((call) => call.sql.includes("FROM hours_activities a LEFT JOIN"))?.values[0], "2026-08-15");
+  const attendance = await run({ ...defaultReportDefinition(false, "attendance.members"), period: { type: "baseline" } });
+  assert.deepEqual([attendance.resolvedPeriod.from, attendance.resolvedPeriod.baselineModule], ["2026-09-01", "attendance"]);
+  const combined = defaultReportDefinition(false, "core.combined-members");
+  const byDefault = await run({ ...combined, period: { type: "baseline" } });
+  assert.deepEqual([byDefault.resolvedPeriod.from, byDefault.resolvedPeriod.baselineModule], ["2026-09-01", "attendance"]);
+  const chosen = await run({ ...combined, period: { type: "baseline", module: "hour-tracking" } });
+  assert.deepEqual([chosen.resolvedPeriod.from, chosen.resolvedPeriod.baselineModule], ["2026-08-15", "hour-tracking"]);
+  database.rows.set("SELECT attendance_reporting_starts_on AS baseline, time_zone AS timeZone", { timeZone: "UTC", baseline: "2026-09-01", moduleBaselines: JSON.stringify({ "hour-tracking": null }) });
+  const unset = await run({ ...defaultReportDefinition(false, "outreach.activities"), period: { type: "baseline" } });
+  assert.match(unset.warnings.join(" "), /The Outreach reporting start date \(operational baseline\) is not configured\./);
 });
 
 test("existing Outreach member reports without a unit normalize to hours in the saved library", async () => {

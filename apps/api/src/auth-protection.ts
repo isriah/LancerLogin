@@ -8,6 +8,8 @@ export const loginLockMs = 15 * 60_000;
 /** Public routes that accept guesses. Each client address gets its own fixed window per route. */
 export const authRateLimits: Readonly<Record<string, { limit: number; windowMs: number }>> = Object.freeze({
   "/auth/local": { limit: 30, windowMs: 10 * 60_000 },
+  // The salt lookup before each local sign-in. Same limit as sign-in, so probing usernames is throttled the same way.
+  "/auth/local/params": { limit: 30, windowMs: 10 * 60_000 },
   "/setup/bootstrap": { limit: 10, windowMs: 10 * 60_000 },
   "/kiosk/pair": { limit: 20, windowMs: 10 * 60_000 },
 });

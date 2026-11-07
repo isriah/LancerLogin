@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPagesProxy } from "../scripts/prepare-pages-proxy.mjs";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildPagesHeaders, buildPagesProxy, buildPagesRoutes, MISSING_ASSET_PAGE, PAGES_FUNCTION_ROUTES, writePagesOutput } from "../scripts/prepare-pages-proxy.mjs";
 
 test("Pages proxy keeps dashboard authentication same-origin", async () => {
   const source = buildPagesProxy("https://example-club-api.example.workers.dev/");
@@ -149,4 +155,85 @@ test("Pages proxy leaves API and release responses' caching to their origin", as
   assert.equal(uncached.headers.get("cache-control"), null);
   const release = await serve("https://dash.example.test/__lancerlogin-release");
   assert.equal(release.headers.get("cache-control"), "no-store");
+});
+
+test("Pages routes send only the proxy's own paths to the function", () => {
+  const routes = JSON.parse(buildPagesRoutes());
+  assert.deepEqual(routes, { version: 1, include: ["/api", "/api/*", "/__lancerlogin-release"], exclude: [] });
+  assert.deepEqual(routes.include, [...PAGES_FUNCTION_ROUTES]);
+  // The rules wrangler pages deploy enforces before upload.
+  assert.ok(routes.include.length >= 1 && routes.include.length + routes.exclude.length <= 100);
+  for (const rule of [...routes.include, ...routes.exclude]) { assert.ok(rule.startsWith("/"), rule); assert.ok(rule.length <= 100, rule); }
+  for (const splat of routes.include.filter((rule) => rule.endsWith("/*"))) {
+    for (const rule of routes.include) if (rule !== splat) assert.ok(!rule.startsWith(splat.slice(0, -1)), `${rule} overlaps ${splat}`);
+  }
+  assert.ok(!routes.include.includes("/*") && !routes.include.some((rule) => rule.startsWith("/assets") || rule.startsWith("/settings")));
+});
+
+/** Pages' _routes.json matching: a trailing /* matches anything below that prefix; other rules match exactly. */
+const routed = (pathname) => PAGES_FUNCTION_ROUTES.some((rule) => rule.endsWith("/*") ? pathname.startsWith(rule.slice(0, -1)) : pathname === rule);
+
+test("Every path the proxy answers itself is routed to the function, and nothing else", async () => {
+  for (const path of ["/api", "/api/", "/api/auth/session", "/api/assets/index-C5_UpTOL.js", "/__lancerlogin-release"]) {
+    assert.ok(routed(path), path);
+    let assetFetches = 0;
+    const response = await serve(`https://dash.example.test${path}`, undefined, (pathname) => { assetFetches += 1; return builtAssets()(pathname); });
+    assert.equal(assetFetches, 0, path);
+    assert.notEqual(response.status, 404, path);
+  }
+  for (const path of ["/", "/index.html", "/settings/visits", "/kiosks", "/assets/index-C5_UpTOL.js", "/kiosk-sw.js", "/kiosk.webmanifest", "/favicon.svg", "/apiary", "/__lancerlogin-release/x"]) {
+    assert.ok(!routed(path), path);
+    let assetFetches = 0;
+    await serve(`https://dash.example.test${path}`, { headers: { accept: "text/html" } }, (pathname) => { assetFetches += 1; return builtAssets()(pathname); });
+    assert.ok(assetFetches >= 1, `${path} is only a static asset or the app shell`);
+  }
+});
+
+/** Applies _headers the way Pages does: every matching block, a trailing * matching any suffix. */
+function pagesHeaders(source, pathname) {
+  const headers = new Headers();
+  let matches = false;
+  for (const line of source.split("\n")) {
+    if (!line.trim()) continue;
+    if (!line.startsWith(" ")) { matches = line.endsWith("*") ? pathname.startsWith(line.slice(0, -1)) : pathname === line; continue; }
+    if (matches) { const [name, ...value] = line.trim().split(":"); headers.set(name, value.join(":").trim()); }
+  }
+  return headers;
+}
+
+test("Pages _headers give static responses the proxy's framing denial and caching", async () => {
+  const source = buildPagesHeaders();
+  for (const path of ["/", "/index.html", "/settings/data", "/favicon.svg", "/assets/index-C5_UpTOL.js", "/assets/inter-latin-400-normal-BOOGhInR.woff2", "/kiosk-sw.js", "/kiosk.webmanifest"]) {
+    const assets = { ...BUILT, "/kiosk-sw.js": ["self.x=1", "application/javascript"], "/kiosk.webmanifest": ["{}", "application/manifest+json"] };
+    const proxied = await serve(`https://dash.example.test${path}`, { headers: { accept: "text/html" } }, (pathname) => { const file = assets[pathname === "/" ? "/index.html" : pathname]; return file ? served(file) : new Response("Not found", { status: 404, headers: { "cache-control": REVALIDATE } }); });
+    const fromPages = pagesHeaders(source, path);
+    for (const name of ["content-security-policy", "x-frame-options"]) assert.equal(fromPages.get(name), proxied.headers.get(name), `${name} ${path}`);
+    assert.equal(fromPages.get("cache-control") ?? REVALIDATE, proxied.headers.get("cache-control"), path);
+  }
+});
+
+test("Pages output keeps the single-page fallback and makes a missing build asset a 404", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-pages-"));
+  try {
+    await writePagesOutput(directory, "https://api.example.test", "2.1.0");
+    assert.deepEqual((await readdir(directory)).sort(), ["_headers", "_routes.json", "_worker.js", "assets"]);
+    assert.deepEqual(await readdir(join(directory, "assets")), ["404.html"]);
+    assert.equal(await readFile(join(directory, "_worker.js"), "utf8"), buildPagesProxy("https://api.example.test", "2.1.0"));
+    assert.equal(await readFile(join(directory, "_routes.json"), "utf8"), buildPagesRoutes());
+    assert.equal(await readFile(join(directory, "_headers"), "utf8"), buildPagesHeaders());
+    assert.equal(await readFile(join(directory, "assets", "404.html"), "utf8"), MISSING_ASSET_PAGE);
+    // A top-level 404.html would turn off Pages' index.html fallback for deep links such as /settings/visits.
+    assert.ok(!(await readdir(directory)).includes("404.html"));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("The prepare-pages-proxy command writes the Pages files beside _worker.js", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-pages-cli-"));
+  try {
+    const script = fileURLToPath(new URL("../scripts/prepare-pages-proxy.mjs", import.meta.url));
+    await promisify(execFile)(process.execPath, [script, "https://api.example.test", join(directory, "dist", "_worker.js")]);
+    assert.deepEqual((await readdir(join(directory, "dist"))).sort(), ["_headers", "_routes.json", "_worker.js", "assets"]);
+    assert.deepEqual(JSON.parse(await readFile(join(directory, "dist", "_routes.json"), "utf8")).include, [...PAGES_FUNCTION_ROUTES]);
+    await assert.rejects(promisify(execFile)(process.execPath, [script, "https://api.example.test", join(directory, "proxy.js")]));
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

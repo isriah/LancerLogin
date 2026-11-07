@@ -6,7 +6,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import worker, { type Env } from "../apps/api/src/index.ts";
-import { createSessionCodec, hashPassword } from "../apps/api/src/runtime-security.ts";
+import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
+import { legacyPassword, reauthenticate, storedPassword } from "./fixtures/passwords.ts";
 import { latestUpdate, recordUpdateBackup, startWebUpdate } from "../apps/api/src/web-updates.ts";
 import { clearPluginReleaseCache, commitPluginChange, freshUntil, lookupPluginRelease, newestTrackRelease, parseAllowlist, pendingChanges, pluginManagementState, pluginVersionInfo, releaseIndexTtlMs, reauthenticationWindowMs, reviewPluginChange, selectionCredentialState, sourceAllowed, type InstalledPlugins } from "../apps/api/src/plugin-selection.ts";
 import { resetCredentialObservations } from "../apps/api/src/github-credential.ts";
@@ -436,7 +437,7 @@ test("changes are refused while a web update is active, and removal while the mo
 
 test("routes require an active Admin, the exact dashboard Origin and fresh re-authentication, and never expose credentials", async () => {
   const env = environment();
-  env.DB.sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = 'admin'").run(await hashPassword("correct horse battery"));
+  env.DB.sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = 'admin'").run(await storedPassword("correct horse battery"));
   const codec = createSessionCodec(secret);
   const stale = createSessionCodec(secret, () => Date.now() - 20 * 60_000);
   const admin = `lancerlogin_session=${await stale.issue({ userId: "admin", role: "admin" })}`;
@@ -458,9 +459,15 @@ test("routes require an active Admin, the exact dashboard Origin and fresh re-au
     assert.equal(lookup.status, 200); assert.equal((await lookup.json()).release.tag, "v1.1.0-nightly.20261025");
     assert.equal((await call("/admin/plugins/change", admin, { ...add, selectionSha: "0".repeat(40), trustConfirmed: true })).status, 401);
     assert.equal(github.calls.some((entry) => entry.method === "PUT"), false);
-    const wrong = await call("/admin/plugins/reauthenticate", admin, { password: "wrong" });
+    // Identity confirmation hashes in the browser too: this Admin's salt, then K.
+    const asAdmin = (path: string, body: unknown) => call(path, admin, body);
+    assert.equal((await call("/admin/plugins/reauthenticate/params", operator, {})).status, 403);
+    assert.equal((await call("/admin/plugins/reauthenticate/params", admin, {}, "https://evil.example")).status, 403);
+    const outdated = await call("/admin/plugins/reauthenticate", admin, { password: "correct horse battery" });
+    assert.equal(outdated.status, 409); assert.equal((await outdated.json()).code, "reload_required");
+    const wrong = await reauthenticate(asAdmin, "wrong");
     assert.equal(wrong.status, 401); assert.equal((await wrong.json()).code, "reauthentication_failed");
-    const reauth = await call("/admin/plugins/reauthenticate", admin, { password: "correct horse battery" });
+    const reauth = await reauthenticate(asAdmin, "correct horse battery");
     assert.equal(reauth.status, 200);
     const renewed = /lancerlogin_session=([^;]+)/.exec(reauth.headers.get("set-cookie") ?? "")?.[1];
     assert.ok(renewed);
@@ -468,6 +475,15 @@ test("routes require an active Admin, the exact dashboard Origin and fresh re-au
     assert.equal(changed.status, 201);
     assert.equal(JSON.stringify(await changed.json()).includes(selectionToken), false);
     assert.equal(env.DB.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'auth.reauthenticated'").get()?.n, 1);
+    // A legacy scrypt$ row is confirmed with the password once and re-salted to scrypt-c, as at sign-in.
+    const legacy = await legacyPassword("correct horse battery");
+    env.DB.sqlite.prepare("UPDATE users SET password_hash = ? WHERE id = 'admin'").run(legacy);
+    const legacyParams = await (await call("/admin/plugins/reauthenticate/params", admin, {})).json() as { legacy: boolean };
+    assert.equal(legacyParams.legacy, true);
+    assert.equal((await call("/admin/plugins/reauthenticate", admin, { key: legacy.split("$")[5] })).status, 401, "the old K alone never confirms");
+    assert.equal((await reauthenticate(asAdmin, "correct horse battery", "module_access")).status, 200);
+    assert.match(String(env.DB.sqlite.prepare("SELECT password_hash AS hash FROM users WHERE id = 'admin'").get()?.hash), /^scrypt-c\$/);
+    assert.equal((await reauthenticate(asAdmin, "correct horse battery")).status, 200);
     // The status never reads the production environment's protection rules.
     assert.equal(github.calls.some((entry) => entry.url.includes("/environments/")), false);
   });

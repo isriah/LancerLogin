@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FocusEvent } from "react";
+import type { RateTip } from "../../../packages/shared/src/attendance-label-sets.ts";
 
 const VIEWPORT_MARGIN = 16;
 const TOOLTIP_GAP = 8;
@@ -107,6 +108,15 @@ export function InfoTip({ children, label = "More information", glyph, tone }: {
     ><span className="info-tip-glyph" data-glyph={glyph ? "icon" : undefined} data-tone={tone} aria-hidden="true" onMouseEnter={() => { updatePosition(); setActive(true); }} onMouseLeave={() => setActive(false)}>{glyph ?? "i"}</span></button>
     <span ref={content} id={id} className="info-tip-content" role="tooltip">{children}</span>
   </span>;
+}
+
+/** The content of a "how this is calculated" tip: the term, its definition, the policy in one line and a worked example. */
+export function CalcTipContent({ tip, footer }: { tip: RateTip; footer?: React.ReactNode }) {
+  return <span className="calc-tip"><strong>{tip.title}</strong><span>{tip.definition}</span>{tip.policy && <span>{tip.policy}</span>}<span className="calc-example"><b>Example:</b> {tip.example}</span>{footer && <span>{footer}</span>}</span>;
+}
+/** An InfoTip that explains a rate with a worked example. */
+export function CalcTip({ tip, label, footer }: { tip: RateTip; label: string; footer?: React.ReactNode }) {
+  return <InfoTip label={label}><CalcTipContent tip={tip} footer={footer} /></InfoTip>;
 }
 
 export function InfoHeading({ children, info, id }: { children: React.ReactNode; info: React.ReactNode; id?: string }) {

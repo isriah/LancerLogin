@@ -25,7 +25,7 @@
   <ul>
     <li>Admin and Operator permissions are enforced by the Worker on every request, not only hidden in the dashboard.</li>
     <li>Sessions are signed, HTTP-only, Secure, SameSite=Strict cookies. Each protected request rechecks the account, role, and session.</li>
-    <li>Local passwords use salted scrypt hashes. Five wrong passwords pause sign-in to that account for 15 minutes.</li>
+    <li>Local passwords use salted scrypt hashes, computed in the browser; the Worker stores only a SHA-256 of the result. Five wrong passwords pause sign-in to that account for 15 minutes.</li>
     <li>Google sign-in validates the issuer, audience, verified email, and an active LancerLogin account.</li>
     <li>Integration secrets are encrypted with AES-256-GCM using an installation-specific key and are never returned to the browser.</li>
     <li>Pairing codes and kiosk credentials are stored only as hashes.</li>

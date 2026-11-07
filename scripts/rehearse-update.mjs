@@ -42,6 +42,7 @@ import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { isolatedGitEnv } from "./git-env.mjs";
+import { newPasswordCredential, passwordProof } from "../packages/shared/src/password-key.mjs";
 
 export const toolRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const publicRepository = "https://github.com/isriah/LancerLogin.git";
@@ -405,11 +406,25 @@ export async function verifyAttendanceInput(api, seeded) {
   return "kiosk";
 }
 
+/**
+ * The /auth/local body for either kind of release. A release with browser-side password hashing has /auth/local/params:
+ * the body carries K (and the password once, for a legacy `scrypt$` row). An older release has no such route and takes
+ * the password. `legacy` is the salt endpoint's answer, or undefined for an older release.
+ */
+export async function localSignInBody(api, username, password) {
+  const params = await api.call("POST", "/auth/local/params", { username });
+  if (params.status === 404) return { body: { username, password }, legacy: undefined };
+  if (params.status !== 200) fail(`POST /auth/local/params returned ${params.status}: ${params.text.slice(0, 300)}`);
+  return { body: { username, ...await passwordProof(password, params.body) }, legacy: params.body.legacy === true };
+}
+
 /** Seed through the FROM Worker's API, as an Administrator and a kiosk would. Returns what later checks look for. */
 export async function seedInstallation(api, { setupCode, password, step }) {
   const seeded = { username: "rehearsal-admin" };
-  await step("first Admin", () => api.ok("POST", "/setup/bootstrap", { setupCode, organizationName: "Rehearsal Robotics", timeZone, authMode: "local", localUsername: seeded.username, localPassword: password }));
-  await step("sign in", async () => { await api.ok("POST", "/auth/local", { username: seeded.username, password }); seeded.cookie = api.cookie; });
+  // FROM may be an older release, which takes localPassword and ignores localPasswordKey, or a newer one, which takes
+  // localPasswordKey and ignores localPassword when both are present. The data is synthetic, so sending both is fine.
+  await step("first Admin", async () => api.ok("POST", "/setup/bootstrap", { setupCode, organizationName: "Rehearsal Robotics", timeZone, authMode: "local", localUsername: seeded.username, localPassword: password, localPasswordKey: await newPasswordCredential(password) }));
+  await step("sign in", async () => { await api.ok("POST", "/auth/local", (await localSignInBody(api, seeded.username, password)).body); seeded.cookie = api.cookie; });
   await step("enable modules", async () => {
     const modules = await api.ok("GET", "/platform/modules");
     const available = modules.modules.map((module) => module.id);
@@ -686,8 +701,10 @@ export async function rehearse(options) {
         await mustRun("API workspace build (CI)", "npm", ["--workspace", "@lancerlogin/api", "run", "build"], { cwd: paths.to, env: ci, log });
         await wrangler(paths.to, "TO bundle", ["deploy", "--dry-run", "--outdir", join(paths.to, ".provision/api-build"), "--config", toProvision.configPath]);
         await mustRun("dashboard build (CI)", "npm", ["--workspace", "@lancerlogin/dashboard", "run", "build"], { cwd: paths.to, env: { ...ci, VITE_API_BASE_URL: "/api" }, log });
-        const { buildPagesProxy } = await importFrom(paths.to, "scripts/prepare-pages-proxy.mjs");
-        await writeFile(join(paths.to, "apps/dashboard/dist/_worker.js"), buildPagesProxy(proxyApiOrigin, targetVersion), { mode: 0o600 });
+        const { buildPagesProxy, writePagesOutput } = await importFrom(paths.to, "scripts/prepare-pages-proxy.mjs");
+        // TO writes its Pages files the way its own updater does; releases before _routes.json wrote _worker.js alone.
+        if (writePagesOutput) await writePagesOutput(join(paths.to, "apps/dashboard/dist"), proxyApiOrigin, targetVersion);
+        else await writeFile(join(paths.to, "apps/dashboard/dist/_worker.js"), buildPagesProxy(proxyApiOrigin, targetVersion), { mode: 0o600 });
         report.check("CI build passes the composition guard", true, "API and dashboard workspace builds ran with CI=true");
       },
       async drain() {},
@@ -753,8 +770,16 @@ export async function rehearse(options) {
       // Sessions and sign-in.
       const carried = await api.call("GET", "/auth/session", undefined, { cookie: seeded.cookie, dashboard: false });
       report.check("session issued by FROM is still accepted", carried.status === 200 && carried.body?.authenticated === true, `status ${carried.status}`);
-      const login = await api.call("POST", "/auth/local", { username: seeded.username, password });
+      const signIn = await localSignInBody(api, seeded.username, password);
+      const login = await api.call("POST", "/auth/local", signIn.body);
       report.check("local sign-in works after the update", login.status === 200, `status ${login.status}`);
+      // The Admin was created by FROM. A FROM with server-side hashing wrote a legacy `scrypt$` row, which this sign-in
+      // re-salts; either way TO's row must now be `scrypt-c`, and the salt endpoint must stop answering legacy.
+      if (signIn.legacy !== undefined) {
+        const stored = String(query(databasePath, "SELECT password_hash AS hash FROM users WHERE local_username = ?", [seeded.username])[0]?.hash ?? "");
+        const after = await api.call("POST", "/auth/local/params", { username: seeded.username });
+        report.check("account created before the update is on the new password format", stored.startsWith("scrypt-c$") && after.body?.legacy === false, `${signIn.legacy ? "upgraded from scrypt$" : "already scrypt-c"}; stored ${stored.split("$")[0]}`);
+      }
       const session = await api.call("GET", "/auth/session", undefined, { dashboard: false });
       report.check("new session is valid", session.status === 200 && session.body?.user?.role === "admin", `status ${session.status}`);
 

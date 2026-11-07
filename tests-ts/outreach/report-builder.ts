@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { type PolicyLabel } from "../../apps/api/src/attendance-policy.ts";
-import { filterAndSortReportRows, combinedMemberDataset, defaultReportDefinition, formatReportCellForColumn, reportColumnLabel, reportFieldSourceDataset, reportFilterSourceDataset, validateReportDefinition, type ReportDefinition } from "../../apps/api/src/report-builder.ts";
+import { filterAndSortReportRows, combinedMemberDataset, defaultReportDefinition, reportBaselineFor, reportBaselineModule, reportBaselineModuleIds, reportBaselineModuleLabel, resolveReportPeriod, formatReportCellForColumn, reportColumnCatalog, reportColumnLabel, reportDatasetDefinition, reportFieldSourceDataset, reportFilterSourceDataset, validateReportDefinition, type ReportDefinition } from "../../apps/api/src/report-builder.ts";
 
 const labels: PolicyLabel[] = [{ id: "class", name: "Class", active: 1, formulaEnabled: 0 }, { id: "team", name: "Team", active: 1, formulaEnabled: 0 }];
 test("Outreach duration units default and upgrade member reports to hours while other durations stay in minutes", () => {
@@ -25,6 +25,61 @@ test("Outreach duration units default and upgrade member reports to hours while 
   assert.match(validateReportDefinition(invalidUnit, labels).errors.join(" "), /columns are invalid/i);
   const unsupportedUnit = defaultReportDefinition(false, "core.members"); unsupportedUnit.columns[0]!.unit = "hours";
   assert.match(validateReportDefinition(unsupportedUnit, labels).errors.join(" "), /columns are invalid/i);
+});
+
+test("Outreach durations can show hours and minutes as H:MM while sorting and filtering on minutes", () => {
+  // Core offers H:MM on every duration field, though the plugin declares only minutes and hours.
+  for (const key of ["outreach.member.minutes", "outreach.activity.minutes", "outreach.entry.minutes", "outreach.team.minutes"]) assert.deepEqual(reportColumnCatalog.find((item) => item.key === key)?.durationUnits, ["minutes", "hours", "hours_minutes"], key);
+  assert.deepEqual(reportDatasetDefinition("outreach.activities")?.fields.find((field) => field.id === "outreach.activity.minutes")?.durationUnits, ["minutes", "hours", "hours_minutes"]);
+  assert.deepEqual(reportDatasetDefinition(combinedMemberDataset.id)?.fields.find((field) => field.id === "outreach.member.minutes")?.durationUnits, ["minutes", "hours", "hours_minutes"]);
+
+  const definition = defaultReportDefinition(false, "outreach.activities");
+  const column = { key: "outreach.activity.minutes", unit: "hours_minutes" as const };
+  const saved = { ...definition, columns: definition.columns.map((item) => item.key === column.key ? column : item), sort: { column, direction: "desc" as const }, columnFilters: [{ column, operator: "minimum" as const, value: "60" }] };
+  const validated = validateReportDefinition(saved, labels);
+  assert.deepEqual(validated.errors, []); assert.deepEqual(validated.definition?.columns.find((item) => item.key === column.key), column); assert.deepEqual(validated.definition?.sort.column, column);
+  assert.equal(reportColumnLabel(column, new Map()), "Hours (H:MM)");
+  assert.equal(reportColumnLabel({ key: "outreach.member.minutes", unit: "hours_minutes" }, new Map()), "Outreach hours (H:MM)");
+  assert.deepEqual(formatReportCellForColumn(column, { text: "725", sortValue: 725 }), { text: "12:05", sortValue: 725 });
+  for (const [minutes, text] of [[0, "0:00"], [5, "0:05"], [60, "1:00"], [1505, "25:05"], [6000, "100:00"]] as const) assert.equal(formatReportCellForColumn(column, { text: String(minutes), sortValue: minutes }).text, text);
+  assert.deepEqual(formatReportCellForColumn(column, { text: "N/A", sortValue: null }), { text: "N/A", sortValue: null });
+
+  const rows = [[725, "a"], [59, "b"], [1505, "c"]].map(([minutes, id]) => ({ id: String(id), label: String(id), cells: { [column.key]: formatReportCellForColumn(column, { text: String(minutes), sortValue: Number(minutes) }) } }));
+  assert.deepEqual(filterAndSortReportRows(validated.definition!, rows).map((row) => row.cells[column.key]!.text), ["25:05", "12:05"]);
+});
+
+test("each report type uses the reporting start date of the module that owns its data", () => {
+  assert.deepEqual(reportBaselineModuleIds, ["attendance", "hour-tracking"]);
+  assert.deepEqual(reportBaselineModuleIds.map(reportBaselineModuleLabel), ["Attendance", "Outreach"]);
+  const baselines = { attendance: "2026-09-01", "hour-tracking": "2026-08-15" }; const today = "2026-11-03";
+  const baseline = { type: "baseline" as const };
+  for (const [dataset, owner] of [["attendance.members", "attendance"], ["outreach.members", "hour-tracking"], ["outreach.activities", "hour-tracking"], ["outreach.entries", "hour-tracking"], ["outreach.teams", "hour-tracking"], ["core.members", undefined]] as const) {
+    assert.equal(reportBaselineModule({ ...defaultReportDefinition(false, dataset), period: baseline }, baselines, today), owner, dataset);
+  }
+  const activities = { ...defaultReportDefinition(false, "outreach.activities"), period: baseline };
+  assert.deepEqual(reportBaselineFor(activities, baselines, today), { moduleId: "hour-tracking", baseline: "2026-08-15" });
+  assert.deepEqual(resolveReportPeriod(baseline, today, "2026-08-15", "Outreach"), { from: "2026-08-15", to: today });
+  assert.match(resolveReportPeriod(baseline, today, null, "Outreach").warning ?? "", /^The Outreach reporting start date \(operational baseline\) is not configured\.$/);
+  assert.match(resolveReportPeriod(baseline, today, "2026-12-31", "Outreach").warning ?? "", /Outreach reporting start date \(operational baseline\) \(2026-12-31\) is after today/);
+});
+
+test("a combined Members report uses one module's baseline: its saved choice, else Attendance's once started, else Outreach's", () => {
+  const today = "2026-11-03"; const combined = defaultReportDefinition(false, combinedMemberDataset.id);
+  const mixed = { ...combined, period: { type: "baseline" as const } };
+  assert.equal(reportBaselineModule(mixed, { attendance: "2026-09-01", "hour-tracking": "2026-08-15" }, today), "attendance");
+  assert.equal(reportBaselineModule(mixed, { attendance: "2026-12-31", "hour-tracking": "2026-08-15" }, today), "hour-tracking", "Attendance's has not started");
+  assert.equal(reportBaselineModule(mixed, { attendance: null, "hour-tracking": "2026-08-15" }, today), "hour-tracking");
+  assert.equal(reportBaselineModule(mixed, { attendance: null, "hour-tracking": null }, today), "attendance");
+  assert.equal(reportBaselineModule({ ...mixed, period: { type: "baseline", module: "hour-tracking" } }, { attendance: "2026-09-01", "hour-tracking": "2026-08-15" }, today), "hour-tracking");
+  const outreachOnly = { ...mixed, columns: [{ key: "core.member.name" }, { key: "outreach.member.minutes", unit: "hours" as const }] };
+  assert.equal(reportBaselineModule(outreachOnly, { attendance: "2026-09-01", "hour-tracking": "2026-08-15" }, today), "hour-tracking", "only Outreach columns");
+
+  // The choice is stored only on a combined report; {type:"baseline"} keeps working everywhere.
+  const chosen = validateReportDefinition({ ...mixed, period: { type: "baseline", module: "hour-tracking" } }, labels);
+  assert.deepEqual(chosen.errors, []); assert.deepEqual(chosen.definition?.period, { type: "baseline", module: "hour-tracking" });
+  assert.deepEqual(validateReportDefinition(mixed, labels).definition?.period, { type: "baseline" });
+  assert.deepEqual(validateReportDefinition({ ...defaultReportDefinition(false, "outreach.activities"), period: { type: "baseline", module: "attendance" } }, labels).definition?.period, { type: "baseline" });
+  assert.match(validateReportDefinition({ ...mixed, period: { type: "baseline", module: "carpool" } }, labels).errors.join(" "), /valid report period/);
 });
 
 test("Outreach report definitions normalize legacy category fields and additive label filters", () => {

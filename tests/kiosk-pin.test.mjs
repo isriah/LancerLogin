@@ -29,6 +29,9 @@ test("cached PIN hashes verify like the server's PBKDF2-SHA256 and malformed one
   assert.equal(await verifyCachedPin("482913", stored), true);
   assert.equal(await verifyCachedPin("482914", stored), false);
   assert.equal(await verifyCachedPin("4829", serverHash("4829", 1000)), true);
+  // The server hashes new PINs at 2,000 iterations and rehashes older ones to it.
+  assert.equal(await verifyCachedPin("4829", serverHash("4829", 2_000)), true);
+  assert.equal(await verifyCachedPin("4828", serverHash("4829", 2_000)), false);
   for (const bad of [{ ...stored, iterations: 100_001 }, { ...stored, iterations: 0 }, { ...stored, hash: Buffer.alloc(16).toString("base64") }, { ...stored, hash: "not base64!" }, { ...stored, salt: "" }, null, undefined])
     assert.equal(await verifyCachedPin("482913", bad), false);
   for (const pin of ["123", "1234567", "12a4", 1234, ""]) { assert.equal(validPin(pin), false); assert.equal(await verifyCachedPin(pin, stored), false); }
@@ -131,6 +134,9 @@ test("a scan sent with a PIN carries it, PIN refusals come back to the screen, a
   await assert.rejects(sendAttendance(config, { ...event, pin: "1111" }, { fetchImpl }), error => error.transient === true, "a credential refusal is not a PIN answer");
   reply = { status: 423, body: { error: "Locked", code: "pin_locked", lockedUntil: "2026-10-30T12:15:00.000Z" } };
   assert.equal((await sendAttendance(config, { ...event, pin: "1111" }, { fetchImpl })).lockedUntil, "2026-10-30T12:15:00.000Z");
+  // A throttled try is a PIN answer too, so the kiosk never falls back to its cached hash for it.
+  reply = { status: 429, body: { error: "Too many wrong PINs. Try again in 30 seconds.", code: "pin_throttled", retryAt: "2026-10-30T12:00:30.000Z", retryAfterSeconds: 30 } };
+  assert.deepEqual(await sendAttendance(config, { ...event, pin: "1111" }, { fetchImpl }), { accepted: false, duplicate: false, pinRefused: true, status: 429, code: "pin_throttled", error: "Too many wrong PINs. Try again in 30 seconds." });
   reply = { status: 409, body: { error: "No PIN", code: "pin_not_set" } };
   assert.equal((await sendAttendance(config, { ...event, pin: "1111" }, { fetchImpl })).code, "pin_not_set");
   // A queued scan never has a PIN; a PIN refusal for one is not treated as a PIN answer.
@@ -162,6 +168,7 @@ async function pinRuntime(t, { settings }) {
       if (requirePin && input.pinCheck !== "offline") {
         if (input.pin === undefined) { status = 400; data = { error: "This kiosk requires a PIN.", code: "pin_required" }; }
         else if (!pins.has(input.memberId)) { status = 409; data = { error: "This member has no PIN yet.", code: "pin_not_set" }; }
+        else if (world.throttled) { status = 429; data = { error: "Too many wrong PINs. Try again in 1 minute.", code: "pin_throttled", retryAt: new Date(Date.now() + 60_000).toISOString(), retryAfterSeconds: 60 }; }
         else if (!await verifyCachedPin(input.pin, pins.get(input.memberId))) { status = 403; data = { error: "Wrong PIN.", code: "pin_incorrect", attemptsLeft: 4 }; }
       }
       if (status === 200) { world.attendance.push(input); data = { eventId: input.eventId, accepted: true, action: "check_in", member: { displayName: "Test Student" } }; }
@@ -223,6 +230,12 @@ test("a Require PIN kiosk confirms, checks PINs online and offline, counts offli
   assert.equal(f.world.attendance.length, 1); assert.equal(f.world.attendance[0].pin, "4321");
   assert.equal((await kiosk.json("/display-state")).body.display.id, "welcome");
   assert.equal((await kiosk.json("/identity", { method: "member_id", memberId: "1010", confirmed: true, pin: "1234" })).body.code, "pin_not_set");
+  // A throttled try comes back with the server's message; even the right PIN is not checked against the cached hash.
+  f.world.throttled = true;
+  const waiting = await kiosk.json("/identity", { method: "member_id", memberId: "1009", confirmed: true, pin: "4321" });
+  assert.deepEqual([waiting.status, waiting.body.code, waiting.body.error, waiting.body.offline], [429, "pin_throttled", "Too many wrong PINs. Try again in 1 minute.", undefined]);
+  assert.equal(f.world.attendance.length, 1, "nothing was recorded or queued");
+  f.world.throttled = false;
 
   // Offline, the cached hash decides and wrong tries are counted here until the cached lockout locks the member.
   f.world.online = false;

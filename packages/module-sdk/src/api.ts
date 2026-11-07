@@ -9,6 +9,7 @@ export type {
   ModuleInterfaceClient,
   ModuleInterfaceHandler,
   ModuleJobContext,
+  ModuleJobScheduler,
   ModuleLifecycleContext,
   ModulePrincipal,
   ModuleRole,

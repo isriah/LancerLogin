@@ -96,13 +96,21 @@ test("raw Outreach dashboard controls remain in the reviewed UI inventory", asyn
   // offers Scheduled activity, Team support and Other service choices, with duration-only entries, member-added teams and
   // the reviewed-team filter. All new staff controls use ui-control, ui-native-select and ui-button; the public form keeps
   // its existing bare fields, styled beneath its module root.
+  // Reviewed for per-destination Event publication (Outreach #12): automatic publication has one switch per destination
+  // (Google Calendar and Discord) in place of the single switch, plus a Publish upcoming Events button whose confirmation
+  // offers Publish upcoming Events and Not now. All three new buttons use ui-button and the switches keep ui-checkbox.
+  // Reviewed for Outreach activity CSV import (Outreach #14): an Import CSV button beside Create activity opens a dialog
+  // that mirrors Core's meeting import (close, Choose File, Download template, Cancel, Preview activities, Back and the
+  // import button; a hidden file input; the Skip all / Update all radios; one Skip/Update select per matching row; the
+  // paste textarea). Every new button uses ui-button, the textarea ui-control and the row select ui-native-select.
   const reviewed: Record<string, Counts> = {
-    "outreach-activity-publication.tsx": { button: 4, input: 2, select: 1 },
+    "outreach-activity-import-dialog.tsx": { button: 7, input: 2, select: 1, textarea: 1 },
+    "outreach-activity-publication.tsx": { button: 7, input: 2, select: 1 },
     "outreach-clock.tsx": { button: 9, select: 1 },
     "outreach-setup-workspace.tsx": { button: 2, input: 3, select: 1 },
     "outreach-entry-edit.tsx": { button: 3, input: 1, select: 2, textarea: 2 },
     "outreach-settings.tsx": { button: 14, input: 4, select: 3 },
-    "outreach-workspace.tsx": { button: 24, input: 13, select: 10, textarea: 6, summary: 3 },
+    "outreach-workspace.tsx": { button: 25, input: 13, select: 10, textarea: 6, summary: 3 },
     "public-outreach-form.tsx": { button: 10, input: 8, select: 4, textarea: 2 },
     "outreach-public-settings.tsx": { button: 1, select: 1 },
   };
@@ -113,6 +121,9 @@ test("raw Outreach dashboard controls remain in the reviewed UI inventory", asyn
     for (const tag of ["button", "input", "select", "textarea", "summary"] as const) { const count = [...source.matchAll(new RegExp(`<${tag}\\b`, "g"))].length; if (count) counts[tag] = count; }
     if (Object.keys(counts).length) actual[file.replace(/^dashboard[\\/]/, "")] = counts;
   }
+  // Core still pins Outreach 5121736, from before #14: until the pin moves past #14, that reviewed state (no import dialog
+  // and no Import CSV button) is accepted too.
+  if (!files.includes(join("dashboard", "outreach-activity-import-dialog.tsx"))) { delete reviewed["outreach-activity-import-dialog.tsx"]; reviewed["outreach-workspace.tsx"] = { ...reviewed["outreach-workspace.tsx"], button: 24 }; }
   assert.deepEqual(actual, reviewed, "Native control markup changed. Use the shared UI patterns and focused rendered coverage, then review and update this inventory deliberately.");
 });
 
@@ -181,7 +192,7 @@ test("an installation that used first-party Outreach keeps its data and lifecycl
   assert.deepEqual([listed.phase, listed.workspaceReady, "unavailable" in listed], ["enabled", true, false]);
   // Its next backup carries Outreach in the plugin section, and that backup restores the same rows.
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 49);
+  assert.equal(backup.schemaVersion, 50);
   const section = backup.externalModules.find((entry: { id: string }) => entry.id === "hour-tracking");
   assert.deepEqual({ ...section, tables: undefined }, { id: "hour-tracking", label: "Outreach Participation", contractVersion: 1, backupVersion: manifest.backup.version, source: outreachPlugin.available ? outreachPlugin.source : null, commit: outreachPlugin.available ? outreachPlugin.commit : null, tables: undefined });
   assert.deepEqual(section.tables.hours_activities.map((row: { id: string }) => row.id), ["activity-1"]);

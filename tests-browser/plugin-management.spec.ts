@@ -4,6 +4,12 @@ import { attendanceSnapshot } from "./module-fixtures";
 import type { ModuleAccessUse } from "../apps/dashboard/src/module-access-grants";
 import type { PluginState } from "../apps/dashboard/src/plugin-management";
 import type { WebUpdateRequest } from "../apps/dashboard/src/web-update";
+import { encodeBase64Url } from "../packages/shared/src/password-hash.mjs";
+import { derivePasswordKey } from "../packages/shared/src/password-key.mjs";
+
+// The browser hashes the password before identity confirmation. The preview API's salt is sixteen 0x01 bytes, so this
+// is the K a correct password ("correct") produces; the mocks below accept only that.
+const correctKey = derivePasswordKey("correct", new Uint8Array(16).fill(1)).then(encodeBase64Url);
 
 const version = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version as string;
 const workflowUrl = "https://github.example.test/private/actions/workflows/upgrade-web.yml";
@@ -41,9 +47,9 @@ async function setup(page: Page, initial = pluginState()) {
     const body = route.request().postDataJSON() as { track: string }; posts.push({ path: "release", body });
     return route.fulfill({ json: { track: body.track, release: body.track === "nightly" ? nightlyRelease : stableRelease } });
   });
-  await page.route("**/admin/plugins/reauthenticate", (route) => {
-    const body = route.request().postDataJSON() as { password: string }; posts.push({ path: "reauthenticate", body: { password: body.password ? "[provided]" : "" } });
-    if (body.password !== "correct") return route.fulfill({ status: 401, json: { error: "The password is incorrect.", code: "reauthentication_failed" } });
+  await page.route("**/admin/plugins/reauthenticate", async (route) => {
+    const body = route.request().postDataJSON() as { key?: string; password?: string }; posts.push({ path: "reauthenticate", body: { key: body.key ? "[provided]" : "", ...(body.password === undefined ? {} : { password: "[sent]" }) } });
+    if (body.key !== await correctKey) return route.fulfill({ status: 401, json: { error: "The password is incorrect.", code: "reauthentication_failed" } });
     return route.fulfill({ json: { ok: true, freshUntil: Date.now() + 600_000 } });
   });
   await page.route("**/admin/plugins/change", (route) => {
@@ -432,9 +438,9 @@ async function accessSetup(page: Page) {
     uses = [accessUse(), ledger];
     return route.fulfill({ json: state() });
   });
-  await page.route("**/admin/plugins/reauthenticate", (route) => {
-    const body = route.request().postDataJSON() as { password: string; purpose?: string }; mock.posts.push({ path: "reauthenticate", body: { password: body.password ? "[provided]" : "", purpose: body.purpose } });
-    if (body.password !== "correct") return route.fulfill({ status: 401, json: { error: "The password is incorrect.", code: "reauthentication_failed" } });
+  await page.route("**/admin/plugins/reauthenticate", async (route) => {
+    const body = route.request().postDataJSON() as { key?: string; password?: string; purpose?: string }; mock.posts.push({ path: "reauthenticate", body: { key: body.key ? "[provided]" : "", ...(body.password === undefined ? {} : { password: "[sent]" }), purpose: body.purpose } });
+    if (body.key !== await correctKey) return route.fulfill({ status: 401, json: { error: "The password is incorrect.", code: "reauthentication_failed" } });
     freshUntil = Date.now() + 600_000;
     return route.fulfill({ json: { ok: true, freshUntil } });
   });
@@ -481,7 +487,7 @@ test("Admin reviews, grants and revokes module access in Settings > Modules afte
   await dialog.getByRole("button", { name: "Grant access" }).click();
   await expect(dialog).toHaveCount(0);
   expect(mock.posts.find((post) => post.path === "grant")?.body).toEqual({ consumer: "consumer", interface: "example.items", version: 1, operations: ["list", "create"] });
-  expect(mock.posts.filter((post) => post.path === "reauthenticate").map((post) => post.body)).toEqual([{ password: "[provided]", purpose: "module_access" }, { password: "[provided]", purpose: "module_access" }]);
+  expect(mock.posts.filter((post) => post.path === "reauthenticate").map((post) => post.body)).toEqual([{ key: "[provided]", purpose: "module_access" }, { key: "[provided]", purpose: "module_access" }], "identity confirmation sends K, never the password");
   await expect(access.getByRole("status").filter({ hasText: "Consumer can now use Example without a signed-in user." })).toBeFocused();
   await expect(consumer).toContainText("Granted by admin on");
   await expect(consumer.getByRole("button", { name: /^Grant/ })).toHaveCount(0);

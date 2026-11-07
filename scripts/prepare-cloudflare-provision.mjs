@@ -11,6 +11,14 @@ export function workerPlacement(region) {
   return { region };
 }
 
+/** The scheduler Durable Object binding and its one-time class migration. Keep the tag: Cloudflare applies each tag once. */
+export function schedulerDurableObjectConfig() {
+  return {
+    durable_objects: { bindings: [{ name: "PLATFORM_SCHEDULER", class_name: "PlatformScheduler" }] },
+    migrations: [{ tag: "platform-scheduler-v1", new_sqlite_classes: ["PlatformScheduler"] }],
+  };
+}
+
 export function buildProvisionConfig(slug, databases = [], releaseVersion = "0.1.0", fixedDatabaseName) {
   if (!slugPattern.test(slug)) throw new Error("Invalid installation slug");
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(releaseVersion)) throw new Error("Invalid release version");
@@ -23,6 +31,10 @@ export function buildProvisionConfig(slug, databases = [], releaseVersion = "0.1
   if (updateWorkflowUrl && !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/workflows\/[A-Za-z0-9_.-]+$/.test(updateWorkflowUrl)) throw new Error("Invalid private deployment workflow URL");
   const placement = workerPlacement(process.env.LANCERLOGIN_WORKER_PLACEMENT_REGION);
   const config = { name: `${slug}-api`, main: "../apps/api/src/index.ts", compatibility_date: "2026-08-01", workers_dev: true, placement, vars: { APP_MODE: "configured", ALLOWED_ORIGIN: `https://${slug}-dashboard.pages.dev`, RELEASE_VERSION: releaseVersion, ...(updateWorkflowUrl ? { UPDATE_WORKFLOW_URL: updateWorkflowUrl } : {}) }, triggers: { crons: ["*/5 * * * *"] } };
+  // The background scheduler's Durable Object (a SQLite-backed class, which the Workers Free plan supports). Its alarm runs
+  // one small job slice per invocation so every invocation fits Free's 10 ms CPU; the 5-minute cron only re-arms it.
+  // Additive: the first deploy with this config creates the namespace, and the tag matches existing dev deployments.
+  Object.assign(config, schedulerDurableObjectConfig());
   if (updateRepository) Object.assign(config.vars, { UPDATE_REPOSITORY: updateRepository, UPDATE_WORKFLOW_URL: `https://github.com/${updateRepository}/actions/workflows/upgrade-web.yml` });
   if (databaseId) config.d1_databases = [{ binding: "DB", database_name: databaseName, database_id: databaseId, migrations_dir: "../apps/api/migrations" }];
   return { state: databaseId ? "exists" : "missing", config };

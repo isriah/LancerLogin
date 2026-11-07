@@ -185,7 +185,7 @@ export function requireConfirmedExclusions(plan: ExternalModuleRestorePlan) {
 }
 
 /** Core tables keyed by module identity. Excluded modules restore absent from each. Cleanup leases are non-portable. */
-export const moduleKeyedTables = ["platform_module_epochs", "platform_modules", "platform_module_assignments", "platform_module_setup_progress"] as const;
+export const moduleKeyedTables = ["platform_module_epochs", "platform_modules", "platform_module_assignments", "platform_module_setup_progress", "module_report_baselines"] as const;
 
 export function removeExcludedModuleRows(tables: Record<(typeof moduleKeyedTables)[number], Row[]>, excluded: ReadonlySet<string>) {
   if (!excluded.size) return;

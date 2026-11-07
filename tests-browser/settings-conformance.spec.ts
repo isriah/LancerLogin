@@ -95,6 +95,28 @@ for (const viewport of dashboardConformanceReferences.viewports) {
   });
 }
 
+test("a reporting start date in the future warns that baseline reports stay empty until then", async ({ page }) => {
+  // Regression: an adopter saved 2026-12-31 as the baseline, so new reports opened with an inverted, empty range.
+  await page.clock.setFixedTime(new Date("2026-11-03T15:00:00Z"));
+  await useSettingsContext(page);
+  let saved: Record<string, unknown> | undefined;
+  await page.route("**/admin/branding", async (route) => {
+    if (route.request().method() === "PATCH") saved = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({ status: 200, contentType: "application/json", body: route.request().method() === "PATCH" ? JSON.stringify({ ok: true }) : JSON.stringify({ settings }) });
+  });
+  await page.goto("/settings/configuration");
+  const start = page.getByLabel("Attendance reporting start date (operational baseline)", { exact: true });
+  const warning = page.getByText(/This date is in the future\. Attendance reports that use the operational baseline will show nothing until 2026-12-31\./);
+  await start.fill("2026-12-31");
+  await expect(warning).toBeVisible();
+  await expect(start).toHaveAttribute("aria-describedby", "reporting-start-warning");
+  await start.fill("2026-09-01");
+  await expect(warning).toHaveCount(0);
+  await page.getByRole("button", { name: "Save configuration" }).click();
+  await expect(page.getByText("Attendance configuration saved.", { exact: true })).toBeVisible();
+  expect(saved?.attendanceReportingStartsOn).toBe("2026-09-01");
+});
+
 test("Admin can save independent attendance anomaly limits", async ({ page }) => {
   await useSettingsContext(page);
   let saved: Record<string, unknown> | undefined;
@@ -803,7 +825,7 @@ test("module status follows the unsaved switch instead of the saved state", asyn
 test("scheduler job disclosures retain complete timestamps and provider-delivery distinction", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
   await page.addInitScript(() => localStorage.setItem("lancerlogin-debug-mode", "true"));
-  const jobs = Object.fromEntries(["core.discord-commands", "attendance.google-calendar", "attendance.discord-calendar", "attendance.discord-channel", "attendance.discord-notices", "attendance.discord-anomalies", "attendance.discord-label-roles", "hour-tracking.publication"].map(id => [id, { next: 1_797_600_000_000, last: 1_797_599_000_000, outcome: "ok" }]));
+  const jobs = Object.fromEntries(["core.housekeeping", "core.discord-commands", "attendance.google-calendar", "attendance.discord-calendar", "attendance.discord-channel", "attendance.discord-notices", "attendance.discord-anomalies", "attendance.discord-label-roles", "hour-tracking.publication"].map(id => [id, { next: 1_797_600_000_000, last: 1_797_599_000_000, outcome: "ok" }]));
   await page.route("**/admin/scheduler", route => route.fulfill({ json: { enabled: true, jobs } }));
   await page.goto("/settings/background-scheduler");
   await expect(page.getByText("Last loaded scheduler state:")).toContainText("Running");
@@ -1149,4 +1171,23 @@ test("saved integration credentials show a saved date and open the form only to 
   await expect(resend.getByLabel("Sending API key")).toHaveValue("");
   expect(writes).toEqual([]);
   await expectResponsiveFit(page, responsiveFit);
+});
+
+test("granting local dashboard access sends a salt and K, never the temporary password", async ({ page }) => {
+  await useSettingsContext(page);
+  const created: Record<string, unknown>[] = [];
+  await page.route("**/admin/users", (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    created.push(route.request().postDataJSON() as Record<string, unknown>);
+    return route.fulfill({ status: 201, json: { user: { id: "user-2", localUsername: "front-desk", role: "operator", active: true, createdAt: new Date().toISOString() } } });
+  });
+  await page.goto("/settings/access");
+  await page.getByRole("button", { name: "Grant access", exact: true }).click();
+  await page.locator("#access-new-identifier").fill("front-desk");
+  await page.getByLabel("Temporary password", { exact: true }).fill("long-enough-password");
+  await page.getByLabel("Confirm temporary password", { exact: true }).fill("long-enough-password");
+  await page.getByRole("button", { name: "Create access", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Dashboard access created and audited." })).toBeVisible();
+  expect(created).toEqual([{ localUsername: "front-desk", localPasswordKey: { salt: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/), key: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) }, memberId: null, role: "operator" }]);
+  expect(JSON.stringify(created)).not.toContain("long-enough-password");
 });

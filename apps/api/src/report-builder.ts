@@ -1,12 +1,15 @@
 import { localDate, type AttendanceRule, type PolicyCompliance, type PolicyHistory, type PolicyLabel, type PolicyMeeting, type PolicyMemberResult } from "./attendance-policy.ts";
+import { attendanceStatusText, withRecentWindow } from "../../../packages/shared/src/attendance-terms.ts";
+import { csvRate, isLabelSetField, labelSetFields, rateText, targetText, type LabelPolicyType } from "../../../packages/shared/src/attendance-label-sets.ts";
 import { bundledModuleRegistry, coreReportDatasets, coreReportFilterIds, type ReportDatasetDefinition, type ReportDurationUnit, type ReportFieldDefinition, type ReportFilterOperator, type ReportModuleFilterDefinition } from "../../../packages/shared/src/module-platform.ts";
 
 export type ReportScope = "personal" | "shared";
 export type ReportPeriod =
   | { type: "all" }
-  | { type: "baseline" }
+  | { type: "baseline"; module?: string }
   | { type: "last_days"; days: 7 | 30 | 60 | 90 }
   | { type: "current_month" }
+  | { type: "last_month" }
   | { type: "current_year" }
   | { type: "fixed"; from: string; to: string };
 export type LegacyReportColumnKey =
@@ -36,14 +39,20 @@ export type ReportDefinitionV1 = ReportDefinitionBase & {
 export type ReportDefinitionV2 = ReportDefinitionBase & { version: 2; dataset: string; groupBy: string[] };
 export type ReportDefinition = ReportDefinitionV1 | ReportDefinitionV2;
 export type NormalizedReportDefinition = ReportDefinitionV2;
-export type ReportCell = { text: string; sortValue: string | number | null; dates?: string[]; empty?: boolean; unavailable?: boolean; explanation?: string };
+/** `exportText` is the CSV value when it differs from the text shown, such as 87.5 for "87.5%"; `status` is a policy status shown as a pill. */
+export type ReportCell = { text: string; sortValue: string | number | null; dates?: string[]; empty?: boolean; unavailable?: boolean; explanation?: string; exportText?: string; status?: string };
 export type ReportResultRow = { id: string; label: string; href?: string; member?: { id: string; memberId: string; name: string }; cells: Record<string, ReportCell> };
 export type ReportColumnCatalogItem = { key: string; label: string; group: string; sortable: boolean; filterKind: "text" | "number"; requiresLabel?: boolean; durationUnits?: readonly ReportDurationUnit[]; defaultDurationUnit?: ReportDurationUnit; datasets: string[] };
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+// H:MM only formats the minutes a duration field already reports, so Core offers it on every duration field, including
+// those of plugins that list only minutes and hours.
+const withHoursMinutes = (field: ReportFieldDefinition): ReportFieldDefinition => field.durationUnits && !field.durationUnits.includes("hours_minutes") ? Object.freeze({ ...field, durationUnits: Object.freeze([...field.durationUnits, "hours_minutes" as const]) }) : field;
+const withDurationFormats = (dataset: ReportDatasetDefinition): ReportDatasetDefinition => dataset.fields.some((field) => withHoursMinutes(field) !== field) ? Object.freeze({ ...dataset, fields: Object.freeze(dataset.fields.map(withHoursMinutes)) }) : dataset;
+const coreDatasets = coreReportDatasets.map(withDurationFormats);
 const contributedReportDatasets = Object.freeze<readonly ReportDatasetDefinition[]>([
-  ...coreReportDatasets,
-  ...bundledModuleRegistry.modules.flatMap((module) => module.reportDatasets ?? []),
+  ...coreDatasets,
+  ...bundledModuleRegistry.modules.flatMap((module) => module.reportDatasets ?? []).map(withDurationFormats),
 ]);
 const memberReportDatasets = contributedReportDatasets.filter((dataset) => dataset.rowIdentity === "core.member.identity");
 const combinedMemberFields = [...new Map(memberReportDatasets.flatMap((dataset) => dataset.fields).map((field) => [field.id, field])).values()];
@@ -67,7 +76,7 @@ export const combinedMemberDataset: ReportDatasetDefinition = Object.freeze({
   relationships: Object.freeze(memberReportDatasets.map((dataset) => ({ dataset: dataset.id, localField: "core.member.identity", foreignField: dataset.rowIdentity }))),
 });
 export const reportDatasetCatalog = Object.freeze<readonly ReportDatasetDefinition[]>([
-  ...coreReportDatasets,
+  ...coreDatasets,
   combinedMemberDataset,
   ...contributedReportDatasets.filter((dataset) => !coreReportDatasets.some((core) => core.id === dataset.id)),
 ]);
@@ -111,6 +120,45 @@ export function reportFilterSelection(definition: ReportDefinition, filterId: st
 }
 const article = (noun: string) => /^[aeiou]/i.test(noun) ? "an" : "a";
 
+/**
+ * Whether the operational baseline has started by `today`. A baseline after today leaves the inverted range baseline..today,
+ * which holds no records, so new reports do not default to it and fall back to all history.
+ */
+export function reportBaselineStarted(baseline: string | null, today: string): boolean { return Boolean(baseline && baseline <= today); }
+
+/** Reporting start dates (operational baselines) by module ID; Attendance's comes from organization_settings. */
+export type ReportBaselines = Readonly<Record<string, string | null>>;
+type BaselineDefinition = { dataset: string; columns: readonly ReportColumn[]; period: ReportPeriod };
+const periodDatasetOwner = (dataset: ReportDatasetDefinition) => dataset.filters.includes("period") ? bundledModuleRegistry.reportDatasetOwner(dataset.id)?.id : undefined;
+/** Modules with a reporting start date: those owning a report dataset with a period filter, Attendance first. */
+export const reportBaselineModuleIds: readonly string[] = Object.freeze([...new Set(contributedReportDatasets.map(periodDatasetOwner).filter((id): id is string => Boolean(id)))].sort((a, b) => Number(b === "attendance") - Number(a === "attendance")));
+/** A module's short name for baseline labels: its settings entry ("Outreach"), else its label. */
+export function reportBaselineModuleLabel(moduleId: string): string { const module = bundledModuleRegistry.get(moduleId); return module?.settings[0]?.label ?? module?.label ?? moduleId; }
+/** The modules whose baseline a combined Members report can use: those its columns come from, else every baseline module. */
+export function combinedReportBaselineModules(definition: { columns: readonly ReportColumn[] }): string[] {
+  const used = new Set(definition.columns.map((column) => reportFieldSourceDataset(combinedMemberDataset.id, canonicalField(column.key))).map((source) => source ? periodDatasetOwner(datasets.get(source)!) : undefined).filter((id): id is string => Boolean(id)));
+  return used.size ? reportBaselineModuleIds.filter((id) => used.has(id)) : [...reportBaselineModuleIds];
+}
+/**
+ * The module whose reporting start date a definition's baseline period uses. A single-module dataset uses its owner's. A
+ * combined Members report uses one module's date for the whole report: the saved choice, else Attendance's when it is set
+ * and has started, else the next module's that has started, else the first that is set.
+ */
+export function reportBaselineModule(definition: BaselineDefinition, baselines: ReportBaselines, today: string): string | undefined {
+  const dataset = datasets.get(definition.dataset);
+  if (!dataset) return;
+  if (dataset.id !== combinedMemberDataset.id) return periodDatasetOwner(dataset);
+  const candidates = combinedReportBaselineModules(definition);
+  const chosen = definition.period.type === "baseline" ? definition.period.module : undefined;
+  if (chosen && reportBaselineModuleIds.includes(chosen)) return chosen;
+  return candidates.find((id) => reportBaselineStarted(baselines[id] ?? null, today)) ?? candidates.find((id) => baselines[id]) ?? candidates[0];
+}
+/** The reporting start date a definition's baseline period uses, with its module. */
+export function reportBaselineFor(definition: BaselineDefinition, baselines: ReportBaselines, today: string): { moduleId?: string; baseline: string | null } {
+  const moduleId = reportBaselineModule(definition, baselines, today);
+  return { moduleId, baseline: moduleId ? baselines[moduleId] ?? null : null };
+}
+
 export function defaultReportDefinition(hasBaseline: boolean, datasetId = "attendance.members"): NormalizedReportDefinition {
   const dataset = datasets.get(datasetId) ?? datasets.get("core.members")!;
   const column = (key: string): ReportColumn => { const unit = fields.get(key)?.defaultDurationUnit; return unit ? { key, unit } : { key }; };
@@ -152,7 +200,9 @@ export function validateReportDefinition(value: unknown, labels: PolicyLabel[], 
   const legacy = input.version === 1; const dataset = datasets.get(legacy ? "attendance.members" : String(input.dataset));
   if (!dataset) errors.push("Choose an available report dataset.");
   let period: ReportPeriod | undefined;
-  if (input.period?.type === "all" || input.period?.type === "baseline" || input.period?.type === "current_month" || input.period?.type === "current_year") period = { type: input.period.type };
+  if (input.period?.type === "all" || input.period?.type === "current_month" || input.period?.type === "last_month" || input.period?.type === "current_year") period = { type: input.period.type };
+  // Only a combined Members report stores which module's baseline it uses; other datasets always use their owner's.
+  else if (input.period?.type === "baseline" && (input.period.module === undefined || typeof input.period.module === "string" && reportBaselineModuleIds.includes(input.period.module))) period = input.period.module !== undefined && dataset?.id === combinedMemberDataset.id ? { type: "baseline", module: input.period.module } : { type: "baseline" };
   else if (input.period?.type === "last_days" && [7, 30, 60, 90].includes(Number(input.period.days))) period = { type: "last_days", days: Number(input.period.days) as 7 | 30 | 60 | 90 };
   else if (input.period?.type === "fixed" && isDate(input.period.from) && isDate(input.period.to) && input.period.from <= input.period.to) period = { type: "fixed", from: input.period.from, to: input.period.to };
   else errors.push("Choose a valid report period.");
@@ -184,7 +234,8 @@ export function validateReportDefinition(value: unknown, labels: PolicyLabel[], 
     if (!value || typeof value !== "object") return [];
     const candidate = value as Partial<ReportColumnFilter>;
     const column = dataset ? parseColumn(candidate.column, dataset, legacy, knownLabels, allowMissingLabels, warnings) : undefined;
-    const visibleColumn = column ? columns.find((visible) => columnId(visible) === columnId(column)) : undefined;
+    // A filter may name a dataset field that isn't displayed; one on a displayed column uses that column's unit.
+    const visibleColumn = column ? columns.find((visible) => columnId(visible) === columnId(column)) ?? column : undefined;
     const item = visibleColumn ? fields.get(visibleColumn.key) : undefined;
     const operator = candidate.operator;
     const filterValue = typeof candidate.value === "string" ? candidate.value.trim() : "";
@@ -205,11 +256,14 @@ export function validateReportDefinition(value: unknown, labels: PolicyLabel[], 
 }
 
 function shiftDate(date: string, days: number): string { const value = new Date(date + "T12:00:00.000Z"); value.setUTCDate(value.getUTCDate() + days); return value.toISOString().slice(0, 10); }
-export function resolveReportPeriod(period: ReportPeriod, today: string, baseline: string | null): { from?: string; to?: string; warning?: string } {
+export function resolveReportPeriod(period: ReportPeriod, today: string, baseline: string | null, moduleLabel?: string): { from?: string; to?: string; warning?: string } {
   if (period.type === "all") return {};
-  if (period.type === "baseline") return baseline ? { from: baseline, to: today } : { warning: "The operational reporting baseline is not configured." };
+  const name = moduleLabel ? `${moduleLabel} reporting start date (operational baseline)` : "operational reporting baseline";
+  if (period.type === "baseline") return !baseline ? { warning: `The ${name} is not configured.` } : baseline > today ? { from: baseline, to: today, warning: `The ${name} (${baseline}) is after today, so this period has no records yet. Choose another period.` } : { from: baseline, to: today };
   if (period.type === "last_days") return { from: shiftDate(today, 1 - period.days), to: today };
   if (period.type === "current_month") return { from: today.slice(0, 7) + "-01", to: today };
+  // The whole previous calendar month: the day before this month's first day, back to that month's first day.
+  if (period.type === "last_month") { const to = shiftDate(today.slice(0, 7) + "-01", -1); return { from: to.slice(0, 7) + "-01", to }; }
   if (period.type === "current_year") return { from: today.slice(0, 4) + "-01-01", to: today };
   return { from: period.from, to: period.to };
 }
@@ -220,21 +274,34 @@ export function reportLabelsMatch(current: string[], selected: string[], mode: "
 }
 
 const percentage = (value: number | null) => value === null ? "N/A" : `${value}%`;
-const statusText = (value: string) => value === "not_applicable" || value === "no_rule" ? "N/A" : value.replaceAll("_", " ");
-const policyResult = (policy?: PolicyCompliance) => !policy ? "N/A" : policy.status === "no_rule" ? `${policy.labelName ?? "Attendance policy"}: no active rule` : policy.status === "not_applicable" ? `${policy.labelName ?? "Attendance policy"}: N/A` : policy.ruleType === "weekly_count" ? `${policy.attended} of ${policy.threshold ?? 0} meetings · ${statusText(policy.status)}` : `${percentage(policy.rate)} of ${policy.threshold ?? 0}% · ${statusText(policy.status)}`;
-const historyResult = (history: PolicyHistory) => history.status === "not_applicable" ? `${history.labelName}: N/A` : history.ruleType === "weekly_count" ? `${history.labelName}: ${history.weeksMet}/${history.weeksDue} weeks · ${statusText(history.status)}` : `${history.labelName}: ${percentage(history.rate)} · ${statusText(history.status)}`;
+const statusText = attendanceStatusText;
+const policyResult = (policy?: PolicyCompliance) => !policy ? "N/A" : policy.status === "no_rule" || policy.status === "not_applicable" ? `${policy.labelName ?? "Attendance policy"}: ${statusText(policy.status)}` : policy.ruleType === "weekly_count" ? `${policy.attended} of ${policy.threshold ?? 0} meetings · ${statusText(policy.status)}` : `${percentage(policy.rate)} of ${policy.threshold ?? 0}% · ${statusText(policy.status)}`;
+const historyResult = (history: PolicyHistory) => history.status === "not_applicable" ? `${history.labelName}: ${statusText(history.status)}` : history.ruleType === "weekly_count" ? `${history.labelName}: ${history.weeksMet}/${history.weeksDue} weeks · ${statusText(history.status)}` : `${history.labelName}: ${percentage(history.rate)} · ${statusText(history.status)}`;
 const ruleTarget = (rule?: AttendanceRule) => !rule ? null : rule.ruleType === "weekly_count" ? Number(rule.meetingsPerWeek) : Number(rule.thresholdPercent);
 const historyPeriod = (history: PolicyHistory, from?: string, to?: string) => `${[history.startsOn, from].filter((value): value is string => Boolean(value)).sort().at(-1) ?? "First eligible meeting"} to ${[history.endsOn, to].filter((value): value is string => Boolean(value)).sort()[0] ?? "today"}`;
 
-export function reportColumnLabel(column: ReportColumn, labels: Map<string, string>): string {
-  const field = fields.get(canonicalField(column.key)); const base = field?.label ?? column.key;
-  const unitLabel = field?.durationUnits && column.unit === "hours" ? base === "Minutes" ? "Hours" : base.endsWith(" minutes") ? `${base.slice(0, -8)} hours` : `${base} (hours)` : base;
+/** A duration field's label for a unit other than minutes: "Minutes" reads "Hours", "Outreach minutes" reads "Outreach hours". */
+export function durationColumnLabel(base: string, unit: ReportDurationUnit | undefined): string {
+  if (unit !== "hours" && unit !== "hours_minutes") return base;
+  const hours = base === "Minutes" ? "Hours" : base.endsWith(" minutes") ? `${base.slice(0, -8)} hours` : `${base} (hours)`;
+  return unit === "hours" ? hours : hours.endsWith(")") ? `${hours.slice(0, -1)}, H:MM)` : `${hours} (H:MM)`;
+}
+/** Whole minutes as hours and zero-padded minutes, such as 725 as 12:05; hours are not capped at 24. */
+export function formatHoursMinutes(minutes: number): string { const total = Math.round(minutes); const sign = total < 0 ? "-" : ""; const magnitude = Math.abs(total); return `${sign}${Math.floor(magnitude / 60)}:${String(magnitude % 60).padStart(2, "0")}`; }
+
+/** A column's header; `recentDays` fills in the "Last N days" window of current-standing policy columns. */
+export function reportColumnLabel(column: ReportColumn, labels: Map<string, string>, recentDays?: number): string {
+  const field = fields.get(canonicalField(column.key)); const base = withRecentWindow(field?.label ?? column.key, recentDays);
+  const unitLabel = field?.durationUnits ? durationColumnLabel(base, column.unit) : base;
   return column.labelId ? `${labels.get(column.labelId) ?? "Unavailable label"} - ${unitLabel}` : unitLabel;
 }
 
 export function formatReportCellForColumn(column: ReportColumn, cell: ReportCell): ReportCell {
   const field = fields.get(canonicalField(column.key));
-  if (!field?.durationUnits || column.unit !== "hours" || typeof cell.sortValue !== "number") return cell;
+  if (!field?.durationUnits || typeof cell.sortValue !== "number") return cell;
+  // H:MM sorts and filters on the underlying minutes; only the text changes, and CSV exports that text.
+  if (column.unit === "hours_minutes") return { ...cell, text: formatHoursMinutes(cell.sortValue) };
+  if (column.unit !== "hours") return cell;
   const roundedHours = Math.round(cell.sortValue / 60 * 100) / 100;
   return { ...cell, text: roundedHours.toFixed(2), sortValue: roundedHours };
 }
@@ -263,23 +330,25 @@ export function buildReportRows(input: { definition: ReportDefinition; official:
         case "core.member.status": cell = { text: item.member.active ? "Active" : "Inactive", sortValue: item.member.active ? 1 : 0 }; break;
         case "core.member.labels": { const names = full.currentLabelIds.map((labelId) => labelNames.get(labelId) ?? "Unavailable label").sort(); cell = { text: names.join("; ") || "None", sortValue: null, empty: !names.length }; break; }
         case "attendance.member.required-from": cell = { text: item.member.attendanceRequiredFrom ?? "", sortValue: item.member.attendanceRequiredFrom ?? null }; break;
-        case "attendance.member.regular-rate": cell = { text: percentage(item.regularAttendance.rate), sortValue: item.regularAttendance.rate }; break;
+        // One decimal, as label sets show rates; no required meetings yet is no value (a dash, and an empty CSV cell).
+        case "attendance.member.regular-rate": cell = item.regularAttendance.preciseRate === null ? { text: "", sortValue: null, empty: true } : { text: rateText(item.regularAttendance.preciseRate), sortValue: item.regularAttendance.preciseRate, exportText: csvRate(item.regularAttendance.preciseRate) }; break;
         case "attendance.member.weighted-present": cell = { text: String(item.regularAttendance.attended), sortValue: item.regularAttendance.attended }; break;
         case "attendance.member.weighted-eligible": cell = { text: String(item.regularAttendance.required), sortValue: item.regularAttendance.required }; break;
         case "attendance.member.regular-period": cell = { text: `${item.regularAttendance.from ?? "First eligible meeting"} to ${item.regularAttendance.to}`, sortValue: null }; break;
         case "attendance.member.assigned-policies": cell = { text: full.currentCompliances.length ? full.currentCompliances.map(policyResult).join("; ") : "No assigned policy", sortValue: null, empty: !full.currentCompliances.length }; break;
         case "attendance.policy.official-result": cell = { text: policyResult(officialPolicy), sortValue: officialPolicy?.ruleType === "weekly_count" ? officialPolicy.attended : officialPolicy?.rate ?? null }; break;
-        case "attendance.policy.official-status": cell = { text: officialPolicy ? statusText(officialPolicy.status) : "N/A", sortValue: officialPolicy?.status ?? null }; break;
+        case "attendance.policy.official-status": cell = { text: statusText(officialPolicy?.status ?? "no_rule"), sortValue: officialPolicy?.status ?? null, empty: !officialPolicy }; break;
         case "attendance.policy.official-target": cell = { text: officialPolicy?.threshold == null ? "N/A" : String(officialPolicy.threshold), sortValue: officialPolicy?.threshold ?? null }; break;
         case "attendance.policy.official-type": cell = { text: officialPolicy?.ruleType === "weekly_count" ? "Weekly count" : officialPolicy?.ruleType === "weighted_percentage" ? "Weighted percentage" : "N/A", sortValue: officialPolicy?.ruleType ?? null }; break;
         case "attendance.policy.official-excused": cell = { text: officialPolicy?.excusedHandling === "count_missed" ? "Count as missed" : officialPolicy?.excusedHandling === "exclude" ? "Exclude" : "N/A", sortValue: officialPolicy?.excusedHandling ?? null }; break;
         case "attendance.policy.official-period": cell = { text: officialPolicy && officialPolicy.status !== "no_rule" ? `${officialPolicy.from} to ${officialPolicy.to}` : "N/A", sortValue: null }; break;
         case "attendance.policy.report-summary": cell = { text: item.historySummaries.length ? item.historySummaries.map(historyResult).join("; ") : "No policy results", sortValue: null, empty: !item.historySummaries.length }; break;
         case "attendance.policy.report-result": cell = { text: periodPolicies.length ? periodPolicies.map(historyResult).join("; ") : "N/A", sortValue: periodPolicies.length === 1 ? periodPolicies[0].rate : null }; break;
-        case "attendance.policy.report-status": cell = { text: periodPolicies.length === 1 ? statusText(periodPolicies[0].status) : periodPolicies.length ? "Multiple periods" : "N/A", sortValue: periodPolicies.length === 1 ? periodPolicies[0].status : null }; break;
+        case "attendance.policy.report-status": cell = { text: periodPolicies.length === 1 ? statusText(periodPolicies[0].status) : periodPolicies.length ? "Multiple periods" : statusText("no_rule"), sortValue: periodPolicies.length === 1 ? periodPolicies[0].status : null, empty: !periodPolicies.length }; break;
         case "attendance.policy.report-target": { const target = ruleTarget(periodRule); cell = { text: target === null ? "N/A" : String(target), sortValue: target }; break; }
         case "attendance.policy.report-period": cell = { text: periodPolicies.length ? periodPolicies.map((summary) => historyPeriod(summary, input.from, input.to)).join("; ") : "N/A", sortValue: null }; break;
         case "attendance.policy.history": cell = { text: full.historySummaries.length ? full.historySummaries.map(historyResult).join("; ") : "No policy history", sortValue: null, empty: !full.historySummaries.length }; break;
+        case labelSetFields.rate: case labelSetFields.target: case labelSetFields.status: case labelSetFields.attended: case labelSetFields.counted: case labelSetFields.weeksMet: case labelSetFields.excused: cell = labelSetCell(canonicalField(column.key), labelSetResult(item, column.labelId!)); break;
         case "attendance.detail.present-count": cell = { text: String(dates.present.length), sortValue: dates.present.length }; break;
         case "attendance.detail.present-dates": cell = { text: dates.present.join("; ") || "None", sortValue: null, dates: dates.present }; break;
         case "attendance.detail.absent-count": cell = { text: String(dates.absent.length), sortValue: dates.absent.length }; break;
@@ -294,6 +363,67 @@ export function buildReportRows(input: { definition: ReportDefinition; official:
   return filterAndSortReportRows(input.definition, rows);
 }
 
+/** A member's result under one label's policy for the report period, as the label's column set shows it. */
+export type LabelSetResult = { status: "met" | "below" | "pending" | "not_applicable" | "no_rule" | "multiple"; ruleType: LabelPolicyType | null; rate: number | null; target: number | null; attended: number | null; counted: number | null; weeksMet: number | null; excused: number | null };
+/**
+ * Reads the period evaluation's policy summary for the label; nothing is recomputed. A member who doesn't hold the label,
+ * or a label without a policy, has No policy. Two policies in the period (a dated override and the standing policy)
+ * can't share one rate or target, so the set shows their meeting counts and "Multiple policies".
+ */
+export function labelSetResult(item: PolicyMemberResult, labelId: string): LabelSetResult {
+  const summaries = item.historySummaries.filter((summary) => summary.labelId === labelId);
+  const held = item.currentLabelIds.includes(labelId) || summaries.some((summary) => summary.meetingsAttended > 0 || (summary.meetingsCounted ?? 0) > 0 || summary.weeksDue > 0);
+  if (!held || !summaries.length) return { status: "no_rule", ruleType: null, rate: null, target: null, attended: null, counted: null, weeksMet: null, excused: null };
+  const sum = (values: (number | null)[]) => values.some((value) => value !== null) ? values.reduce<number>((total, value) => total + (value ?? 0), 0) : null;
+  if (summaries.length > 1) return { status: "multiple", ruleType: summaries.every((summary) => summary.ruleType === summaries[0]!.ruleType) ? summaries[0]!.ruleType : null, rate: null, target: null, attended: sum(summaries.map((summary) => summary.meetingsAttended)), counted: sum(summaries.map((summary) => summary.meetingsCounted)), weeksMet: sum(summaries.map((summary) => summary.ruleType === "weekly_count" ? summary.weeksMet : null)), excused: sum(summaries.map((summary) => summary.meetingsExcused)) };
+  const summary = summaries[0]!;
+  return { status: summary.setStatus, ruleType: summary.ruleType, rate: summary.preciseRate, target: summary.threshold, attended: summary.meetingsAttended, counted: summary.meetingsCounted, weeksMet: summary.ruleType === "weekly_count" ? summary.weeksMet : null, excused: summary.meetingsExcused };
+}
+/** Words for a label set's status; "multiple" has no attendance status of its own. */
+export const labelSetStatusText = (status: LabelSetResult["status"]) => status === "multiple" ? "Multiple policies" : statusText(status);
+const countCell = (value: number | null): ReportCell => value === null ? { text: "", sortValue: null, empty: true } : { text: String(value), sortValue: value };
+function labelSetCell(field: string, result: LabelSetResult): ReportCell {
+  if (field === labelSetFields.status) return { text: labelSetStatusText(result.status), sortValue: result.status, status: result.status, empty: result.status === "no_rule" };
+  if (field === labelSetFields.rate) return result.rate === null ? { text: "", sortValue: null, empty: true } : { text: rateText(result.rate), sortValue: result.rate, exportText: csvRate(result.rate) };
+  if (field === labelSetFields.target) return result.target === null || !result.ruleType ? { text: "", sortValue: null, empty: true } : { text: targetText(result.ruleType, result.target), sortValue: result.target, exportText: String(result.target) };
+  if (field === labelSetFields.attended) return countCell(result.attended);
+  if (field === labelSetFields.counted) return countCell(result.counted);
+  if (field === labelSetFields.weeksMet) return countCell(result.weeksMet);
+  return countCell(result.excused);
+}
+
+/**
+ * A column's CSV header: its full name (as reportColumnLabel gives it) with its unit, such as "Test Robotics Class - Attendance rate (%)". `policyTypes`
+ * gives each label's policy type, so a meetings-per-week Target reads "(meetings per week)".
+ */
+export function reportColumnCsvLabel(column: ReportColumn, label: string, policyTypes: ReadonlyMap<string, LabelPolicyType>): string {
+  const key = canonicalField(column.key);
+  if (key === "attendance.member.regular-rate" || key === labelSetFields.rate) return `${label} (%)`;
+  if (key === labelSetFields.target) return `${label} (${column.labelId && policyTypes.get(column.labelId) === "weekly_count" ? "meetings per week" : "%"})`;
+  if (key === labelSetFields.excused) return `${label} meetings`;
+  return label;
+}
+/** Whether a report shows any label's column set; its CSV then adds Member ID after Member so rows can be matched on import. */
+export const reportHasLabelSets = (definition: Pick<ReportDefinition, "columns">) => definition.columns.some((column) => isLabelSetField(canonicalField(column.key)));
+
+/**
+ * The definition a projection computes: the displayed columns, then any filtered fields that aren't displayed, so their
+ * cells exist for filtering. The extra columns come from sources the filters already read; they add no source of their own.
+ */
+export function reportComputationDefinition<T extends ReportDefinition>(definition: T): T {
+  const shown = new Set(definition.columns.map(columnId));
+  const hidden = (definition.columnFilters ?? []).map((filter) => filter.column).filter((column) => !shown.has(columnId(column)));
+  return hidden.length ? { ...definition, columns: [...definition.columns, ...hidden] } : definition;
+}
+
+/** Result rows with only the displayed columns' cells, dropping the cells computed for hidden filtered fields. */
+export function displayedReportRows(definition: ReportDefinition, rows: ReportResultRow[]): ReportResultRow[] {
+  const shown = new Set(definition.columns.map(columnId));
+  if (!(definition.columnFilters ?? []).some((filter) => !shown.has(columnId(filter.column)))) return rows;
+  return rows.map((row) => ({ ...row, cells: Object.fromEntries(Object.entries(row.cells).filter(([id]) => shown.has(id))) }));
+}
+
+const statusFields = new Set(["attendance.policy.official-status", "attendance.policy.report-status", labelSetFields.status]);
 export function filterAndSortReportRows(definition: ReportDefinition, rows: ReportResultRow[]): ReportResultRow[] {
   const filteredRows = rows.filter((row) => (definition.columnFilters ?? []).every((filter) => {
     const cell = row.cells[columnId(filter.column)];
@@ -307,7 +437,8 @@ export function filterAndSortReportRows(definition: ReportDefinition, rows: Repo
     const value = numeric ? Number(cell.sortValue) : cell.text.toLocaleLowerCase();
     const lower = typeof value === "number" ? Number(filter.value) : filter.value.toLocaleLowerCase();
     const upper = typeof value === "number" ? Number(filter.upperValue) : (filter.upperValue ?? "").toLocaleLowerCase();
-    if (filter.operator === "equals") return value === lower;
+    // Status cells keep their status ID as the sort value, so saved "equals" filters written with the old words still match.
+    if (filter.operator === "equals") return value === lower || statusFields.has(canonicalField(filter.column.key)) && cell.sortValue === lower;
     if (filter.operator === "minimum") return value >= lower;
     if (filter.operator === "maximum") return value <= lower;
     return value >= lower && value <= upper;

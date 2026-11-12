@@ -490,6 +490,11 @@
       "name": "0098_member_pin_throttle.sql",
       "sha256": "50fc31f607671611ade75e544826285cf41896f964277e6f213ae3806f25886c",
       "forwardCompatible": true
+    },
+    {
+      "name": "0099_early_scan_minutes.sql",
+      "sha256": "beac8ffe6f4c25a02715ac5a768c5e576ee39be3ddba2c9f2916b49238653b89",
+      "forwardCompatible": true
     }
   ]
 }

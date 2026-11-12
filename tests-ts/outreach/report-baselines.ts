@@ -46,7 +46,7 @@ test("installation backups carry Outreach's date and restore it", async (t) => {
   const db = new PluginDatabase(); t.after(() => db.raw.close()); const client = backupClient(worker, db);
   db.raw.exec("INSERT INTO module_report_baselines VALUES ('primary', 'hour-tracking', '2026-08-15', 2, '2026-10-01T00:00:00.000Z')");
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 50);
+  assert.equal(backup.schemaVersion, 51);
   assert.deepEqual(backup.tables.module_report_baselines, [{ installation_id: "primary", module_id: "hour-tracking", starts_on: "2026-08-15", revision: 2, updated_at: "2026-10-01T00:00:00.000Z" }]);
   db.raw.exec("UPDATE module_report_baselines SET starts_on='2026-12-31'");
   const restored = await client.restore(backup); assert.equal(restored.status, 200, await restored.clone().text());

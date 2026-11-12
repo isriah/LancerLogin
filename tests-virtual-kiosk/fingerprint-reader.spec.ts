@@ -1,10 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { kiosk, readerFaults, tapFinger, useAuthenticationMethod } from "./virtual-kiosk";
+import { kiosk, kioskReady, readerFaults, tapFinger, useAuthenticationMethod } from "./virtual-kiosk";
 
 // The virtual kiosk's fingerprint reader: enrollment from the dashboard, scans, an unknown finger and a reader that is
 // unplugged and plugged back in. Test Student C (1003) enrolls finger 1; the other specs scan A and B, and the kiosk
 // refuses a second scan of one member seconds after the first.
 test.describe.configure({ mode: "serial" });
+// Each scenario starts from a ready kiosk, so one that fails can't leave the next one a kiosk that is still restarting.
+test.beforeEach(async ({ request }) => { await kioskReady(request); });
 const fingerC = "member:1003:1";
 
 test.afterEach(async ({ request }) => { await readerFaults(request, { image: null, noMatch: false, score: 180, delayMs: 0, unplugged: false }); });

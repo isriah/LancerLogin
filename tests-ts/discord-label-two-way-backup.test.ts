@@ -49,7 +49,7 @@ const twoWayState = (db: BackupDatabase) => ({
 test("installation backups carry each label change's source and each role link's sync direction", async (t) => {
   const db = seed(t); const client = backupClient(worker, db);
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 50);
+  assert.equal(backup.schemaVersion, 51);
   assert.deepEqual(Object.fromEntries(backup.tables.member_label_changes.map((row: { id: string; source: string }) => [row.id, row.source])), { "change-a": "discord", "change-b": "dashboard", "change-pit": "dashboard" });
   assert.deepEqual(backup.tables.discord_label_role_mappings.map((row: { label_id: string; sync_direction: string }) => [row.label_id, row.sync_direction]), [["label-build", "two_way"], ["label-pit", "to_discord"]]);
   // The baseline, unmatched list and reviews are operational state and never travel.

@@ -19,15 +19,15 @@ export async function restoreMeetingDeletion(db: D1Database, deletion: MeetingDe
   const ids = JSON.stringify(deletion.meetingIds);
   const marker = "meeting-undo-conflict";
   // A D1 batch is transactional. Recheck both the deletion revision and current
-  // attendance windows inside that transaction, including late-scan settings.
+  // attendance windows inside that transaction, including the early arrival and late-scan settings.
   const guard = db.prepare(`SELECT CASE WHEN
     (SELECT COUNT(*) FROM meetings WHERE installation_id='primary' AND deleted_at=? AND id IN (SELECT value FROM json_each(?)))=?
     AND NOT EXISTS (
       SELECT 1 FROM meetings target JOIN meetings other ON other.installation_id=target.installation_id AND other.id<>target.id
       WHERE target.installation_id='primary' AND target.id IN (SELECT value FROM json_each(?))
         AND (other.deleted_at IS NULL OR other.id IN (SELECT value FROM json_each(?)))
-        AND julianday(target.starts_at)<=julianday(other.ends_at)+COALESCE((SELECT late_scan_minutes FROM organization_settings WHERE installation_id='primary'),30)/1440.0
-        AND julianday(other.starts_at)<=julianday(target.ends_at)+COALESCE((SELECT late_scan_minutes FROM organization_settings WHERE installation_id='primary'),30)/1440.0
+        AND julianday(target.starts_at)-COALESCE((SELECT early_scan_minutes FROM organization_settings WHERE installation_id='primary'),15)/1440.0<=julianday(other.ends_at)+COALESCE((SELECT late_scan_minutes FROM organization_settings WHERE installation_id='primary'),30)/1440.0
+        AND julianday(other.starts_at)-COALESCE((SELECT early_scan_minutes FROM organization_settings WHERE installation_id='primary'),15)/1440.0<=julianday(target.ends_at)+COALESCE((SELECT late_scan_minutes FROM organization_settings WHERE installation_id='primary'),30)/1440.0
     ) THEN 1 ELSE json_extract('{}','${marker}') END AS meeting_undo_available`).bind(deletion.deletedAt, ids, deletion.meetingIds.length, ids, ids);
   try {
     await db.batch([guard, db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id='primary' AND deleted_at=? AND id IN (SELECT value FROM json_each(?))").bind(deletion.deletedAt, ids)]);

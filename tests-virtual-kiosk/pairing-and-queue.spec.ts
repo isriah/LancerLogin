@@ -1,9 +1,11 @@
 import { expect, test } from "@playwright/test";
-import { adminApi, enterMemberId, kiosk, panelPost, useAuthenticationMethod } from "./virtual-kiosk";
+import { adminApi, enterMemberId, kiosk, kioskReady, panelPost, useAuthenticationMethod } from "./virtual-kiosk";
 
 // One shared virtual kiosk (scripts/virtual-kiosk.mjs), paired at start-up to a fresh local preview with the synthetic
 // members Test Student A (1001) and Test Student B (1002) and the open meeting "Test meeting A".
 test.describe.configure({ mode: "serial" });
+// Each scenario starts from a ready kiosk, so one that fails can't leave the next one a kiosk that is still restarting.
+test.beforeEach(async ({ request }) => { await kioskReady(request); });
 
 test("the virtual kiosk pairs to the local preview and sends heartbeats", async ({ request }) => {
   const current = await kiosk(request);

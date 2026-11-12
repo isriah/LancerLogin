@@ -34,7 +34,26 @@ test("live adapter keeps Worker configuration out of the actual Pages CLI invoca
       CLOUDFLARE_API_BASE_URL: "http://127.0.0.1:1" };
     const context = validateUpgradeEnvironment(env);
     const io = await createLiveUpgradeIO(context, isolatedEnv, source);
-    await io.deployApi(); await io.deployPages();
+    const originalFetch = globalThis.fetch, originalWarn = console.warn, patches = [], warnings = [];
+    const callCount = async () => (await readFile(join(source, "calls.jsonl"), "utf8")).trim().split("\n").length;
+    try {
+      console.warn = (message) => warnings.push(message);
+      globalThis.fetch = async (url, init) => { patches.push({ url, method: init.method, body: JSON.parse(init.body), callsBefore: await callCount() }); return Response.json({ success: true }); };
+      await io.deployApi(); await io.deployPages();
+      assert.equal(patches.length, 1);
+      assert.match(patches[0].url, /\/pages\/projects\/example-dashboard$/);
+      assert.equal(patches[0].method, "PATCH");
+      assert.deepEqual(patches[0].body.deployment_configs.production.services.API, { service: "example-api", environment: "production" });
+      // Only the Worker deploy has run, so the Pages deployment that follows picks the binding up.
+      assert.equal(patches[0].callsBefore, 1);
+      assert.equal(await callCount(), 2);
+      // A refused binding must not fail an update whose migrations and Worker are already live.
+      globalThis.fetch = async () => new Response("no access", { status: 403 });
+      await io.deployPages();
+      assert.equal(await callCount(), 3);
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /pages_api_binding_failed_403/);
+    } finally { globalThis.fetch = originalFetch; console.warn = originalWarn; }
     const [workerArgs, pagesArgs] = (await readFile(join(source, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
     assert.deepEqual(workerArgs, ["deploy", "--message", `Web update ${context.requestId}`, "--config", join(source, ".provision/wrangler.json")]);
     assert.deepEqual(pagesArgs, ["pages", "deploy", "apps/dashboard/dist", "--project-name=example-dashboard", "--branch=main", `--commit-hash=${context.sha}`, "--commit-dirty=false"]);

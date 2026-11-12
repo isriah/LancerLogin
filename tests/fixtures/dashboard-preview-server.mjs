@@ -66,6 +66,18 @@ function kioskScenario(request) {
 const listedKiosk = ({ seenMinutesAgo, ...kiosk }) => seenMinutesAgo === undefined ? kiosk : { ...kiosk, lastSeenAt: new Date(Date.now() - seenMinutesAgo * 60_000).toISOString() };
 const staleKiosk = (kiosk) => { const lastSeenAt = listedKiosk(kiosk).lastSeenAt; return !lastSeenAt || Date.now() - Date.parse(lastSeenAt) >= 10 * 60_000; };
 const randomCode = (length) => Array.from(randomBytes(length), (byte) => pairingAlphabet[byte % pairingAlphabet.length]).join("");
+// Organization settings the preview shows and Settings > Modules > Attendance > Meeting configuration saves.
+const previewSettings = { organizationName: "Nova Arts Collective", subtitle: "Make things together", logoData: logo, primaryColor: "#8b2f72", secondaryColor: "#e9b949", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30, earlyScanMinutes: 15, discordContestWindowHours: 24, anomalyLateThresholdMinutes: 10, anomalyEarlyThresholdMinutes: 10, attendanceReportingStartsOn: null };
+const allowanceMinutes = (value) => Number.isInteger(value) && value >= 0 && value <= 180;
+/** PATCH /admin/branding with the Worker's allowance checks; the preview has no meetings that a longer allowance could overlap. */
+async function brandingRoute(request, path) {
+  if (path !== "/admin/branding" || request.method !== "PATCH") return undefined;
+  const body = await readBody(request);
+  if (!allowanceMinutes(body.lateScanMinutes)) return [400, { error: "Invalid branding", details: ["Late scan window must be from 0 to 180 minutes"] }];
+  if (body.earlyScanMinutes !== undefined && !allowanceMinutes(body.earlyScanMinutes)) return [400, { error: "Invalid branding", details: ["Early arrival allowance must be from 0 to 180 minutes"] }];
+  for (const key of Object.keys(previewSettings)) if (body[key] !== undefined) previewSettings[key] = body[key];
+  return [200, { ok: true }];
+}
 const readBody = (request) => new Promise((resolve) => { let text = ""; request.on("data", (chunk) => { text += chunk; }); request.on("end", () => { try { resolve(text ? JSON.parse(text) : {}); } catch { resolve({}); } }); });
 /** The kiosk routes the dashboard writes to, answered from the scenario's state; undefined for every other request. */
 async function kioskRoute(request, path) {
@@ -178,15 +190,15 @@ const server = createServer(async (request, response) => {
   const origin = request.headers.origin ?? "http://127.0.0.1:5173";
   response.setHeader("access-control-allow-origin", origin); response.setHeader("access-control-allow-credentials", "true"); response.setHeader("content-type", "application/json");
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`); const path = url.pathname;
-  // Only the kiosk write routes answer preflights, so other unmocked writes still fail as before.
-  if (request.method === "OPTIONS") { if (passwordParamsPaths.has(path) || path === "/admin/pairing-codes" || path.startsWith("/admin/kiosks/") || path.startsWith("/admin/pin-requests/") || /^\/admin\/members\/[^/]+\/pin(\/unlock)?$/.test(path) || path === "/admin/settings/pin-lockout" || path === "/preview/pin-requests") { response.setHeader("access-control-allow-methods", "GET, POST, PATCH, PUT, DELETE"); response.setHeader("access-control-allow-headers", "content-type, x-preview-scenario"); } response.statusCode = 204; response.end(); return; }
-  const kioskResult = await pinRoute(request, path) ?? await kioskRoute(request, path);
+  // Only the kiosk and Meeting configuration write routes answer preflights, so other unmocked writes still fail as before.
+  if (request.method === "OPTIONS") { if (passwordParamsPaths.has(path) || path === "/admin/pairing-codes" || path.startsWith("/admin/kiosks/") || path.startsWith("/admin/pin-requests/") || /^\/admin\/members\/[^/]+\/pin(\/unlock)?$/.test(path) || path === "/admin/settings/pin-lockout" || path === "/preview/pin-requests" || path === "/admin/branding") { response.setHeader("access-control-allow-methods", "GET, POST, PATCH, PUT, DELETE"); response.setHeader("access-control-allow-headers", "content-type, x-preview-scenario"); } response.statusCode = 204; response.end(); return; }
+  const kioskResult = await pinRoute(request, path) ?? await kioskRoute(request, path) ?? await brandingRoute(request, path);
   if (kioskResult) { response.statusCode = kioskResult[0]; response.end(JSON.stringify(kioskResult[1])); return; }
   const requestedMeeting = path.startsWith("/meetings/") ? meetings.find((meeting) => meeting.id === decodeURIComponent(path.slice("/meetings/".length))) : undefined;
   const walkthroughPage = path.startsWith("/auth/walkthroughs/") ? path.slice("/auth/walkthroughs/".length) : "";
   // The salt lookups before a sign-in or identity confirmation; specs that check the exchange route their own.
   if (passwordParamsPaths.has(path) && request.method === "POST") { response.end(JSON.stringify(previewPasswordParams)); return; }
-  const payload = path === "/setup/status" ? { configured: true, installation: { authMode: "local" }, settings: { organizationName: "Nova Arts Collective", subtitle: "Make things together", logoData: logo, primaryColor: "#8b2f72", secondaryColor: "#e9b949", appearance: "dark", logoBackdrop: "auto", lateScanMinutes: 30 } }
+  const payload = path === "/setup/status" ? { configured: true, installation: { authMode: "local" }, settings: previewSettings }
     : Object.hasOwn(walkthroughLastSteps, walkthroughPage) ? { progress: { pageId: walkthroughPage, version: 1, status: "completed", stepId: walkthroughLastSteps[walkthroughPage] } }
     : path === "/auth/session" ? { user: { id: "admin-1", role: "admin", debugMode: false } }
     : path === "/platform/modules" ? defaultModuleSnapshot
@@ -194,7 +206,7 @@ const server = createServer(async (request, response) => {
     : path === "/admin/modules/grants" ? { uses: [], reauthentication: { freshUntil: null, password: true, google: false } }
     : path === "/admin/setup/progress" ? { completedSteps: ["branding", "roster", "pair-kiosk", "fingerprint-test", "confirm-attendance"].map((step) => ({ step })) }
     : path === "/integrations/capabilities" ? { integrations: { google: { enabled: true, configured: true }, resend: { enabled: true, configured: false }, discord: { enabled: true, configured: true } } }
-    : path === "/meetings" ? { meetings, lateScanMinutes: 30 }
+    : path === "/meetings" ? { meetings, lateScanMinutes: previewSettings.lateScanMinutes, earlyScanMinutes: previewSettings.earlyScanMinutes }
     : path === "/labels" ? labelData
     : path === "/reports/catalog" ? { datasets: [attendanceDataset], columns: reportColumns, recentDays: 30, labels, reportFilters: [], baseline: null, timeZone: "UTC", defaultDefinition: defaultReportDefinition, role: "admin", attendanceAvailable: true }
     : path === "/reports/views" ? { reports: [] }

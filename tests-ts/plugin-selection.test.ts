@@ -9,8 +9,8 @@ import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { legacyPassword, reauthenticate, storedPassword } from "./fixtures/passwords.ts";
 import { latestUpdate, recordUpdateBackup, startWebUpdate } from "../apps/api/src/web-updates.ts";
-import { clearPluginReleaseCache, commitPluginChange, freshUntil, lookupPluginRelease, newestTrackRelease, parseAllowlist, pendingChanges, pluginManagementState, pluginVersionInfo, releaseIndexTtlMs, reauthenticationWindowMs, reviewPluginChange, selectionCredentialState, sourceAllowed, type InstalledPlugins } from "../apps/api/src/plugin-selection.ts";
-import { resetCredentialObservations } from "../apps/api/src/github-credential.ts";
+import { clearPluginReleaseCache, commitPluginChange, freshUntil, lookupPluginRelease, newestTrackRelease, parseAllowlist, pendingChanges, pluginManagementState, pluginVersionAt, pluginVersionInfo, readPluginMetadata, releaseIndexTtlMs, reauthenticationWindowMs, reviewPluginChange, selectionCredentialState, sourceAllowed, type InstalledPlugins } from "../apps/api/src/plugin-selection.ts";
+import { credentialStatus, resetCredentialObservations } from "../apps/api/src/github-credential.ts";
 import { parseSelectionFile, serializeSelection } from "../packages/shared/src/module-selection.ts";
 import { applyCoreMigrations } from "./fixtures/d1-database.ts";
 
@@ -95,30 +95,30 @@ class GitHub {
         return text === undefined ? new Response(null, { status: 404 }) : Response.json({ type: "file", sha: blob(text), encoding: "base64", content: Buffer.from(text).toString("base64"), size: text.length });
       }
       if (path === "/repos/example/lancerlogin-carpool/releases") {
-        assert.equal(headers.get("authorization"), null, "plugin repositories never receive a credential");
+        assert.ok([null, `Bearer ${selectionToken}`].includes(headers.get("authorization")), "public plugin reads carry the stored selection credential or none, and only to api.github.com");
         if (typeof this.releases === "number") return new Response(null, { status: this.releases });
         return Response.json(url.searchParams.get("page") === "1" ? this.releases : []);
       }
       if (path === "/repos/example/lancerlogin-carpool/tags") {
-        assert.equal(headers.get("authorization"), null, "plugin repositories never receive a credential");
+        assert.ok([null, `Bearer ${selectionToken}`].includes(headers.get("authorization")), "public plugin reads carry the stored selection credential or none, and only to api.github.com");
         if (typeof this.releases === "number") return new Response(null, { status: this.releases });
         return Response.json(url.searchParams.get("page") === "1" ? Object.entries(this.tags).map(([name, sha]) => ({ name, commit: { sha } })) : []);
       }
       const outreach = /^\/repos\/isriah\/lancerlogin-outreach\/(releases|tags)$/.exec(path);
       if (outreach) {
-        assert.equal(headers.get("authorization"), null, "plugin repositories never receive a credential");
+        assert.ok([null, `Bearer ${selectionToken}`].includes(headers.get("authorization")), "public plugin reads carry the stored selection credential or none, and only to api.github.com");
         if (typeof this.outreach === "number") return new Response(null, { status: this.outreach });
         if (url.searchParams.get("page") !== "1") return Response.json([]);
         return Response.json(outreach[1] === "releases" ? this.outreach.releases : Object.entries(this.outreach.tags).map(([name, sha]) => ({ name, commit: { sha } })));
       }
       const tag = /^\/repos\/example\/lancerlogin-carpool\/commits\/(.+)$/.exec(path);
       if (tag) {
-        assert.equal(headers.get("authorization"), null, "plugin repositories never receive a credential");
+        assert.ok([null, `Bearer ${selectionToken}`].includes(headers.get("authorization")), "public plugin reads carry the stored selection credential or none, and only to api.github.com");
         const sha = this.tags[decodeURIComponent(tag[1]!)];
         return sha ? Response.json({ sha }) : new Response(null, { status: 404 });
       }
       if (path.startsWith("/repos/example/lancerlogin-carpool/contents/")) {
-        assert.equal(headers.get("authorization"), null, "plugin repositories never receive a credential");
+        assert.ok([null, `Bearer ${selectionToken}`].includes(headers.get("authorization")), "public plugin reads carry the stored selection credential or none, and only to api.github.com");
         if (path.endsWith("/package.json")) return typeof this.pluginPackage === "number" ? new Response(null, { status: this.pluginPackage }) : Response.json(this.pluginPackage);
         if (path.endsWith("/migrations")) return Response.json([{ type: "file", name: "0001_carpool.sql" }, { type: "file", name: "README.md" }]);
       }
@@ -198,6 +198,99 @@ test("Upgrade offers the newest published, immutable release on the plugin's tra
   });
 });
 
+type LookupCall = { url: string; authorization: string | null; redirect: RequestRedirect | undefined };
+/** A stub GitHub for release lookups: `answer` decides each response; every request is recorded. */
+async function withReleaseStub(answer: (path: string, authorization: string | null) => Response, run: (calls: LookupCall[]) => Promise<void>) {
+  const previous = globalThis.fetch; const calls: LookupCall[] = [];
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(String(input)); const authorization = new Headers(init?.headers).get("authorization");
+    calls.push({ url: url.href, authorization, redirect: init?.redirect });
+    return answer(url.pathname, authorization);
+  };
+  try { await run(calls); } finally { globalThis.fetch = previous; resetCredentialObservations(); }
+}
+const carpoolReleases = () => Response.json([{ tag_name: "v1.0.0", draft: false, prerelease: false, immutable: true }]);
+const carpoolCommit = () => Response.json({ sha: "1".repeat(40) });
+const publicAnswer = (path: string) => path.endsWith("/releases") ? carpoolReleases() : path.includes("/commits/") ? carpoolCommit() : new Response(null, { status: 404 });
+const lookupInput = { id: "carpool", source: carpoolSource, track: "stable" };
+
+test("the release lookup sends a stored selection credential to api.github.com only, and is anonymous without one", async () => {
+  await withReleaseStub((path) => publicAnswer(path), async (calls) => {
+    assert.equal((await lookupPluginRelease(lookupInput, environment())).release?.commit, "1".repeat(40));
+    assert.equal(calls.length, 2);
+    for (const call of calls) {
+      assert.equal(new URL(call.url).origin, "https://api.github.com"); assert.equal(call.redirect, "manual");
+      assert.equal(call.authorization, `Bearer ${selectionToken}`, "releases and the tag's commit are read with the credential");
+    }
+    calls.length = 0;
+    const env = environment();
+    for (const without of [{ ...env, MODULE_SELECTION_TOKEN: undefined }, { ...env, MODULE_SELECTION_TOKEN_EXPIRES_AT: "2020-01-01T00:00:00.000Z" }, undefined]) {
+      assert.equal((await lookupPluginRelease(lookupInput, without)).release?.tag, "v1.0.0");
+    }
+    assert.equal(calls.length, 6);
+    for (const call of calls) assert.equal(call.authorization, null, "no stored, or an expired, credential reads anonymously");
+    calls.length = 0;
+    // Another host never receives a request, let alone the credential.
+    assert.match((await newestTrackRelease("https://git.example.org/example/carpool.git", "stable", selectionToken)).reason!, /only for github.com sources/);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("the release lookup never follows a redirect with the selection credential", async () => {
+  await withReleaseStub(() => new Response(null, { status: 302, headers: { location: "https://evil.example/steal" } }), async (calls) => {
+    // A real fetch with redirect: "manual" hands back the 3xx; the lookup must stop there.
+    assert.match((await newestTrackRelease(carpoolSource, "stable", selectionToken)).reason!, /could not be reached/);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.redirect, "manual");
+    assert.equal(calls.some((call) => !call.url.startsWith("https://api.github.com/")), false);
+  });
+});
+
+test("only a rate limit is reported as a cooldown; any other 403 is a refusal", async () => {
+  const cooldown = /GitHub requires a cooldown before releases can be looked up/;
+  const refused = /^GitHub refused the release lookup\. Enter the commit you reviewed\.$/;
+  const cases: Array<[number, Record<string, string>, RegExp]> = [
+    [429, {}, cooldown],
+    [403, { "x-ratelimit-remaining": "0" }, cooldown],
+    [403, { "retry-after": "60" }, cooldown],
+    [403, {}, refused],
+    [403, { "x-ratelimit-remaining": "4999" }, refused],
+  ];
+  for (const [status, headers, reason] of cases) {
+    await withReleaseStub(() => new Response(null, { status, headers }), async (calls) => {
+      assert.match((await newestTrackRelease(carpoolSource, "stable")).reason!, reason, `${status} ${JSON.stringify(headers)}`);
+      assert.equal(calls.length, 1);
+    });
+  }
+  // With the credential, a rate limit is reported as it is, without a second, anonymous request.
+  await withReleaseStub(() => new Response(null, { status: 429 }), async (calls) => {
+    assert.match((await newestTrackRelease(carpoolSource, "stable", selectionToken)).reason!, cooldown);
+    assert.deepEqual(calls.map((call) => call.authorization), [`Bearer ${selectionToken}`]);
+  });
+});
+
+test("a rejected or refused selection credential falls back to an anonymous lookup", async () => {
+  // 401: GitHub rejects the credential. The lookup retries anonymously, stays anonymous, and the status shows the rejection.
+  await withReleaseStub((path, authorization) => authorization ? new Response(null, { status: 401 }) : publicAnswer(path), async (calls) => {
+    const env = environment();
+    assert.equal((await lookupPluginRelease(lookupInput, env)).release?.commit, "1".repeat(40));
+    assert.deepEqual(calls.map((call) => call.authorization), [`Bearer ${selectionToken}`, null, null]);
+    assert.equal(credentialStatus("selection", selectionToken, env.MODULE_SELECTION_TOKEN_EXPIRES_AT).state, "rejected", "Settings > Modules reports the rejected credential");
+    calls.length = 0;
+    assert.equal((await lookupPluginRelease(lookupInput, env)).release?.tag, "v1.0.0");
+    assert.deepEqual(calls.map((call) => call.authorization), [null, null], "a credential GitHub rejected is not sent again");
+  });
+  // A 403 refusal without a rate limit (for example an organization that blocks fine-grained tokens) also falls back.
+  await withReleaseStub((path, authorization) => authorization ? new Response(null, { status: 403 }) : publicAnswer(path), async (calls) => {
+    assert.equal((await newestTrackRelease(carpoolSource, "stable", selectionToken)).release?.tag, "v1.0.0");
+    assert.deepEqual(calls.map((call) => call.authorization), [`Bearer ${selectionToken}`, null, null]);
+  });
+  // Rejected credential and anonymous lookup both refused: the anonymous answer is reported, never worse than before.
+  await withReleaseStub((_path, authorization) => new Response(null, { status: authorization ? 401 : 403, headers: authorization ? {} : { "x-ratelimit-remaining": "0" } }), async () => {
+    assert.match((await newestTrackRelease(carpoolSource, "stable", selectionToken)).reason!, /cooldown/);
+  });
+});
+
 const published = (tag_name: string) => ({ tag_name, draft: false, prerelease: !/^v\d+\.\d+\.\d+$/.test(tag_name), immutable: true });
 const versionReleases = () => ({
   releases: [published("v1.2.0-nightly.20261027"), published("v1.1.0-beta.1"), published("v1.0.1"), published("v1.0.0"), { ...published("v0.9.0"), draft: true }],
@@ -241,6 +334,84 @@ test("plugin versions: the release at the pinned commit and the newest release o
       for (const call of github.calls) { assert.equal(call.authorization, null); assert.equal(call.url.includes("git.example.org"), false); }
     }, github);
   } finally { Date.now = realNow; clearPluginReleaseCache(); }
+});
+
+const indexAnswer = (path: string) => path.endsWith("/releases") ? carpoolReleases() : path.endsWith("/tags") ? Response.json([{ name: "v1.0.0", commit: { sha: "1".repeat(40) } }]) : new Response(null, { status: 404 });
+const carpoolPackage = () => Response.json({ version: "1.0.0", lancerlogin: { moduleId: "carpool", contract: -1 } });
+
+test("Settings > Modules versions read the release index with the stored selection credential, on api.github.com only", async () => {
+  clearPluginReleaseCache();
+  try {
+    await withReleaseStub((path) => indexAnswer(path), async (calls) => {
+      assert.deepEqual(await pluginVersionInfo(carpoolSource, "1".repeat(40), "stable", environment()), { version: "v1.0.0", latest: { tag: "v1.0.0", kind: "stable", commit: "1".repeat(40) }, latestUnavailable: false, updateAvailable: false });
+      assert.equal(calls.length, 2);
+      for (const call of calls) { assert.equal(new URL(call.url).origin, "https://api.github.com"); assert.equal(call.redirect, "manual"); assert.equal(call.authorization, `Bearer ${selectionToken}`); }
+      clearPluginReleaseCache(); calls.length = 0;
+      assert.equal(await pluginVersionAt(carpoolSource, "1".repeat(40), { ...environment(), MODULE_SELECTION_TOKEN: undefined }), "v1.0.0");
+      assert.deepEqual(calls.map((call) => call.authorization), [null, null], "without a stored credential the index is read anonymously");
+      calls.length = 0;
+      assert.equal((await pluginVersionInfo("https://git.example.org/example/carpool.git", "1".repeat(40), "stable", environment())).latestUnavailable, true);
+      assert.equal(calls.length, 0, "another host is never contacted");
+    });
+    // A rejected credential falls back to anonymous reads; the versions are still shown.
+    clearPluginReleaseCache();
+    await withReleaseStub((path, authorization) => authorization ? new Response(null, { status: 401 }) : indexAnswer(path), async (calls) => {
+      assert.equal((await pluginVersionInfo(carpoolSource, "1".repeat(40), "stable", environment())).latestUnavailable, false);
+      assert.equal(calls.filter((call) => call.authorization).length >= 1, true);
+      assert.equal(calls.filter((call) => !call.authorization).length, 2, "each of releases and tags is read anonymously once");
+    });
+    // A redirect is never followed: the latest version is unavailable.
+    clearPluginReleaseCache();
+    await withReleaseStub(() => new Response(null, { status: 302, headers: { location: "https://evil.example/steal" } }), async (calls) => {
+      assert.equal((await pluginVersionInfo(carpoolSource, "1".repeat(40), "stable", environment())).latestUnavailable, true);
+      assert.equal(calls.length, 2);
+      for (const call of calls) { assert.equal(new URL(call.url).origin, "https://api.github.com"); assert.equal(call.redirect, "manual"); }
+    });
+  } finally { clearPluginReleaseCache(); }
+});
+
+test("the Settings > Modules status passes the stored selection credential to version reads", async () => {
+  clearPluginReleaseCache();
+  try {
+    await withGitHub(async (github) => {
+      await pluginManagementState(environment(), { installed: { carpool: { source: carpoolSource, commit: "1".repeat(40) } }, principal: fresh, passwordAvailable: true, googleAvailable: false });
+      const reads = github.calls.filter((call) => /lancerlogin-carpool\/(releases|tags)/.test(call.url));
+      assert.equal(reads.length, 2);
+      for (const call of reads) assert.equal(call.authorization, `Bearer ${selectionToken}`);
+    });
+  } finally { clearPluginReleaseCache(); }
+});
+
+test("plugin metadata for review is read from api.github.com with the stored credential, falling back and reporting like releases", async () => {
+  const metadata = (token?: string) => readPluginMetadata(carpoolSource, pluginCommit, "carpool", "2.0.0", token);
+  await withReleaseStub((path) => path.endsWith("/contents/package.json") ? carpoolPackage() : new Response(null, { status: 404 }), async (calls) => {
+    assert.match((await metadata(selectionToken)).reason!, /module contract -1/, "package.json was read");
+    assert.equal(calls.length, 1);
+    assert.equal(new URL(calls[0]!.url).origin, "https://api.github.com"); assert.equal(calls[0]!.redirect, "manual");
+    assert.equal(calls[0]!.authorization, `Bearer ${selectionToken}`);
+    calls.length = 0;
+    assert.match((await metadata()).reason!, /module contract -1/);
+    assert.equal(calls[0]!.authorization, null);
+    calls.length = 0;
+    assert.equal((await readPluginMetadata("https://git.example.org/example/carpool.git", pluginCommit, "carpool", "2.0.0", selectionToken)).state, "unknown");
+    assert.equal(calls.length, 0, "another host is never contacted");
+  });
+  // Rejected (401) or refused (403) credential: the read is repeated anonymously.
+  for (const status of [401, 403]) {
+    await withReleaseStub((path, authorization) => authorization ? new Response(null, { status }) : carpoolPackage(), async (calls) => {
+      assert.match((await metadata(selectionToken)).reason!, /module contract -1/);
+      assert.deepEqual(calls.map((call) => call.authorization), [`Bearer ${selectionToken}`, null]);
+    });
+  }
+  // A redirect is never followed.
+  await withReleaseStub(() => new Response(null, { status: 302, headers: { location: "https://raw.githubusercontent.com/example/carpool/package.json" } }), async (calls) => {
+    assert.match((await metadata(selectionToken)).reason!, /could not be reached/);
+    assert.equal(calls.length, 1);
+  });
+  // Only a rate limit is a cooldown; any other 403 is a refusal.
+  for (const [status, headers, reason] of [[429, {}, /requires a cooldown/], [403, { "x-ratelimit-remaining": "0" }, /requires a cooldown/], [403, {}, /GitHub refused to let the module repository be inspected/]] as Array<[number, Record<string, string>, RegExp]>) {
+    await withReleaseStub(() => new Response(null, { status, headers }), async () => { assert.match((await metadata()).reason!, reason, `${status} ${JSON.stringify(headers)}`); });
+  }
 });
 
 test("the plugin status carries versions per installed plugin, LancerLogin's pinned version and versioned pending changes", async () => {
@@ -313,7 +484,7 @@ test("freshness requires a recent full sign-in session, never a short-lived stat
   assert.equal(freshUntil({ userId: "a", expiresAt: now + 8 * 3_600_000 }), null);
 });
 
-test("review shows source, commit, compatibility and declarations without running plugin code or sending credentials", async () => {
+test("review shows source, commit, compatibility and declarations without running plugin code or contacting the plugin's host", async () => {
   const env = environment();
   await withGitHub(async (github) => {
     const review = await reviewPluginChange(env, add, installed);
@@ -338,7 +509,9 @@ test("review shows source, commit, compatibility and declarations without runnin
     await assert.rejects(reviewPluginChange(env, { ...add, commit: "abc1234" }, installed), { code: "invalid_request" });
     await assert.rejects(reviewPluginChange(env, { ...add, id: "attendance" }, installed), { code: "first_party_module" });
     await assert.rejects(reviewPluginChange(env, { ...add, extra: true }, installed), { code: "invalid_request" });
-    for (const call of github.calls) if (!call.url.includes("/repos/example/private-install")) assert.equal(call.authorization, null);
+    // Public plugin reads use the stored credential only on api.github.com (the fake refuses any other origin); other hosts are never contacted.
+    for (const call of github.calls) { assert.equal(new URL(call.url).origin, "https://api.github.com"); assert.equal(call.url.includes("git.example.org"), false); }
+    assert.ok(github.calls.some((call) => call.url.includes("/lancerlogin-carpool/contents/package.json") && call.authorization === `Bearer ${selectionToken}`), "review reads package.json with the stored credential");
   });
 });
 
@@ -457,6 +630,7 @@ test("routes require an active Admin, the exact dashboard Origin and fresh re-au
     assert.equal((await call("/admin/plugins/release", operator, { id: "carpool", source: carpoolSource, track: "nightly" })).status, 403);
     const lookup = await call("/admin/plugins/release", admin, { id: "carpool", source: carpoolSource, track: "nightly" });
     assert.equal(lookup.status, 200); assert.equal((await lookup.json()).release.tag, "v1.1.0-nightly.20261025");
+    assert.ok(github.calls.some((entry) => entry.url.includes("/lancerlogin-carpool/releases") && entry.authorization === `Bearer ${selectionToken}`), "the route passes the stored selection credential to the release lookup");
     assert.equal((await call("/admin/plugins/change", admin, { ...add, selectionSha: "0".repeat(40), trustConfirmed: true })).status, 401);
     assert.equal(github.calls.some((entry) => entry.method === "PUT"), false);
     // Identity confirmation hashes in the browser too: this Admin's salt, then K.

@@ -21,7 +21,7 @@ export type CatalogDefinition = {
   /** Hash of the last reviewed module migration (or adopted baseline), so new migrations trigger reconciliation. */
   readonly migrationHead?: string | null;
 };
-type CatalogRow = { moduleId: string; definitionSha256: string; installed: number };
+type CatalogRow = { moduleId: string; definitionSha256: string; installed: number; source: string | null; sourceCommit: string | null };
 /** `unconfigured` means there was work to record but the installation does not exist yet (before first-Admin setup). */
 export type ModuleReconciliation = { readonly changed: boolean; readonly failures: readonly { readonly moduleId: string; readonly message: string }[]; readonly unconfigured?: true };
 type ReconcileOptions = {
@@ -48,7 +48,9 @@ async function sha256Hex(value: string): Promise<string> {
 /**
  * Apply each module's pending reviewed migrations, record installed module definitions, and register modules seen
  * for the first time as disabled. A module whose migrations fail stays unregistered and retries on the next pass,
- * without affecting other modules. Steady state costs one read; writes happen only when installed code changed.
+ * without affecting other modules. Steady state costs one read; writes happen only when installed code changed: a
+ * module's definition or migrations changed, or a plugin's pinned source or commit moved. A pin-only move takes the same
+ * path as any other change; its migrations are already applied, so that step only reads the ledger and applies nothing.
  * A module's refused or failed migrations are recorded in platform_module_update_failures for Settings > Modules, and
  * the record is deleted on the pass that reconciles the module.
  *
@@ -59,14 +61,18 @@ async function sha256Hex(value: string): Promise<string> {
 export async function reconcileInstalledModules(db: D1Database, now = new Date(), options: ReconcileOptions = {}): Promise<ModuleReconciliation> {
   const migrationPackages = new Map((options.migrations ?? externalModuleMigrations).map((pkg) => [pkg.moduleId, pkg]));
   const sources = options.sources ?? externalModuleSources;
-  const recorded = new Map(((await db.prepare(`SELECT module_id AS moduleId,definition_sha256 AS definitionSha256,installed
+  const recorded = new Map(((await db.prepare(`SELECT module_id AS moduleId,definition_sha256 AS definitionSha256,installed,source,source_commit AS sourceCommit
     FROM platform_module_catalog WHERE installation_id=?`).bind(installationId).all<CatalogRow>()).results ?? []).map((row) => [row.moduleId, row]));
   const external = new Set(externalModuleManifests.map((module) => module.id));
   const changedModules: { module: ModuleDefinition; definitionJson: string; definitionSha256: string }[] = [];
   for (const module of bundledModuleRegistry.modules) {
     const definitionJson = JSON.stringify(definitionFor(module, migrationPackages.get(module.id))); const definitionSha256 = await sha256Hex(definitionJson);
     const current = recorded.get(module.id);
-    if (current?.installed !== 1 || current.definitionSha256 !== definitionSha256) changedModules.push({ module, definitionJson, definitionSha256 });
+    // A plugin pin can move without changing its definition or migrations, so its recorded source and commit are compared
+    // too. First-party modules have no source and record NULL for both, so they compare equal on every pass.
+    const source = sources[module.id];
+    if (current?.installed !== 1 || current.definitionSha256 !== definitionSha256
+      || (current.source ?? null) !== (source?.source ?? null) || (current.sourceCommit ?? null) !== (source?.commit ?? null)) changedModules.push({ module, definitionJson, definitionSha256 });
   }
   const removed = [...recorded.values()].filter((row) => row.installed === 1 && !bundledModuleRegistry.get(row.moduleId));
   const retiredModules = extractedModules.filter((module) => !bundledModuleRegistry.get(module.id) && !recorded.has(module.id));

@@ -563,6 +563,21 @@ jobs:
           echo "deployment-url=$api_url" >> "$GITHUB_OUTPUT"
       - name: Add same-origin Pages API proxy
         run: node scripts/prepare-pages-proxy.mjs "${{ steps.deploy-api.outputs.deployment-url }}"
+      # Written here, not in a script, because this workflow can install a release older than the binding. That release's proxy ignores it.
+      - name: Bind the Pages API proxy to the Worker
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Through the binding the Worker sees each visitor's address. A fetch to workers.dev replaces it with one shared address.
+          status=$(curl -sS -o /dev/null -w '%{http_code}' -X PATCH -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
+            --data "{\"deployment_configs\":{\"production\":{\"services\":{\"API\":{\"service\":\"$INSTALLATION_SLUG-api\",\"environment\":\"production\"}}}}}" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$INSTALLATION_SLUG-dashboard")
+          if [ "$status" != "200" ]; then
+            echo "::error title=pages_api_binding_failed::Cloudflare did not add the Pages API binding to $INSTALLATION_SLUG-dashboard (HTTP $status): check that the token has Cloudflare Pages: Edit, then run this workflow again."
+            exit 1
+          fi
       - name: Deploy Pages dashboard
         uses: cloudflare/wrangler-action@v4
         with:

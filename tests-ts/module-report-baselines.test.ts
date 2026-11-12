@@ -32,7 +32,7 @@ test("without the Outreach plugin there is no Outreach date to edit, and backups
   for (const moduleId of ["hour-tracking", "attendance"]) assert.equal((await client.call(`/admin/modules/${moduleId}/report-baseline`)).status, 404, moduleId);
   db.raw.exec("UPDATE organization_settings SET attendance_reporting_starts_on='2026-09-01'; INSERT INTO module_report_baselines VALUES ('primary', 'hour-tracking', '2026-08-15', 3, '2026-10-01T00:00:00.000Z')");
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 50); assert.deepEqual(backup.tables.module_report_baselines, [], "a module not in this build carries none of its data");
+  assert.equal(backup.schemaVersion, 51); assert.deepEqual(backup.tables.module_report_baselines, [], "a module not in this build carries none of its data");
   for (const scope of ["meetings", "roster"] as const) assert.equal("module_report_baselines" in (await client.backup(scope)).tables, false);
   const invalid = structuredClone(backup); invalid.tables.module_report_baselines = [{ installation_id: "primary", module_id: "attendance", starts_on: "2026-09-01", revision: 0, updated_at: "2026-10-01T00:00:00.000Z" }];
   assert.equal((await client.restore(invalid)).status, 400);

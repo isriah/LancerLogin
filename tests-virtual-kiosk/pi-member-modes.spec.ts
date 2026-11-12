@@ -1,11 +1,13 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { adminApi, kiosk, panelPost, readerFaults } from "./virtual-kiosk";
+import { adminApi, kiosk, kioskReady, panelPost, readerFaults } from "./virtual-kiosk";
 
 // The Pi kiosk without its fingerprint reader: Member ID entry with the "Is this you?" step, Member search, and Require
 // PIN with setup approved from the dashboard or set from the kiosk's maintenance screen. Test Student I (1009) and
 // Test Student J (1010) are seeded for these scenarios only; each scans at most twice, minutes apart.
 // This file sorts after the fingerprint and pairing scenarios, and puts the kiosk back on fingerprints when it is done.
 test.describe.configure({ mode: "serial" });
+// Each scenario starts from a ready kiosk, so one that fails can't leave the next one a kiosk that is still restarting.
+test.beforeEach(async ({ request }) => { await kioskReady(request); });
 const settingsPin = "246810";
 type Mode = { authenticationMethod: "fingerprint" | "member_id"; memberLookup?: "entry" | "search"; requirePin?: boolean };
 

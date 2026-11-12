@@ -56,6 +56,8 @@ Backup schema 47 adds member PINs to entire-installation backups: each member's 
 
 Backup schema 50 adds each module's own reporting start date (operational baseline) to entire-installation backups (`module_report_baselines`); Attendance's stays in `organization_settings.attendance_reporting_starts_on`. Before schema 50 one date served every report, so restoring an older backup gives Outreach the Attendance date, as the upgrade does. A module not in the build being backed up carries no date.
 
+Backup schema 51 adds the early arrival allowance (`organization_settings.early_scan_minutes`) to entire-installation backups. Restoring an older backup sets it to the 15-minute default, as the upgrade does for existing installations.
+
 Backup schema 49 adds the FIRST connection's credentials to entire-installation backups (`first_credentials`): for FRC and FTC, the Events API username, the token's ciphertext and IV under the integration key, and when FIRST last accepted it. The token itself never appears in a backup. FIRST's cached team answers, seasons and recent request counts are not backed up and restore empty. Backups before schema 49 restore with no FIRST credential. A credential restored onto an installation whose integration key cannot decrypt it shows **Saved, but can't be read** in **Settings > Integrations > FIRST** until an Admin saves it again.
 
 If you restore meetings without their original roster backup, review audience labels before using attendance reports. Label assignments, attendance rules, and the recent window travel with the roster category, while each meeting's audience selection travels with the meetings category. Older backups without labels restore meetings as **All** and do not invent member labels or attendance rules.

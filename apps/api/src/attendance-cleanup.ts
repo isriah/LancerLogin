@@ -63,6 +63,8 @@ export const attendanceCleanupSteps: readonly CleanupStep[] = [
   { kind: "delete", table: "pin_setup_requests" },
   { kind: "delete", table: "member_pins" },
   { kind: "reset", table: "organization_settings", pending: "pin_lockout_enabled<>0 OR pin_lockout_attempts<>5 OR pin_lockout_minutes<>15", set: "pin_lockout_enabled=0,pin_lockout_attempts=5,pin_lockout_minutes=15", bindings: [] },
+  // The early arrival allowance (migration 0099) returns to its 15-minute default.
+  { kind: "reset", table: "organization_settings", pending: "early_scan_minutes<>15", set: "early_scan_minutes=15", bindings: [] },
 ];
 
 /** In-flight Attendance delivery work that must drain before deletion. Binds the installation three times. */

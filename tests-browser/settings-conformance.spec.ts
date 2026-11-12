@@ -17,6 +17,7 @@ const settings = {
   appearance: "dark",
   logoBackdrop: "auto",
   lateScanMinutes: 30,
+  earlyScanMinutes: 15,
   discordContestWindowHours: 24,
   attendanceReportingStartsOn: null,
   anomalyLateThresholdMinutes: 10,
@@ -135,6 +136,35 @@ test("Admin can save independent attendance anomaly limits", async ({ page }) =>
   expect(saved?.anomalyEarlyThresholdMinutes).toBe(18);
 });
 
+test("Admin sets the early arrival allowance beside the late scan allowance", async ({ page }) => {
+  await useSettingsContext(page);
+  const saved: Record<string, unknown>[] = [];
+  await page.route("**/admin/branding", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fulfill({ json: { settings } });
+    const body = route.request().postDataJSON() as Record<string, unknown>; saved.push(body);
+    // The Worker refuses an allowance that would make meetings whose attendance has not closed overlap, naming them.
+    if (body.earlyScanMinutes === 120) return route.fulfill({ status: 409, json: { error: "Meeting attendance windows cannot overlap. With these allowances, Test Build (2026-11-12T23:00:00.000Z) conflicts with Test Rehearsal (2026-11-13T02:00:00.000Z). Move one of them or choose a shorter allowance." } });
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto("/settings/configuration");
+  const early = page.getByLabel("Early arrival allowance (minutes)"); const late = page.getByLabel("Late scan allowance (minutes)");
+  await expect(early).toHaveValue("15"); await expect(late).toHaveValue("30");
+  await expect(early).toHaveAttribute("min", "0"); await expect(early).toHaveAttribute("max", "180"); await expect(early).toHaveAttribute("step", "1");
+  const [earlyBox, lateBox] = await Promise.all([early.boundingBox(), late.boundingBox()]);
+  expect(Math.abs(earlyBox!.y - lateBox!.y)).toBeLessThan(2); expect(earlyBox!.x).toBeLessThan(lateBox!.x);
+  await early.fill("20");
+  await page.getByRole("button", { name: "Save configuration" }).click();
+  await expect(page.getByText("Attendance configuration saved.", { exact: true })).toBeVisible();
+  expect(saved.at(-1)?.earlyScanMinutes).toBe(20); expect(saved.at(-1)?.lateScanMinutes).toBe(30);
+  await early.fill("120");
+  await page.getByRole("button", { name: "Save configuration" }).click();
+  await expect(page.getByRole("alert")).toContainText("Test Build (2026-11-12T23:00:00.000Z) conflicts with Test Rehearsal");
+  await early.fill("");
+  await page.getByRole("button", { name: "Save configuration" }).click();
+  await expect(page.getByText("Attendance configuration saved.", { exact: true })).toBeVisible();
+  expect(saved.at(-1)?.earlyScanMinutes).toBe(0);
+});
+
 test("Settings keeps navigation and user controls together and keeps Debug mode on this device", async ({ page }) => {
   await useSettingsContext(page);
   const serverPreferences: string[] = [];
@@ -177,7 +207,7 @@ test("Settings keeps navigation and user controls together and keeps Debug mode 
   });
   await darkMode.click(); await expect(darkMode).toBeChecked();
   await expect.poll(async () => JSON.stringify(await toggleAppearance(debug)) === JSON.stringify(await toggleAppearance(darkMode))).toBe(true);
-  const description = page.locator(".info-tip-content").filter({ hasText: "Scans close this many minutes" });
+  const description = page.locator(".info-tip-content").filter({ hasText: "Scans open this many minutes" });
   await expect(description).toBeHidden();
   await page.locator(".configuration-grid label").first().locator(".info-tip-glyph").hover();
   await expect(description).toBeVisible();
@@ -273,7 +303,7 @@ test("information tips use hover and keyboard focus on desktop but toggle on tou
   await useSettingsContext(page);
   await page.goto("/settings/configuration");
   const desktopTrigger = page.locator(".configuration-grid label").first().getByRole("button", { name: "More information" });
-  const desktopTooltip = page.locator(".info-tip-content").filter({ hasText: "Scans close this many minutes" });
+  const desktopTooltip = page.locator(".info-tip-content").filter({ hasText: "Scans open this many minutes" });
   await desktopTrigger.locator(".info-tip-glyph").hover();
   await expect(desktopTooltip).toBeVisible();
   await desktopTrigger.click();
@@ -295,7 +325,7 @@ test("information tips use hover and keyboard focus on desktop but toggle on tou
     await useSettingsContext(touchPage);
     await touchPage.goto(`${origin}/settings/configuration`);
     const touchTrigger = touchPage.locator(".configuration-grid label").first().getByRole("button", { name: "More information" });
-    const touchTooltip = touchPage.locator(".info-tip-content").filter({ hasText: "Scans close this many minutes" });
+    const touchTooltip = touchPage.locator(".info-tip-content").filter({ hasText: "Scans open this many minutes" });
     await touchTrigger.tap();
     await expect(touchTooltip).toBeVisible();
     await expect(touchTrigger).toHaveAttribute("aria-expanded", "true");

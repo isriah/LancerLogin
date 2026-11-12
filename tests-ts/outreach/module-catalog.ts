@@ -119,6 +119,45 @@ test("reconciliation applies pending module migrations through the ledger before
   } finally { database.close(); }
 });
 
+test("a plugin pin that moves without a definition change rewrites the recorded source commit and applies nothing new", async () => {
+  const database = new Database();
+  try {
+    const migrations = [extraMigration(["CREATE TABLE hours_extra_records(installation_id TEXT NOT NULL REFERENCES installations(id) ON DELETE CASCADE, id TEXT NOT NULL, PRIMARY KEY(installation_id,id))"])];
+    const source = "https://example.test/owner/outreach.git";
+    const pinned = (commit: string) => ({ "hour-tracking": { source, commit } });
+    const recorded = (moduleId: string) => ({ ...database.sqlite.prepare("SELECT source,source_commit AS commitSha,definition_sha256 AS sha,recorded_at AS recordedAt FROM platform_module_catalog WHERE module_id=?").get(moduleId) });
+    const ledger = () => database.sqlite.prepare("SELECT name,applied_at AS appliedAt FROM platform_module_migrations WHERE module_id='hour-tracking' ORDER BY sequence").all().map((row) => ({ ...row }));
+    assert.deepEqual(await reconcileInstalledModules(database, new Date("2026-11-01T10:00:00.000Z"), { migrations, sources: pinned("a".repeat(40)) }), { changed: true, failures: [] });
+    database.sqlite.exec("UPDATE platform_modules SET phase='enabled', setup_complete=1 WHERE module_id='hour-tracking'");
+    const before = recorded("hour-tracking"); const attendance = recorded("attendance"); const appliedBefore = ledger();
+    assert.equal(before.commitSha, "a".repeat(40));
+
+    // Same definition and migrations, new pin: the catalog row is rewritten to the new commit.
+    assert.deepEqual(await reconcileInstalledModules(database, new Date("2026-11-02T10:00:00.000Z"), { migrations, sources: pinned("b".repeat(40)) }), { changed: true, failures: [] });
+    assert.deepEqual(recorded("hour-tracking"), { source, commitSha: "b".repeat(40), sha: before.sha, recordedAt: "2026-11-02T10:00:00.000Z" });
+    // Nothing new was applied, the module kept its lifecycle state, and first-party modules were not rewritten.
+    assert.deepEqual(ledger(), appliedBefore);
+    assert.equal(database.count("SELECT COUNT(*) AS n FROM platform_module_update_failures"), 0);
+    const outreach = (await readModulePlatformSnapshot(database, "admin")).modules.find((module) => module.id === "hour-tracking");
+    assert.equal(outreach?.phase, "enabled"); assert.equal(outreach?.generation, 1);
+    assert.deepEqual(recorded("attendance"), attendance);
+  } finally { database.close(); }
+});
+
+test("an unchanged plugin pin costs one read and no writes", async () => {
+  const database = new Database();
+  try {
+    const sources = { "hour-tracking": { source: "https://example.test/owner/outreach.git", commit: "b".repeat(40) } };
+    await reconcileInstalledModules(database, new Date("2026-11-01T10:00:00.000Z"), { sources });
+    const catalog = () => database.sqlite.prepare("SELECT module_id,source,source_commit,definition_sha256,installed,recorded_at FROM platform_module_catalog ORDER BY module_id").all().map((row) => ({ ...row }));
+    const before = catalog();
+    database.queries = 0;
+    assert.deepEqual(await reconcileInstalledModules(database, new Date("2026-11-02T10:00:00.000Z"), { sources }), { changed: false, failures: [] });
+    assert.equal(database.queries, 1);
+    assert.deepEqual(catalog(), before);
+  } finally { database.close(); }
+});
+
 test("an upgrade that skips a required earlier release applies nothing, keeps the recorded definition and reports why", async () => {
   const database = new Database();
   try {

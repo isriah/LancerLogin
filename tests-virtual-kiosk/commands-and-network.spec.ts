@@ -1,8 +1,10 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
-import { kiosk, panelPost } from "./virtual-kiosk";
+import { kiosk, kioskReady, panelPost } from "./virtual-kiosk";
 
 // Dashboard commands, kiosk updates, the clock and the network on the virtual kiosk. Nothing here records attendance.
 test.describe.configure({ mode: "serial" });
+// Each scenario starts from a ready kiosk, so one that fails can't leave the next one a kiosk that is still restarting.
+test.beforeEach(async ({ request }) => { await kioskReady(request); });
 const settingsPin = "246810";
 
 /** Sends a command as the dashboard's Manage kiosk page does and waits for the kiosk to report the result. */

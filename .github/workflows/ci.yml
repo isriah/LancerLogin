@@ -359,9 +359,26 @@ jobs:
       - name: Install Playwright system dependencies for the cached browser
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium
+      - name: Sample the virtual kiosk stack every 10 seconds
+        # Read only when the scenarios fail: which local servers listen and answer, load and the heaviest processes, so
+        # a stalled Worker, kiosk or proxy shows in the samples. The sampler stops with the job.
+        run: nohup bash scripts/virtual-kiosk/sample-stack.sh > "$RUNNER_TEMP/virtual-kiosk-samples.log" 2>&1 &
       - name: Run the virtual kiosk scenarios
         timeout-minutes: 25
         run: npm run test:kiosk-virtual
+      - name: Show the virtual kiosk samples after a failure
+        if: ${{ failure() }}
+        run: tail -n 400 "$RUNNER_TEMP/virtual-kiosk-samples.log"
+      - name: Keep the virtual kiosk traces and samples after a failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: virtual-kiosk-diagnostics
+          path: |
+            test-results/
+            ${{ runner.temp }}/virtual-kiosk-samples.log
+          if-no-files-found: ignore
+          retention-days: 30
   browser-smoke:
     if: >-
       !cancelled() &&

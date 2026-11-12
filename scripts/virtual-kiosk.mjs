@@ -48,6 +48,27 @@ class VirtualKioskError extends Error {}
 const fail = (message) => { throw new VirtualKioskError(message); };
 const pause = (ms) => new Promise((resolveWait) => setTimeout(resolveWait, ms));
 
+/**
+ * Listens on a loopback port and resolves once the server accepts connections. A port it can't take stops the virtual
+ * kiosk with the server and port named, and a later server error is logged instead of passing unnoticed.
+ */
+function listenOn(server, port, label) {
+  return new Promise((resolveListen, rejectListen) => {
+    const refused = (error) => rejectListen(new VirtualKioskError(`${label} could not listen on 127.0.0.1:${port}: ${error.message}`));
+    server.once("error", refused);
+    server.listen(port, "127.0.0.1", () => {
+      server.off("error", refused);
+      server.on("error", (error) => console.error(`${label} on 127.0.0.1:${port} failed: ${error.message}`));
+      resolveListen(server);
+    });
+  });
+}
+
+/** Whether a URL answers at all within a second; a status of 500 or more counts as not answering. */
+async function answers(url) {
+  try { return (await fetch(url, { signal: AbortSignal.timeout(1_000) })).status < 500; } catch { return false; }
+}
+
 export function parseArguments(argv) {
   const options = { kiosks: 1, reset: false, dashboard: true, portBase: 8790, state: defaultStateRoot };
   for (let index = 0; index < argv.length; index++) {
@@ -188,8 +209,8 @@ function startCloudLink({ port, target, online }) {
     upstream.once("error", () => incoming.socket.destroy());
     incoming.pipe(upstream);
   });
-  server.listen(port, "127.0.0.1");
   link.server = server;
+  link.listening = listenOn(server, port, "The cloud link");
   return link;
 }
 
@@ -226,8 +247,7 @@ function startScreenProxy({ port, kioskPort, panelOrigin }) {
     upstream.once("error", () => { if (!outgoing.headersSent) outgoing.writeHead(502); outgoing.end(); });
     incoming.pipe(upstream);
   });
-  server.listen(port, "127.0.0.1");
-  return server;
+  return listenOn(server, port, "The kiosk screen proxy");
 }
 
 /** Runs one virtual kiosk and restarts it the way systemd restarts the Pi's service. */
@@ -330,8 +350,11 @@ async function kioskStatus(kiosk, api, worker) {
     const kiosks = await api.call("GET", "/admin/kiosks"); lastSeenAt = kiosks.body?.kiosks?.find((item) => item.id === pairing.kioskId)?.lastSeenAt;
     commands = ((await api.call("GET", `/admin/kiosks/${encodeURIComponent(pairing.kioskId)}/commands`)).body?.commands ?? []).slice(0, 6);
   }
+  // Whether the kiosk's screen answers through the panel's screen proxy, as the scenarios and the panel open it.
+  const screenReachable = await answers(`http://127.0.0.1:${kiosk.screenPort}/health`);
   return {
     index: kiosk.index, name: kiosk.name, url: `http://127.0.0.1:${kiosk.port}/`, screenUrl: `http://127.0.0.1:${kiosk.screenPort}/`, running: Boolean(kiosk.child), starts: kiosk.starts, bootId: kiosk.boot.id,
+    serviceReachable: Boolean(health), screenReachable,
     paired: Boolean(health?.paired), kioskId: pairing?.kioskId ?? null, cloudOnline: health?.cloudOnline ?? false,
     pendingScans: health?.attendance?.pending ?? health?.pendingEvents ?? null, rosterMembers: Array.isArray(roster?.members) ? roster.members.length : null,
     lastSeenAt: lastSeenAt ?? null, authenticationMethod: health?.authenticationMethod ?? null, readerOnline: health?.readerOnline ?? false,
@@ -413,6 +436,9 @@ function startPanel({ port, kiosks, worker, api, urls }) {
   return server;
 }
 
+// Stops the local servers and kiosk services main() started, so a failed start doesn't leave them holding its output open.
+let stopStarted = () => undefined;
+
 async function main() {
   const present = refusedMarkers.filter((name) => process.env[name]);
   if (present.length) fail(`The virtual kiosk runs only on a developer's computer or a CI test runner, and ${present.join(", ")} is set.`);
@@ -425,6 +451,7 @@ async function main() {
   const log = (line) => console.log(line);
   const stopAll = () => { for (const kiosk of kiosksRef) kiosk.stop(); for (const child of children) child.kill(); };
   const kiosksRef = [];
+  stopStarted = stopAll;
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => { stopAll(); process.exit(130); });
 
   const runtime = await developmentRuntime({ stateDirectory: join(stateRoot, "preview"), apiPort: ports.api, dashboardPort: ports.dashboard });
@@ -451,10 +478,12 @@ async function main() {
     await mkdir(directory, { recursive: true, mode: 0o700 }); await chmod(directory, 0o700);
     await mkdir(join(stateRoot, "readers"), { recursive: true });
     const kiosk = superviseKiosk({ index, port, screenPort: ports.screens[index], linkUrl: `http://127.0.0.1:${ports.links[index]}`, directory, readerPath: join(stateRoot, "readers", `kiosk-${index + 1}.json`), systemPath: join(stateRoot, "readers", `kiosk-${index + 1}.system.json`), log });
-    startCloudLink({ port: ports.links[index], target: runtime.apiUrl, online: () => worker.online && networkOnline(kiosk.network) });
-    startScreenProxy({ port: ports.screens[index], kioskPort: port, panelOrigin: `http://127.0.0.1:${ports.panel}` });
+    await startCloudLink({ port: ports.links[index], target: runtime.apiUrl, online: () => worker.online && networkOnline(kiosk.network) }).listening;
+    await startScreenProxy({ port: ports.screens[index], kioskPort: port, panelOrigin: `http://127.0.0.1:${ports.panel}` });
     kiosksRef.push(kiosk); kiosk.start();
     await waitFor(`http://127.0.0.1:${port}/health`, { label: kiosk.name, timeoutMs: 30_000 });
+    // The scenarios open the kiosk's screen through this proxy, so the stack is ready only once it answers there too.
+    await waitFor(`http://127.0.0.1:${ports.screens[index]}/health`, { label: `${kiosk.name}'s screen proxy`, timeoutMs: 30_000 });
     await pairKiosk(kiosk, { api });
   }
   const urls = { panelUrl: `http://127.0.0.1:${ports.panel}/`, dashboardUrl: options.dashboard ? runtime.dashboardUrl : null, apiUrl: runtime.apiUrl, adminUsername: admin.username, adminFile: join(stateRoot, "admin.json") };
@@ -473,6 +502,7 @@ async function main() {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
     console.error(`Virtual kiosk failed: ${error instanceof VirtualKioskError ? error.message : error?.stack ?? String(error)}`);
+    stopStarted();
     process.exit(1);
   });
 }

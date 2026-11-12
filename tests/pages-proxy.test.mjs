@@ -6,7 +6,70 @@ import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildPagesHeaders, buildPagesProxy, buildPagesRoutes, MISSING_ASSET_PAGE, PAGES_FUNCTION_ROUTES, writePagesOutput } from "../scripts/prepare-pages-proxy.mjs";
+import { bindPagesApi, buildPagesHeaders, buildPagesProxy, buildPagesRoutes, MISSING_ASSET_PAGE, PAGES_API_BINDING, PAGES_FUNCTION_ROUTES, writePagesOutput } from "../scripts/prepare-pages-proxy.mjs";
+
+/** Runs one request through the proxy with fetch recorded. `bound` becomes the service binding's fetch when given. */
+async function throughProxy(url, init, bound) {
+  const module = await import(`data:text/javascript,${encodeURIComponent(buildPagesProxy("https://api.example.test"))}`);
+  const viaFetch = [], viaBinding = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (request) => { viaFetch.push(request); return new Response("from fetch"); };
+  try {
+    const env = { ASSETS: { fetch: () => new Response("asset") }, ...(bound ? { [PAGES_API_BINDING]: { fetch: async (request) => { viaBinding.push(request); return bound(request); } } } : {}) };
+    return { response: await module.default.fetch(new Request(url, init), env), viaFetch, viaBinding };
+  } finally { globalThis.fetch = originalFetch; }
+}
+
+test("Pages proxy forwards through the service binding, keeping the client address and the Worker's URL", async () => {
+  const { response, viaFetch, viaBinding } = await throughProxy("https://dash.example.test/api/auth/local?x=1", { method: "POST", body: "{}", headers: { "cf-connecting-ip": "198.51.100.7", cookie: "session=opaque" } }, () => new Response("from binding", { status: 201, headers: { "set-cookie": "session=new; Secure" } }));
+  assert.equal(viaFetch.length, 0);
+  assert.equal(viaBinding.length, 1);
+  // The Worker builds pairing links from its request URL, so it must still see its own origin.
+  assert.equal(viaBinding[0].url, "https://api.example.test/auth/local?x=1");
+  assert.equal(viaBinding[0].method, "POST");
+  assert.equal(await viaBinding[0].text(), "{}");
+  assert.equal(viaBinding[0].headers.get("cf-connecting-ip"), "198.51.100.7");
+  assert.equal(viaBinding[0].headers.get("cookie"), "session=opaque");
+  assert.equal(response.status, 201);
+  assert.equal(await response.text(), "from binding");
+  assert.equal(response.headers.get("set-cookie"), "session=new; Secure");
+});
+
+test("Pages proxy falls back to fetch on a project without the service binding", async () => {
+  const { response, viaFetch } = await throughProxy("https://dash.example.test/api/health");
+  assert.deepEqual(viaFetch.map((request) => request.url), ["https://api.example.test/health"]);
+  assert.equal(await response.text(), "from fetch");
+});
+
+test("Pages proxy rejects other-host API paths before using the service binding", async () => {
+  const { response, viaFetch, viaBinding } = await throughProxy("https://dash.example.test/api//attacker.example/x", undefined, () => new Response("from binding"));
+  assert.equal(response.status, 400);
+  assert.equal(viaFetch.length + viaBinding.length, 0);
+});
+
+test("Pages proxy serves static assets and its release without the service binding", async () => {
+  for (const path of ["/assets/app.js", "/__lancerlogin-release"]) {
+    const { viaFetch, viaBinding } = await throughProxy(`https://dash.example.test${path}`, undefined, () => new Response("from binding"));
+    assert.equal(viaFetch.length + viaBinding.length, 0, path);
+  }
+});
+
+test("Binding the Pages API changes only the production service binding", async () => {
+  const calls = [];
+  await bindPagesApi({ accountOrigin: "https://api.example.test/accounts/a", headers: { authorization: "Bearer synthetic" }, project: "club-dashboard", worker: "club-api", request: async (url, init) => { calls.push([url, init]); return Response.json({ success: true }); } });
+  assert.equal(calls.length, 1);
+  const [url, init] = calls[0];
+  assert.equal(url, "https://api.example.test/accounts/a/pages/projects/club-dashboard");
+  assert.equal(init.method, "PATCH");
+  assert.equal(init.headers.authorization, "Bearer synthetic");
+  assert.equal(init.redirect, "error");
+  // Cloudflare merges this into the project, so naming nothing else leaves its variables and the preview environment alone.
+  assert.deepEqual(JSON.parse(init.body), { deployment_configs: { production: { services: { API: { service: "club-api", environment: "production" } } } } });
+});
+
+test("A refused Pages API binding reports only its status", async () => {
+  await assert.rejects(bindPagesApi({ accountOrigin: "https://api.example.test", headers: {}, project: "p", worker: "w", request: async () => new Response("details", { status: 403 }) }), { message: "pages_api_binding_failed_403" });
+});
 
 test("Pages proxy keeps dashboard authentication same-origin", async () => {
   const source = buildPagesProxy("https://example-club-api.example.workers.dev/");

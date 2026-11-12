@@ -138,17 +138,30 @@ ${meetingRow("after", "2026-05-01T22:00:00.000Z", "2026-05-01T23:00:00.000Z")}`)
   assert.equal(created.status, 201, await created.clone().text());
   assert.ok(reads.length === 2 && reads.every((rows) => rows <= 2), `only nearby meetings are read, not all 42: ${reads}`);
 
+  // Two upcoming meetings two hours apart: a longer allowance can make them overlap. The 43 past meetings never can.
+  const day = new Date(Date.now() + 3 * 24 * 60 * 60_000).toISOString().slice(0, 10);
+  db.raw.exec(`${meetingRow("soon-a", `${day}T18:00:00.000Z`, `${day}T20:00:00.000Z`)}\n${meetingRow("soon-b", `${day}T22:00:00.000Z`, `${day}T23:00:00.000Z`)}`);
   reads.length = 0;
   const settings = await (await client.call("/admin/branding")).json() as { settings: Record<string, unknown> };
+  assert.equal(settings.settings.earlyScanMinutes, 15, "installations start with the 15-minute early arrival allowance");
   const brandingEnv = { DB: db, SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, APP_MODE: "configured", ALLOWED_ORIGIN: dashboardOrigin };
   const brandingCookie = "lancerlogin_session=" + await createSessionCodec(sessionSecret).issue({ userId: "admin", role: "admin" });
-  const save = (lateScanMinutes: number) => worker.fetch(new Request("https://fixture.test/admin/branding", { method: "PATCH", headers: { cookie: brandingCookie, "content-type": "application/json", origin: dashboardOrigin }, body: JSON.stringify({ ...settings.settings, organizationName: "Synthetic Club", primaryColor: "#123456", secondaryColor: "#654321", appearance: "system", logoBackdrop: "auto", discordContestWindowHours: 24, lateScanMinutes }) }), brandingEnv);
+  const save = (lateScanMinutes: number, earlyScanMinutes?: number) => worker.fetch(new Request("https://fixture.test/admin/branding", { method: "PATCH", headers: { cookie: brandingCookie, "content-type": "application/json", origin: dashboardOrigin }, body: JSON.stringify({ ...settings.settings, organizationName: "Synthetic Club", primaryColor: "#123456", secondaryColor: "#654321", appearance: "system", logoBackdrop: "auto", discordContestWindowHours: 24, lateScanMinutes, earlyScanMinutes }) }), brandingEnv);
   assert.equal((await save(30)).status, 200);
   assert.equal((await save(10)).status, 200);
-  assert.deepEqual(reads, [], "an unchanged or shorter late window reads no meetings");
+  assert.equal((await save(10, 5)).status, 200);
+  assert.deepEqual(reads, [], "unchanged or shorter allowances read no meetings");
   const grown = await save(180);
-  assert.equal(grown.status, 409, "a longer late window that makes existing meetings overlap is refused");
-  assert.deepEqual(reads, [43], "a longer late window checks every meeting");
+  assert.equal(grown.status, 409, "a longer late window that makes upcoming meetings overlap is refused");
+  assert.match((await grown.json() as { error: string }).error, /cannot overlap.*Meeting soon-a.*conflicts with Meeting soon-b/);
+  assert.deepEqual(reads, [2], "a longer allowance reads only meetings whose attendance has not closed");
+  const earlier = await save(10, 150);
+  assert.equal(earlier.status, 409, "a longer early arrival allowance that makes upcoming meetings overlap is refused");
+  assert.match((await earlier.json() as { error: string }).error, /Meeting soon-a.*conflicts with Meeting soon-b/);
+  assert.deepEqual(db.rows("SELECT late_scan_minutes AS late, early_scan_minutes AS early FROM organization_settings"), [{ late: 10, early: 5 }], "refused saves change nothing");
+  assert.equal((await save(10, 60)).status, 200, "an early window that still ends before the earlier meeting closes is saved");
+  assert.equal((await save(10, 180)).status, 409);
+  assert.equal(db.count("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'branding.updated'"), 4);
 });
 
 test("corrections refuse unknown members and meetings with 404 and deleted meetings with 409", async (t) => {

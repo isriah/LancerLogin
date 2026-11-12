@@ -38,6 +38,13 @@ export function omitContestResubmissionFields(backup: any) {
   const extracted = extractedModuleOwnership(backup.scope, backup.schemaVersion);
   if (backup.ownership?.modules) for (const module of extracted) if (!backup.ownership.modules.some((item: { id: string }) => item.id === module.id)) backup.ownership.modules.push(module);
   if (backup.tables) for (const table of extractedModuleTables(backup.scope, backup.schemaVersion)) backup.tables[table] ??= [];
+  // The early arrival allowance travels in entire-installation backups from schema 51 (migration 0099).
+  if (backup.schemaVersion < 51) {
+    for (const row of backup.tables?.organization_settings ?? []) delete row.early_scan_minutes;
+    for (const module of backup.ownership?.modules ?? []) for (const field of module.sharedFields ?? []) {
+      if (field.table === "organization_settings") field.columns = field.columns.filter((column: string) => column !== "early_scan_minutes");
+    }
+  }
   // Each module's own reporting start date travels in entire-installation backups from schema 50 (migration 0096).
   if (backup.schemaVersion < 50) {
     if (backup.tables) delete backup.tables.module_report_baselines;

@@ -835,7 +835,7 @@ test("real SQLite installation backups carry member PINs, Require PIN and lockou
 
   const exported = await call("/admin/data/backup?scope=installation"); assert.equal(exported.status, 200, await exported.clone().text());
   const backup = await exported.json() as any;
-  assert.equal(backup.schemaVersion, 50);
+  assert.equal(backup.schemaVersion, 51);
   assert.deepEqual(backup.tables.member_pins, [pin]);
   assert.equal(backup.tables.kiosks[0].require_pin, 1);
   assert.deepEqual([backup.tables.organization_settings[0].pin_lockout_enabled, backup.tables.organization_settings[0].pin_lockout_attempts, backup.tables.organization_settings[0].pin_lockout_minutes], [1, 4, 30]);

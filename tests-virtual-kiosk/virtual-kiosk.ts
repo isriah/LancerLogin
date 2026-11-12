@@ -4,7 +4,7 @@ import { passwordProof } from "../packages/shared/src/password-key.mjs";
 
 // Helpers for the virtual kiosk scenarios. The panel (scripts/virtual-kiosk.mjs) reports each kiosk and drives its
 // virtual reader; the local Worker is called as the virtual Admin.
-export type KioskStatus = { name: string; screenUrl: string; url: string; running: boolean; starts: number; paired: boolean; kioskId: string | null; cloudOnline: boolean; pendingScans: number | null; lastSeenAt: string | null; readerOnline: boolean; reader: { finger: string | null; slots: Record<string, string> } | null;
+export type KioskStatus = { name: string; screenUrl: string; url: string; running: boolean; serviceReachable: boolean; screenReachable: boolean; starts: number; paired: boolean; kioskId: string | null; cloudOnline: boolean; pendingScans: number | null; lastSeenAt: string | null; readerOnline: boolean; reader: { finger: string | null; slots: Record<string, string> } | null;
   bootId: string; network: { connection: string; ssid: string | null }; linkOnline: boolean; clockVerified: boolean | null; release: string;
   commands: { id: string; type: string; completedAt: string | null; success: number | null; resultMessage: string | null; requestedReleaseVersion: string | null }[] };
 export type PanelStatus = { cloudOnline: boolean; apiUrl: string; dashboardUrl: string | null; adminFile: string; kiosks: KioskStatus[] };
@@ -15,6 +15,31 @@ export async function kiosk(request: APIRequestContext) { return (await status(r
 export async function panelPost(request: APIRequestContext, path: string, data: object = {}) {
   const response = await request.post(`${panel()}${path}`, { data });
   expect(response.ok(), await response.text()).toBe(true);
+}
+
+/**
+ * Waits until the kiosk can run a scenario: its service runs, answers on its own port, is paired and answers through
+ * the panel's screen proxy. An earlier scenario can leave it restarting (after an update or a reboot), so each scenario
+ * starts from a ready kiosk instead of failing on whatever the last one left behind. A kiosk that never becomes ready
+ * fails the scenario here, naming the check that did not pass.
+ */
+export async function kioskReady(request: APIRequestContext, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let failing = "";
+  do {
+    // The panel reads the local Worker for its status, so a stalled Worker shows here instead of as a hung scenario.
+    const response = await request.get(`${panel()}/api/status`, { timeout: 5_000 }).catch(() => undefined);
+    const current = response?.ok() ? ((await response.json()) as PanelStatus).kiosks[0] : undefined;
+    failing = !current ? "the control panel, which reads the local Worker, did not answer within 5 s"
+      : !current.running ? "its kiosk service is not running"
+      : !current.serviceReachable ? `its kiosk service does not answer on its own port (${current.url})`
+      : !current.paired ? "it is not paired"
+      : !current.screenReachable ? `its screen does not answer through the panel's screen proxy (${current.screenUrl})`
+      : "";
+    if (!failing) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+  } while (Date.now() < deadline);
+  throw new Error(`Virtual kiosk 1 was not ready within ${Math.round(timeoutMs / 1000)} s: ${failing}.`);
 }
 
 /** Signs in to the local Worker as the virtual Admin and returns a dashboard-style API caller. */

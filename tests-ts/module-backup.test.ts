@@ -15,8 +15,10 @@ import { omitContestResubmissionFields } from "./fixtures/backup-versions.ts";
 import { syntheticAddonModule, syntheticNotesModule } from "./fixtures/synthetic-plugin/external-manifests.ts";
 import { syntheticAddonApiModule, syntheticNotesApiModule } from "./fixtures/synthetic-plugin/external-modules.ts";
 
-// The envelope Core exports now, at schema 50.
+// The envelope Core exports now, at schema 51.
 const golden = JSON.parse(readFileSync(new URL("./fixtures/first-party-backup-envelope.json", import.meta.url), "utf8"));
+// The envelope Core exported at schema 50, before the early arrival allowance joined installation backups.
+const schema50Golden = JSON.parse(readFileSync(new URL("./fixtures/first-party-backup-envelope-schema-50.json", import.meta.url), "utf8"));
 // The envelope Core exported at schema 49, before each module's reporting start date joined installation backups.
 const schema49Golden = JSON.parse(readFileSync(new URL("./fixtures/first-party-backup-envelope-schema-49.json", import.meta.url), "utf8"));
 // The envelope Core exported at schema 48, before Core's FIRST credentials joined installation backups.
@@ -34,6 +36,8 @@ const schema48 = (envelope: any) => ({ ...envelope, ownership: { ...envelope.own
 // Core tables added after the schema 48 envelope: the FIRST connection's credentials (schema 49, migration 0093).
 // Core tables added after the schema 49 envelope: each module's reporting start date (schema 50, migration 0096).
 const schema50 = (envelope: any) => ({ ...envelope, ownership: { ...envelope.ownership, core: { ...envelope.ownership.core, tables: envelope.ownership.core.tables.filter((table: string) => table !== "module_report_baselines") } }, tables: envelope.tables.filter((table: string) => table !== "module_report_baselines") });
+// Attendance fields added after the schema 50 envelope: the early arrival allowance (schema 51, migration 0099).
+const schema51 = (envelope: any) => ({ ...envelope, ownership: { ...envelope.ownership, modules: envelope.ownership.modules.map((module: { sharedFields: { table: string; columns: string[] }[] }) => ({ ...module, sharedFields: module.sharedFields.map((field) => ({ ...field, columns: field.columns.filter((column) => column !== "early_scan_minutes") })) })) } });
 const schema49 = (envelope: any) => ({ ...envelope, ownership: { ...envelope.ownership, core: { ...envelope.ownership.core, tables: envelope.ownership.core.tables.filter((table: string) => table !== "first_credentials") } }, tables: envelope.tables.filter((table: string) => table !== "first_credentials") });
 const without = (envelope: any, moduleId: string, prefix: string) => ({ ...envelope, ownership: { ...envelope.ownership, modules: envelope.ownership.modules.filter((module: { id: string }) => module.id !== moduleId) }, tables: envelope.tables.filter((table: string) => !table.startsWith(prefix)) });
 const pluginRegistry = createModuleRegistry([...firstPartyModules, syntheticNotesModule, syntheticAddonModule]);
@@ -55,17 +59,19 @@ test("plugin-free builds keep the first-party backup envelope and an empty plugi
   const db = new BackupDatabase(); t.after(() => db.raw.close()); const client = backupClient(worker, db);
   for (const scope of ["meetings", "roster", "installation"] as const) {
     const backup = await client.backup(scope);
-    assert.equal(backup.schemaVersion, 50);
-    assert.deepEqual(backup.ownership, golden[scope].ownership, `${scope} ownership matches the schema 50 envelope`);
+    assert.equal(backup.schemaVersion, 51);
+    assert.deepEqual(backup.ownership, golden[scope].ownership, `${scope} ownership matches the schema 51 envelope`);
     assert.deepEqual(Object.keys(backup.tables), golden[scope].tables);
     // Schema 43 differs from the schema 41 and 42 envelope only by Carpool, and schema 44 from schema 43 only by Outreach:
     // each moved into a plugin with its own section. Schema 48 differs from schema 47 only by the simulator's sessions, and
-    // schema 49 from schema 48 only by the FIRST credentials, and schema 50 from schema 49 only by the reporting start dates.
+    // schema 49 from schema 48 only by the FIRST credentials, schema 50 from schema 49 only by the reporting start dates, and
+    // schema 51 from schema 50 only by the early arrival allowance.
     assert.deepEqual(without(historicalGolden[scope], "carpool", "carpool_"), schema43Golden[scope]);
     assert.deepEqual(without(schema43Golden[scope], "hour-tracking", "hours_"), schema44(schema47Golden[scope]));
     assert.deepEqual(schema48(schema47Golden[scope]), schema48Golden[scope]);
     assert.deepEqual(schema49(schema49Golden[scope]), schema48Golden[scope]);
-    assert.deepEqual(schema50(golden[scope]), schema49Golden[scope]);
+    assert.deepEqual(schema50(schema50Golden[scope]), schema49Golden[scope]);
+    assert.deepEqual(schema51(golden[scope]), schema50Golden[scope]);
     // Core still recognizes the historical metadata and Core-section tables of both modules exactly.
     assert.deepEqual(historicalGolden[scope].ownership.modules.slice(1), extractedModuleOwnership(scope, 42));
     assert.deepEqual(schema43Golden[scope].ownership.modules.slice(1), extractedModuleOwnership(scope, 43));
@@ -100,7 +106,7 @@ test("schema 50 installation backups carry the FIRST credential; older backups r
   db.raw.exec("INSERT INTO first_team_cache(installation_id,program,number,name,location,season,source,checked_ms) VALUES('primary','FRC','321','Test Robotics A','Testville, PA',2026,'events-api',1); INSERT INTO first_seasons VALUES('primary','FRC',2026,1); INSERT INTO first_requests VALUES('primary','events-api','synthetic',1)");
   const credential = db.rows("SELECT * FROM first_credentials")[0];
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 50);
+  assert.equal(backup.schemaVersion, 51);
   assert.deepEqual(backup.tables.first_credentials, [credential]);
   assert.equal(JSON.stringify(backup).includes("synthetic-frc-token"), false, "only the ciphertext travels");
   for (const table of ["first_team_cache", "first_seasons", "first_requests"]) assert.equal(table in backup.tables, false, `${table} is never backed up`);

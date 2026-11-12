@@ -121,9 +121,6 @@ test("raw Outreach dashboard controls remain in the reviewed UI inventory", asyn
     for (const tag of ["button", "input", "select", "textarea", "summary"] as const) { const count = [...source.matchAll(new RegExp(`<${tag}\\b`, "g"))].length; if (count) counts[tag] = count; }
     if (Object.keys(counts).length) actual[file.replace(/^dashboard[\\/]/, "")] = counts;
   }
-  // Core still pins Outreach 5121736, from before #14: until the pin moves past #14, that reviewed state (no import dialog
-  // and no Import CSV button) is accepted too.
-  if (!files.includes(join("dashboard", "outreach-activity-import-dialog.tsx"))) { delete reviewed["outreach-activity-import-dialog.tsx"]; reviewed["outreach-workspace.tsx"] = { ...reviewed["outreach-workspace.tsx"], button: 24 }; }
   assert.deepEqual(actual, reviewed, "Native control markup changed. Use the shared UI patterns and focused rendered coverage, then review and update this inventory deliberately.");
 });
 
@@ -192,7 +189,7 @@ test("an installation that used first-party Outreach keeps its data and lifecycl
   assert.deepEqual([listed.phase, listed.workspaceReady, "unavailable" in listed], ["enabled", true, false]);
   // Its next backup carries Outreach in the plugin section, and that backup restores the same rows.
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 50);
+  assert.equal(backup.schemaVersion, 51);
   const section = backup.externalModules.find((entry: { id: string }) => entry.id === "hour-tracking");
   assert.deepEqual({ ...section, tables: undefined }, { id: "hour-tracking", label: "Outreach Participation", contractVersion: 1, backupVersion: manifest.backup.version, source: outreachPlugin.available ? outreachPlugin.source : null, commit: outreachPlugin.available ? outreachPlugin.commit : null, tables: undefined });
   assert.deepEqual(section.tables.hours_activities.map((row: { id: string }) => row.id), ["activity-1"]);

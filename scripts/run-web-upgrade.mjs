@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { buildProvisionConfig, workerPlacement } from "./prepare-cloudflare-provision.mjs";
-import { writePagesOutput } from "./prepare-pages-proxy.mjs";
+import { bindPagesApi, writePagesOutput } from "./prepare-pages-proxy.mjs";
 
 import { resolveDatabaseName } from "./database-identity.mjs";
 import { ensureFingerprintVaultKey, fingerprintVaultSecretName, fingerprintVaultStateSql } from "./ensure-fingerprint-vault-key.mjs";
@@ -477,6 +477,10 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
     },
     async deployApi() { await wrangler(["deploy", "--message", `Web update ${context.requestId}`]); },
     async deployPages() {
+      // Migrations and the Worker are already live, so a refused binding must not fail the update: the proxy falls back to
+      // fetch, as before, and per-client sign-in limits stay shared until a later update adds it.
+      try { await bindPagesApi({ accountOrigin, headers: cfHeaders, project: `${context.slug}-dashboard`, worker: `${context.slug}-api` }); }
+      catch (error) { console.warn(`::warning title=Pages API binding not added::${error.message}: all dashboard visitors keep sharing one sign-in limit. Check that the Cloudflare token has Cloudflare Pages: Edit, then run the update again.`); }
       // Pages rejects custom --config paths; the generated configuration belongs to the Worker only.
       await command(process.execPath, [resolve(source, "node_modules/wrangler/bin/wrangler.js"), "pages", "deploy", "apps/dashboard/dist", `--project-name=${context.slug}-dashboard`, "--branch=main", `--commit-hash=${context.sha}`, "--commit-dirty=false"], source, processEnvironment);
     },

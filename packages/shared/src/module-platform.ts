@@ -494,7 +494,7 @@ export const attendanceModule = freeze<ModuleDefinition>({
     ],
     sharedFields: [
       { table: "members", columns: ["attendance_required_from"] },
-      { table: "organization_settings", columns: ["late_scan_minutes", "discord_contest_window_hours", "discord_block_recontests_after_rejection", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on", "kiosk_authentication_method"] },
+      { table: "organization_settings", columns: ["late_scan_minutes", "discord_contest_window_hours", "discord_block_recontests_after_rejection", "discord_channel_manager_enabled", "attendance_reporting_starts_on", "anomaly_late_threshold_minutes", "anomaly_early_threshold_minutes", "discord_anomaly_reports_enabled", "discord_anomaly_report_channel_id", "discord_anomaly_reports_enabled_at", "attendance_recent_days", "attendance_policy_activated_on", "kiosk_authentication_method", "early_scan_minutes"] },
     ],
     transientAuthority: [
       { table: "kiosk_enrollment_sessions", columns: ["state", "expires_at"] },

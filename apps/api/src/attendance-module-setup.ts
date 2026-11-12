@@ -1,5 +1,6 @@
 import type { D1Database } from "./d1-usage.ts";
 import { HttpError } from "./http-error.ts";
+import { assertAllowanceChangeKeepsMeetingsApart, attendanceAllowances } from "./attendance-allowances.ts";
 
 type JsonRecord = Record<string, unknown>;
 type SetupPredicate = { sql: string; bindings: readonly unknown[] };
@@ -58,7 +59,7 @@ function localDay(instant: string, timeZone: string) {
 }
 
 async function rules(request: Request, db: D1Database, userId: string) {
-  const row = await db.prepare(`SELECT late_scan_minutes AS lateScanMinutes,attendance_reporting_starts_on AS attendanceReportingStartsOn,
+  const row = await db.prepare(`SELECT late_scan_minutes AS lateScanMinutes,early_scan_minutes AS earlyScanMinutes,attendance_reporting_starts_on AS attendanceReportingStartsOn,
     anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes,anomaly_early_threshold_minutes AS anomalyEarlyThresholdMinutes,time_zone AS timeZone
     FROM organization_settings WHERE installation_id=?`).bind(installationId).first<Record<string, unknown>>();
   if (!row) throw new HttpError(409, "Save organization setup before configuring Attendance");
@@ -68,6 +69,9 @@ async function rules(request: Request, db: D1Database, userId: string) {
   if (!object(body.values) || !object(body.expected) || Object.keys(body).some((key) => !["values", "expected"].includes(key))) throw new HttpError(400, "Provide Attendance rules and their previously displayed values");
   const read = (value: JsonRecord) => [integer(value.lateScanMinutes, 180, "late scan limit"), date(value.attendanceReportingStartsOn, true), integer(value.anomalyLateThresholdMinutes, 180, "late anomaly threshold"), integer(value.anomalyEarlyThresholdMinutes, 180, "early anomaly threshold")] as const;
   const next = read(body.values); const expected = read(body.expected); const now = new Date().toISOString();
+  // A longer late scan window must not make meetings that have not closed overlap (the early arrival allowance is kept).
+  const current = attendanceAllowances(row as { lateScanMinutes?: number; earlyScanMinutes?: number });
+  await assertAllowanceChangeKeepsMeetingsApart(db, current, { ...current, lateScanMinutes: next[0] });
   const results = await db.batch([
     db.prepare(`UPDATE organization_settings SET late_scan_minutes=?,attendance_reporting_starts_on=?,anomaly_late_threshold_minutes=?,anomaly_early_threshold_minutes=?
       WHERE installation_id=? AND late_scan_minutes IS ? AND attendance_reporting_starts_on IS ? AND anomaly_late_threshold_minutes IS ? AND anomaly_early_threshold_minutes IS ?`)
@@ -96,7 +100,7 @@ async function meeting(request: Request, db: D1Database, userId: string) {
   if (Object.keys(input).some((key) => !["title", "startsAt", "endsAt", "required", "notes"].includes(key)) || typeof input.title !== "string" || !input.title.trim() || input.title.length > 120 || input.notes !== undefined && (typeof input.notes !== "string" || input.notes.length > 2000) || input.required !== undefined && typeof input.required !== "boolean") throw new HttpError(400, "Provide a title, meeting times, and optional notes");
   const startsAt = instant(input.startsAt); const endsAt = instant(input.endsAt);
   if (Date.parse(endsAt) <= Date.parse(startsAt)) throw new HttpError(400, "Meeting end must follow its start");
-  const settings = await db.prepare("SELECT time_zone AS timeZone,late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id=?").bind(installationId).first<{ timeZone: string; lateScanMinutes: number }>();
+  const settings = await db.prepare("SELECT time_zone AS timeZone,late_scan_minutes AS lateScanMinutes,early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id=?").bind(installationId).first<{ timeZone: string; lateScanMinutes: number; earlyScanMinutes: number }>();
   if (!settings) throw new HttpError(409, "Save organization setup before creating a meeting");
   try { if (localDay(startsAt, settings.timeZone) !== localDay(endsAt, settings.timeZone)) throw new Error(); }
   catch { throw new HttpError(400, "Meeting start and end must use the same organization date"); }
@@ -104,9 +108,9 @@ async function meeting(request: Request, db: D1Database, userId: string) {
   const results = await db.batch([
     db.prepare(`INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,required,notes,created_by,created_at,is_test)
       SELECT ?,?,?,?,?,?,?,?,?,0 WHERE NOT EXISTS(SELECT 1 FROM meetings WHERE installation_id=? AND deleted_at IS NULL
-        AND unixepoch(?,'subsec')<=unixepoch(ends_at,'subsec')+?*60 AND unixepoch(?,'subsec')+?*60>=unixepoch(starts_at,'subsec'))`)
+        AND unixepoch(?,'subsec')-?*60<=unixepoch(ends_at,'subsec')+?*60 AND unixepoch(?,'subsec')+?*60>=unixepoch(starts_at,'subsec')-?*60)`)
       .bind(id, installationId, input.title.trim(), startsAt, endsAt, Number(input.required ?? true), typeof input.notes === "string" ? input.notes : null, userId, now,
-        installationId, startsAt, settings.lateScanMinutes, endsAt, settings.lateScanMinutes),
+        installationId, startsAt, settings.earlyScanMinutes ?? 15, settings.lateScanMinutes, endsAt, settings.lateScanMinutes, settings.earlyScanMinutes ?? 15),
     db.prepare(`INSERT INTO audit_log(id,installation_id,actor_user_id,action,target_type,target_id,created_at)
       SELECT ?,?,?, 'meeting.created','meeting',?,? WHERE changes()=1`).bind(crypto.randomUUID(), installationId, userId, id, now),
   ]);

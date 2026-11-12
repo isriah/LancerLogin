@@ -6,7 +6,7 @@
 // placed with one memoised zone clock, catalogs and the existing meetings in the file's date range are read once (with their
 // audience, calendar mappings and Discord notice state), and calendar delivery is queued in the batch for the scheduled jobs
 // rather than run inline; the jobs deliver a few per pass (5 Google, 3 Discord every five minutes) within their own budget. A commit makes about ten queries and at most one inline Discord notice retraction.
-import { attendanceClosesAt } from "./attendance-lifecycle.ts";
+import { attendanceClosesAt, DEFAULT_EARLY_SCAN_MINUTES } from "./attendance-lifecycle.ts";
 import type { D1Database, D1Statement } from "./d1-usage.ts";
 import { HttpError } from "./http-error.ts";
 import { formatCsvDate, formatCsvTimeRange } from "../../../packages/shared/src/csv-import.ts";
@@ -33,7 +33,7 @@ export type MeetingImportRowResult = { rowNumber: number; action: "add" | "updat
 type Existing = { id: string; title: string; startsAt: string; endsAt: string; required: number; notes: string | null; audienceMode: "all" | "labels"; weightCategoryId: string | null; audienceJson: string; googleEventId: string | null; googleActive: number | null; discordGeneration: number | null; discordActive: number | null; noticeStatus: string | null; noticeLive: number };
 type Planned = { result: MeetingImportRowResult; meeting?: MeetingCsvMeeting; match?: Existing; input?: MeetingInput; audience?: Audience; assignment?: Assignment | null; historicalChange?: boolean };
 
-const marginMs = 24 * 60 * 60_000 + 180 * 60_000;
+const marginMs = 24 * 60 * 60_000 + 2 * 180 * 60_000;
 const sameIds = (left: string[], right: string[]) => [...left].sort().join(",") === [...right].sort().join(",");
 
 function requestRows(value: unknown): { rows: MeetingCsvRow[]; dryRun: boolean; actions: Record<string, "skip" | "update"> } {
@@ -55,8 +55,8 @@ function requestRows(value: unknown): { rows: MeetingCsvRow[]; dryRun: boolean; 
 
 export async function runMeetingImport(body: unknown, deps: MeetingImportDeps) {
   const { rows, dryRun, actions } = requestRows(body); const { db } = deps; const now = deps.now ?? Date.now();
-  const settings = await db.prepare("SELECT time_zone AS timeZone, late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone?: string; lateScanMinutes?: number }>();
-  const timeZone = settings?.timeZone && deps.validTimeZone(settings.timeZone) ? settings.timeZone : "UTC"; const lateScanMs = (settings?.lateScanMinutes ?? 30) * 60_000;
+  const settings = await db.prepare("SELECT time_zone AS timeZone, late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone?: string; lateScanMinutes?: number; earlyScanMinutes?: number }>();
+  const timeZone = settings?.timeZone && deps.validTimeZone(settings.timeZone) ? settings.timeZone : "UTC"; const lateScanMs = (settings?.lateScanMinutes ?? 30) * 60_000; const earlyScanMs = (settings?.earlyScanMinutes ?? DEFAULT_EARLY_SCAN_MINUTES) * 60_000;
   const clock = meetingCsvClock(timeZone);
   const planned: Planned[] = rows.map((row) => { const resolved = resolveMeetingCsvRow(row.values, clock); return resolved.meeting ? { result: { rowNumber: row.rowNumber, action: "add", past: Date.parse(resolved.meeting.endsAt) <= now }, meeting: resolved.meeting } : { result: { rowNumber: row.rowNumber, action: "error", past: false, error: resolved.errors.join(". ") } }; });
   const placed = planned.filter((plan) => plan.meeting);
@@ -123,9 +123,10 @@ export async function runMeetingImport(body: unknown, deps: MeetingImportDeps) {
     if (plan.historicalChange && Date.parse(attendanceClosesAt(match.endsAt, settings?.lateScanMinutes ?? 30)) <= now) fail("Changes attendance or audience for a completed meeting. Edit it on its meeting page to review the impact");
   }
 
-  // Attendance windows (start to end plus late scans) may not overlap; an earlier row wins over a later one. An update moves
-  // its meeting's window, so when an update fails here the old window returns and the rows are checked once more.
-  const windowOf = (startsAt: string, endsAt: string) => [Date.parse(startsAt), Date.parse(endsAt) + lateScanMs] as const;
+  // Attendance windows (start less the early arrival allowance to end plus late scans) may not overlap; an earlier row wins
+  // over a later one. An update moves its meeting's window, so when an update fails here the old window returns and the rows
+  // are checked once more. Existing meetings are only compared with rows, never with each other.
+  const windowOf = (startsAt: string, endsAt: string) => [Date.parse(startsAt) - earlyScanMs, Date.parse(endsAt) + lateScanMs] as const;
   // "Test Build Session (6:00–8:30 PM)", with the date when it is not the row's own.
   const describe = (title: string, startsAt: string, endsAt: string, rowDate: string) => { const start = clock.civil(Date.parse(startsAt)); const end = clock.civil(Date.parse(endsAt)); return `${title} (${start.date === rowDate ? "" : `${formatCsvDate(start.date)}, `}${formatCsvTimeRange(start.time, end.time)})`; };
   for (let changed = true; changed;) {

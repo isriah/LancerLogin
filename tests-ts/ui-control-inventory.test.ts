@@ -13,7 +13,7 @@ const reviewedNativeControls: Record<string, Counts> = {
   "attendance-workspace.tsx": { button: 11, summary: 1 },
   "bulk-roster-actions.tsx": { button: 8, input: 2, select: 2 },
   "color-editor.tsx": { input: 3, summary: 1 },
-  "configuration-settings.tsx": { button: 1, input: 4 },
+  "configuration-settings.tsx": { button: 1, input: 5 },
   "contest-indicator.tsx": { button: 2 },
   "contest-review-list.tsx": { button: 6, input: 3, textarea: 2, summary: 1 },
   "data-settings.tsx": { button: 6, input: 3, summary: 1 },

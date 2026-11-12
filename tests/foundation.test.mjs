@@ -113,12 +113,12 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /const backupSchemaVersion = 50;/);
+  assert.match(source, /const backupSchemaVersion = 51;/);
   assert.match(source, /backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49, module_report_baselines: 50 }/);
   assert.match(source, /simulated_kiosk_sessions: { schema: 48, owner: "attendance" }/);
   assert.match(source, /tables\.simulated_kiosk_sessions = \[\];/);
-  assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -16\)/);
-  for (const [version, omitted] of [[8, 14], [9, 12], [10, 10], [15, 7], [31, 5], [41, 4], [47, 3]]) assert.match(source, new RegExp(`schemaVersion < ${version} && table === "organization_settings" \\? tableColumns\\.organization_settings\\.slice\\(0, -${omitted}\\)`));
+  assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -17\)/);
+  for (const [version, omitted] of [[8, 15], [9, 13], [10, 11], [15, 8], [31, 6], [41, 5], [47, 4], [51, 1]]) assert.match(source, new RegExp(`schemaVersion < ${version} && table === "organization_settings" \\? tableColumns\\.organization_settings\\.slice\\(0, -${omitted}\\)`));
   assert.match(source, /table === "discord_attendance_contests" && schemaVersion < 41 \? tableColumns\.discord_attendance_contests\.slice\(0, schemaVersion === 1 \? -3 : -1\)/);
   assert.match(source, /discord_block_recontests_after_rejection: 0/);
   assert.match(source, /prior_reviews_json: "\[\]"/);
@@ -289,6 +289,10 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.match(workflow, /if: steps\.resources\.outputs\.worker_secrets == 'exists'/);
   assert.match(workflow, /VITE_API_BASE_URL: \/api/);
   assert.match(workflow, /prepare-pages-proxy\.mjs/);
+  // The Pages deployment reads the project's bindings when it is created, so the binding must come first.
+  assert.match(workflow, /"API\\":\{\\"service\\":\\"\$INSTALLATION_SLUG-api\\"/);
+  assert.ok(workflow.indexOf("Bind the Pages API proxy to the Worker") < workflow.indexOf("Deploy Pages dashboard"));
+  assert.ok(workflow.indexOf("Select Worker deployment URL") < workflow.indexOf("Bind the Pages API proxy to the Worker"));
   assert.equal((workflow.match(/secrets:\s*\|/g) ?? []).length, 0);
   assert.match(workflow, /accounts\/\$CLOUDFLARE_ACCOUNT_ID\/tokens\/verify/);
   assert.doesNotMatch(workflow, /user\/tokens\/verify/);

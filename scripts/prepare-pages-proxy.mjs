@@ -2,6 +2,16 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { parseReleaseVersion } from "../packages/shared/src/release-policy.mjs";
 
+/** The Pages project's service binding to the installation's Worker. A proxy without it falls back to fetch. */
+export const PAGES_API_BINDING = "API";
+
+/** Adds the binding to the production environment, leaving the project's other settings alone. It applies from the next Pages deployment. */
+export async function bindPagesApi({ accountOrigin, headers, project, worker, request = fetch }) {
+  const body = { deployment_configs: { production: { services: { [PAGES_API_BINDING]: { service: worker, environment: "production" } } } } };
+  const response = await request(`${accountOrigin}/pages/projects/${project}`, { method: "PATCH", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(body), redirect: "error", signal: AbortSignal.timeout(30_000) });
+  if (!response.ok) throw new Error(`pages_api_binding_failed_${response.status}`);
+}
+
 export function buildPagesProxy(apiUrl, releaseVersion) {
   const upstream = new URL(apiUrl);
   if (upstream.protocol !== "https:" || upstream.username || upstream.password || upstream.search || upstream.hash || upstream.pathname !== "/") throw new Error("Worker API URL must be an HTTPS origin");
@@ -20,7 +30,10 @@ export default {
       target.pathname = path;
       target.search = incoming.search;
       if (target.origin !== API_ORIGIN) return badRequest();
-      return fetch(new Request(target, request));
+      const forwarded = new Request(target, request);
+      // Through the binding the Worker sees each visitor's address in CF-Connecting-IP, which its per-client limits read.
+      // A fetch to workers.dev crosses zones, so Cloudflare replaces it with one address shared by every visitor.
+      return env.${PAGES_API_BINDING} ? env.${PAGES_API_BINDING}.fetch(forwarded) : fetch(forwarded);
     }
     // _routes.json sends only the paths above to this function on Pages; static files and deep links are served by Pages
     // itself, with _headers. The asset handling below matches that, for local runs and a deployment without _routes.json.

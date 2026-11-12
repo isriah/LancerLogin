@@ -89,7 +89,7 @@ test("portable kiosk methods round-trip independently and older backups preserve
       ('side','primary','pair-side','Side','synthetic-side',1,'2026-09-25','rfid','nfc');
       UPDATE organization_settings SET kiosk_authentication_method='member_id' WHERE installation_id='primary'`);
     const backup = await (await call(db, "/admin/data/backup?scope=installation")).json() as any;
-    assert.equal(backup.schemaVersion, 50);
+    assert.equal(backup.schemaVersion, 51);
     const restore = (source: any) => call(db, "/admin/data/restore", "admin", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: source });
     for (const method of ["camera", null, undefined]) {
       const invalid = structuredClone(backup); invalid.tables.kiosks[0].configured_authentication_method = method;

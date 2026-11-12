@@ -5,7 +5,9 @@
  * This deliberately lets the browser choose deployable plugin code, and nothing else: the Core release, workflow, ref,
  * slug and resources stay fixed. The selection credential is a separate fine-grained token with Contents write on the
  * private repository only. It is sent only to the fixed api.github.com origin, never returned, logged or stored in D1.
- * Plugin metadata for the confirmation is read anonymously, so no credential reaches a plugin's repository.
+ * Plugin metadata, versions and releases are public reads from api.github.com. They may carry the same credential only to
+ * raise GitHub's rate limit (see publicGitHub); every request goes to the fixed api.github.com origin, so no credential
+ * ever reaches a plugin's own host, and sources on other hosts are never contacted.
  */
 import { WebUpdateError, absentSelectionSha, startedUpdate, type WebUpdateEnv } from "./web-updates.ts";
 import { bundledModuleRegistry, firstPartyModules } from "../../../packages/shared/src/module-platform.ts";
@@ -16,7 +18,7 @@ import officialModulePins from "../../../scripts/official-modules.json" with { t
 import { externalModuleSources } from "./generated/external-module-data.ts";
 import { extractedModulesInUse } from "./extracted-modules.ts";
 import { knownModule } from "./known-modules.ts";
-import { credentialStatus, observeCredentialResponse } from "./github-credential.ts";
+import { credentialRejected, credentialStatus, credentialUsable, observeCredentialResponse } from "./github-credential.ts";
 import { missingUpgradeMigrations, moduleMigrationLedgerTable, upgradePathMessage } from "./module-migrations.ts";
 import { readModuleUpdateFailures, type ModuleUpdateFailure } from "./module-catalog.ts";
 
@@ -57,6 +59,39 @@ function selectionToken(env: PluginSelectionEnv): string {
   return env.MODULE_SELECTION_TOKEN!;
 }
 
+/** GitHub's rate limit: 429, or 403 with no remaining quota or a Retry-After. Any other 403 is a refusal, not a cooldown. */
+function githubCooldown(response: Response): boolean {
+  return response.status === 429 || response.status === 403 && (response.headers.get("x-ratelimit-remaining") === "0" || response.headers.has("retry-after"));
+}
+/** The selection credential for public read-only lookups, when it is stored, unexpired and not already rejected by GitHub. */
+function lookupToken(env: PluginSelectionEnv | undefined): string | undefined {
+  const token = env?.MODULE_SELECTION_TOKEN;
+  return credentialUsable("selection", token, env?.MODULE_SELECTION_TOKEN_EXPIRES_AT) && !credentialRejected("selection", token) ? token : undefined;
+}
+/**
+ * Read-only requests for public plugin data (releases, tags, commits, package.json and migration names). Public data needs
+ * no credential, so `token` (from lookupToken) only raises GitHub's rate limit: anonymous calls share 60 an hour with every
+ * other Worker on the same Cloudflare egress address, which is usually spent. Requests go to the fixed api.github.com origin
+ * only, with redirects refused (a 3xx comes back as a failed response), and GitHub's answer is recorded for the credential
+ * status. If GitHub rejects the credential (401) or refuses it without a rate limit (403), that request is repeated
+ * anonymously and the rest of this reader stays anonymous, so a bad credential never does worse than none. A network
+ * failure or timeout resolves to undefined.
+ */
+function publicGitHub(token: string | undefined): (path: string, accept?: string) => Promise<Response | undefined> {
+  let credential = token;
+  return async (path, accept) => {
+    const send = (authorization: string | undefined) => fetch(`https://api.github.com${path}`, { headers: githubHeaders(authorization, accept), redirect: "manual", signal: AbortSignal.timeout(4_000) });
+    try {
+      if (!credential) return await send(undefined);
+      const used = credential;
+      const response = await send(used);
+      observeCredentialResponse("selection", used, response);
+      if (response.status !== 401 && (response.status !== 403 || githubCooldown(response))) return response;
+      credential = undefined; // Rejected or refused: the rest of this reader is anonymous.
+      return await send(undefined);
+    } catch { return undefined; }
+  };
+}
 /** Requests carrying the selection credential: fixed origin, no redirects, bounded time, sanitized failures. */
 async function privateGitHub(env: PluginSelectionEnv, path: string, init: RequestInit = {}): Promise<Response> {
   const token = selectionToken(env);
@@ -68,7 +103,7 @@ async function privateGitHub(env: PluginSelectionEnv, path: string, init: Reques
   observeCredentialResponse("selection", token, result);
   if (result.status >= 300 && result.status < 400) fail(503, "provider_unavailable", "GitHub returned an unexpected redirect. The request was not forwarded.");
   if (result.status === 401) fail(503, "selection_credential_rejected", "GitHub rejected the module selection credential. Replace LANCERLOGIN_MODULE_SELECTION_TOKEN, then run the Refresh web update credential workflow.");
-  if (result.status === 429 || result.status === 403 && (result.headers.get("x-ratelimit-remaining") === "0" || result.headers.has("retry-after"))) fail(429, "cooldown", "GitHub requires a cooldown. Try again later.");
+  if (githubCooldown(result)) fail(429, "cooldown", "GitHub requires a cooldown. Try again later.");
   if (result.status === 403) fail(503, "selection_credential_permission", "The module selection credential is missing Contents access to the private deployment repository.");
   return result;
 }
@@ -171,15 +206,15 @@ export async function pluginManagementState(env: PluginSelectionEnv, options: Pl
   // Versions are looked up concurrently and cached; a failed lookup only marks the latest version unavailable.
   const plugins = await Promise.all(Object.entries(installed).map(async ([id, value]) => {
     const entry = chosen.get(id); const track = entryTrack(entry);
-    const info = await pluginVersionInfo(value.source, value.commit, track);
+    const info = await pluginVersionInfo(value.source, value.commit, track, env);
     // An official plugin that this installation does not pin follows LancerLogin's pin for the release.
     const pin = value.official && !value.selected && !entry ? releasePin(id) : undefined;
-    const releasePinVersion = pin ? pin.commit === value.commit ? info.version : await pluginVersionAt(pin.source, pin.commit) : undefined;
+    const releasePinVersion = pin ? pin.commit === value.commit ? info.version : await pluginVersionAt(pin.source, pin.commit, env) : undefined;
     return { id, source: value.source, commit: value.commit, official: Boolean(value.official), selected: Boolean(value.selected), phase: phase(id), track, ...info, ...(pin ? { releasePinVersion } : {}) };
   }));
   const pending = selection ? await Promise.all(pendingChanges(selection.document, installed).map(async (change) => {
     const source = change.source ?? installed[change.id]?.source;
-    const [version, installedVersion] = await Promise.all([pluginVersionAt(change.source ?? source, change.commit), pluginVersionAt(installed[change.id]?.source, change.installedCommit)]);
+    const [version, installedVersion] = await Promise.all([pluginVersionAt(change.source ?? source, change.commit, env), pluginVersionAt(installed[change.id]?.source, change.installedCommit, env)]);
     return { ...change, ...(change.commit ? { version } : {}), ...(change.installedCommit ? { installedVersion } : {}) };
   })) : [];
   return {
@@ -269,19 +304,22 @@ export type PluginMetadata = {
   multipleModules?: string[];
 };
 /**
- * Read a plugin's package.json and migration names at the pinned commit through GitHub's public API, without credentials
- * and without running any plugin code. Other hosts, private repositories and provider failures are reported as unknown.
+ * Read a plugin's package.json and migration names at the pinned commit through GitHub's contents API on api.github.com
+ * (never raw.githubusercontent.com, codeload or the plugin's host), without running any plugin code. `token` only raises
+ * the rate limit; see publicGitHub. Other hosts, private repositories and provider failures are reported as unknown.
  */
-export async function readPluginMetadata(source: string, commit: string, moduleId: string, coreVersion: string | undefined): Promise<PluginMetadata> {
+export async function readPluginMetadata(source: string, commit: string, moduleId: string, coreVersion: string | undefined, token?: string): Promise<PluginMetadata> {
   const url = new URL(source);
   if (url.hostname !== "github.com") return { state: "unknown", reason: "Compatibility is checked during composition. Only github.com sources can be inspected here." };
   const [, owner, name] = url.pathname.replace(/\.git$/, "").split("/");
-  const get = async (path: string, accept: string) => {
-    try { return await fetch(`https://api.github.com/repos/${owner}/${name}/contents/${path}?ref=${commit}`, { headers: githubHeaders(undefined, accept), redirect: "manual", signal: AbortSignal.timeout(4_000) }); }
-    catch { return undefined; }
-  };
+  const github = publicGitHub(token);
+  const get = (path: string, accept: string) => github(`/repos/${owner}/${name}/contents/${path}?ref=${commit}`, accept);
   const response = await get("package.json", "application/vnd.github.raw+json");
-  if (!response?.ok) return { state: "unknown", reason: response?.status === 404 ? "The module repository's package.json was not found at that commit, or the repository is private. Composition checks it before the change is applied." : "GitHub could not be reached to inspect the module repository. Composition checks it before the change is applied." };
+  if (!response?.ok) return { state: "unknown", reason:
+    response?.status === 404 ? "The module repository's package.json was not found at that commit, or the repository is private. Composition checks it before the change is applied."
+    : response && githubCooldown(response) ? "GitHub requires a cooldown before the module repository can be inspected. Composition checks it before the change is applied."
+    : response?.status === 403 ? "GitHub refused to let the module repository be inspected. Composition checks it before the change is applied."
+    : "GitHub could not be reached to inspect the module repository. Composition checks it before the change is applied." };
   let pkg: { version?: unknown; lancerlogin?: { moduleId?: unknown; contract?: unknown; core?: unknown; tablePrefix?: unknown; migrations?: unknown; adoptedCoreMigrations?: unknown; upgradeRequiresMigrations?: unknown } };
   try { pkg = JSON.parse((await response.text()).slice(0, 65_536)); } catch { return { state: "incompatible", reason: "The module repository's package.json is not valid JSON." }; }
   const field = pkg?.lancerlogin;
@@ -336,7 +374,7 @@ export async function reviewPluginChange(env: PluginSelectionEnv, input: Record<
   const allowlist = await readAllowlist(env);
   const { previous } = proposedSelection(selection.document, change, installed, phases);
   if (change.source && !sourceAllowed(change.source, allowlist)) fail(403, "source_not_allowed", allowlist.state === "invalid" ? `${allowlistFileName} is invalid, so no module source can be selected. Repair it in the private deployment repository.` : "This installation's source allowlist does not include that plugin host and owner.");
-  const metadata = change.action === "remove" ? undefined : await readPluginMetadata(change.source!, change.commit!, change.id, env.RELEASE_VERSION);
+  const metadata = change.action === "remove" ? undefined : await readPluginMetadata(change.source!, change.commit!, change.id, env.RELEASE_VERSION, lookupToken(env));
   refuseMultipleModules(metadata);
   await refuseSkippedUpgrade(db, change.id, metadata);
   return {
@@ -364,7 +402,7 @@ export async function commitPluginChange(env: PluginSelectionEnv, principal: Pri
   const { document, previous } = proposedSelection(selection.document, change, installed, await modulePhases(db));
   // Checked again at commit, so a direct request cannot pin a repository the review would refuse.
   if (change.action !== "remove") {
-    const metadata = await readPluginMetadata(change.source!, change.commit!, change.id, env.RELEASE_VERSION);
+    const metadata = await readPluginMetadata(change.source!, change.commit!, change.id, env.RELEASE_VERSION, lookupToken(env));
     refuseMultipleModules(metadata);
     await refuseSkippedUpgrade(db, change.id, metadata);
   }
@@ -396,19 +434,25 @@ export type PluginRelease = { tag: string; kind: "stable" | "beta" | "nightly"; 
 /**
  * The newest published, immutable release on a plugin's release track, resolved to its full commit SHA, for the Upgrade
  * dialog to offer. Stable offers stable releases only; Nightly (testing only) also offers beta and nightly prereleases,
- * exactly as `npm run plugins:resolve` does. Releases are read through GitHub's public API without credentials, so
- * other hosts and private repositories report a reason instead, and the Admin enters the reviewed commit. Nothing is
- * committed: the chosen commit goes through review, trust confirmation and fresh authentication like any change.
+ * exactly as `npm run plugins:resolve` does. Other hosts and private repositories report a reason instead, and the Admin
+ * enters the reviewed commit. Nothing is committed: the chosen commit goes through review, trust confirmation and fresh
+ * authentication like any change.
+ *
+ * Releases are public, so `token` (from lookupToken) only raises GitHub's rate limit; see publicGitHub for the fixed
+ * origin, refused redirects and the anonymous fallback. Only 429, or 403 with no remaining quota or a Retry-After, is
+ * reported as a cooldown.
  */
-export async function newestTrackRelease(source: string, track: SelectionTrack): Promise<{ track: SelectionTrack; release: PluginRelease | null; reason?: string }> {
+export async function newestTrackRelease(source: string, track: SelectionTrack, token?: string): Promise<{ track: SelectionTrack; release: PluginRelease | null; reason?: string }> {
   const url = new URL(source);
   if (url.hostname !== "github.com") return { track, release: null, reason: "Releases can be looked up only for github.com sources. Enter the commit you reviewed." };
   const [, owner, name] = url.pathname.replace(/\.git$/, "").split("/");
-  const get = async (path: string) => {
-    try { return await fetch(`https://api.github.com/repos/${owner}/${name}${path}`, { headers: githubHeaders(), redirect: "manual", signal: AbortSignal.timeout(4_000) }); }
-    catch { return undefined; }
-  };
-  const unavailable = (response: Response | undefined) => ({ track, release: null, reason: response?.status === 404 ? "The module's releases were not found, or its repository is private. Enter the commit you reviewed." : response?.status === 403 || response?.status === 429 ? "GitHub requires a cooldown before releases can be looked up. Try again later, or enter the commit you reviewed." : "GitHub could not be reached to look up releases. Enter the commit you reviewed." });
+  const github = publicGitHub(token);
+  const get = (path: string) => github(`/repos/${owner}/${name}${path}`);
+  const unavailable = (response: Response | undefined) => ({ track, release: null, reason:
+    response?.status === 404 ? "The module's releases were not found, or its repository is private. Enter the commit you reviewed."
+    : response && githubCooldown(response) ? "GitHub requires a cooldown before releases can be looked up. Try again later, or enter the commit you reviewed."
+    : response?.status === 403 ? "GitHub refused the release lookup. Enter the commit you reviewed."
+    : "GitHub could not be reached to look up releases. Enter the commit you reviewed." });
   // The highest version wins, never the most recent publication, so read every page (bounded) before choosing.
   const releases: unknown[] = [];
   for (let page = 1; page <= 10; page++) {
@@ -429,7 +473,7 @@ export async function newestTrackRelease(source: string, track: SelectionTrack):
   const page = typeof release.html_url === "string" && release.html_url.startsWith(`https://github.com/${owner}/${name}/releases/`) ? release.html_url : null;
   return { track, release: { tag, kind: pluginReleaseKind(tag)!, commit, url: page } };
 }
-/** A plugin repository's published releases and the commit each tag points to, read anonymously from GitHub. */
+/** A plugin repository's published releases and the commit each tag points to, read from api.github.com (see publicGitHub). */
 type ReleaseIndex = { releases: Array<{ tag_name?: unknown; draft?: unknown; prerelease?: unknown; immutable?: unknown }>; tags: Map<string, string> };
 export const releaseIndexTtlMs = 10 * 60_000;
 const releaseIndexFailureTtlMs = 60_000;
@@ -443,15 +487,15 @@ function githubRepository(source: string): { owner: string; name: string } | nul
   const [, owner, name] = url.pathname.replace(/\.git$/, "").split("/");
   return owner && name && /^[A-Za-z0-9_.-]+$/.test(owner) && /^[A-Za-z0-9_.-]+$/.test(name) ? { owner, name } : null;
 }
-async function readReleaseIndex(owner: string, name: string): Promise<ReleaseIndex | null> {
+async function readReleaseIndex(owner: string, name: string, token: string | undefined): Promise<ReleaseIndex | null> {
+  const github = publicGitHub(token);
   // Every page (bounded), so the highest version wins rather than the most recent publication.
   const pages = async (path: string): Promise<unknown[] | null> => {
     const items: unknown[] = [];
     for (let page = 1; page <= 10; page++) {
-      let response: Response;
-      try { response = await fetch(`https://api.github.com/repos/${owner}/${name}${path}?per_page=100&page=${page}`, { headers: githubHeaders(), redirect: "manual", signal: AbortSignal.timeout(4_000) }); }
-      catch { return null; }
-      if (!response.ok) return null;
+      const response = await github(`/repos/${owner}/${name}${path}?per_page=100&page=${page}`);
+      // A failure, a refusal, a cooldown or a redirect: the latest version is unavailable and retried after a minute.
+      if (!response?.ok) return null;
       const batch = await response.json().catch(() => undefined) as unknown;
       if (!Array.isArray(batch)) return null;
       items.push(...batch);
@@ -465,14 +509,14 @@ async function readReleaseIndex(owner: string, name: string): Promise<ReleaseInd
   for (const tag of tags as Array<{ name?: unknown; commit?: { sha?: unknown } }>) if (typeof tag?.name === "string" && typeof tag.commit?.sha === "string" && commitPattern.test(tag.commit.sha)) commits.set(tag.name, tag.commit.sha);
   return { releases: releases.filter((release): release is ReleaseIndex["releases"][number] => Boolean(release) && typeof release === "object"), tags: commits };
 }
-/** Cached for ten minutes per repository; a failed lookup is retried after a minute. Never throws. */
-function cachedReleaseIndex(source: string): Promise<ReleaseIndex | null> {
+/** Cached for ten minutes per repository; a failed lookup is retried after a minute. Never throws. Public data, so the cache is shared whichever credential read it. */
+function cachedReleaseIndex(source: string, token: string | undefined): Promise<ReleaseIndex | null> {
   const repository = githubRepository(source);
   if (!repository) return Promise.resolve(null);
   const key = `${repository.owner}/${repository.name}`.toLowerCase(); const now = Date.now();
   const cached = releaseIndexCache.get(key);
   if (cached && cached.expires > now) return cached.value;
-  const entry = { expires: now + releaseIndexTtlMs, value: readReleaseIndex(repository.owner, repository.name).catch(() => null) };
+  const entry = { expires: now + releaseIndexTtlMs, value: readReleaseIndex(repository.owner, repository.name, token).catch(() => null) };
   void entry.value.then((index) => { if (!index) entry.expires = Date.now() + releaseIndexFailureTtlMs; });
   releaseIndexCache.set(key, entry);
   return entry.value;
@@ -489,8 +533,8 @@ export type PluginVersionInfo = { version: string | null; latest: { tag: string;
  * Upgrade dialog chooses it (newestPluginRelease). Any failure, another host or a private repository reports
  * latestUnavailable instead of failing the status.
  */
-export async function pluginVersionInfo(source: string, commit: string, track: SelectionTrack): Promise<PluginVersionInfo> {
-  const index = await cachedReleaseIndex(source);
+export async function pluginVersionInfo(source: string, commit: string, track: SelectionTrack, env?: PluginSelectionEnv): Promise<PluginVersionInfo> {
+  const index = await cachedReleaseIndex(source, lookupToken(env));
   if (!index) return { version: null, latest: null, latestUnavailable: true, updateAvailable: false };
   const version = releaseVersionAt(index, commit);
   const newest = newestPluginRelease(index.releases, track);
@@ -500,21 +544,24 @@ export async function pluginVersionInfo(source: string, commit: string, track: S
   return { version, latest, latestUnavailable: false, updateAvailable };
 }
 /** The release tag at a commit of a plugin repository, or null when unknown or unavailable. */
-export async function pluginVersionAt(source: string | undefined, commit: string | undefined): Promise<string | null> {
+export async function pluginVersionAt(source: string | undefined, commit: string | undefined, env?: PluginSelectionEnv): Promise<string | null> {
   if (!source || !commit) return null;
-  const index = await cachedReleaseIndex(source);
+  const index = await cachedReleaseIndex(source, lookupToken(env));
   return index ? releaseVersionAt(index, commit) : null;
 }
 
-/** Admin lookup for the Upgrade dialog: { id, source, track }. Read-only; the selection credential is never used. */
-export async function lookupPluginRelease(input: Record<string, unknown>) {
+/**
+ * Admin lookup for the Upgrade dialog: { id, source, track }. Read-only. The stored selection credential, when usable, only
+ * raises GitHub's rate limit for these public reads; see newestTrackRelease.
+ */
+export async function lookupPluginRelease(input: Record<string, unknown>, env?: PluginSelectionEnv) {
   if (Object.keys(input).some((key) => !["id", "source", "track"].includes(key))) fail(400, "invalid_request", "Only the module ID, source and release track are accepted.");
   if (typeof input.id !== "string" || !moduleIdPattern.test(input.id) || input.id.length > 64) fail(400, "invalid_request", "Enter a module ID of lowercase letters, digits and single hyphens.");
   const track = readTrack(input.track) ?? fail(400, "invalid_request", "Choose the Stable or Nightly release track.");
   let source: string;
   try { source = parseModuleSource(input.source, input.id).href; }
   catch (error) { if (error instanceof SelectionError) fail(400, "invalid_request", error.message); throw error; }
-  return newestTrackRelease(source, track);
+  return newestTrackRelease(source, track, lookupToken(env));
 }
 
 export type RequiredMigration = { id: string; label: string; plugin: { source: string; commit: string } | null };

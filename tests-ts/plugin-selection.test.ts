@@ -23,15 +23,22 @@ class D1 {
   prepare(sql: string) {
     let params: unknown[] = []; const database = this;
     return { bind(...values: unknown[]) { params = values; return this; },
-      async first<T>() { return (database.sqlite.prepare(sql).get(...params as []) ?? null) as T | null; },
-      async all<T>() { return { results: database.sqlite.prepare(sql).all(...params as []) as T[] }; },
+      async first<T>() { database.count(); return (database.sqlite.prepare(sql).get(...params as []) ?? null) as T | null; },
+      async all<T>() { database.count(); return { results: database.sqlite.prepare(sql).all(...params as []) as T[] }; },
       async run() {
+        database.count();
         const before = Number(database.sqlite.prepare("SELECT total_changes() AS n").get()?.n);
         database.sqlite.prepare(sql).run(...params as []);
         return { success: true, meta: { changes: Number(database.sqlite.prepare("SELECT total_changes() AS n").get()?.n) - before } };
       } };
   }
-  async batch(statements: Array<{ run(): Promise<unknown> }>) { const results = []; for (const statement of statements) results.push(await statement.run()); return results; }
+  /** D1 subrequests: each statement run on its own, and each batch, counts once. */
+  subrequests = 0; private batching = false;
+  count() { if (!this.batching) this.subrequests++; }
+  async batch(statements: Array<{ run(): Promise<unknown> }>) {
+    this.subrequests++; this.batching = true;
+    try { const results = []; for (const statement of statements) results.push(await statement.run()); return results; } finally { this.batching = false; }
+  }
 }
 
 const secret = "A".repeat(43);
@@ -54,7 +61,7 @@ const blob = (text: string) => createHash("sha1").update(`blob ${Buffer.byteLeng
 class GitHub {
   files = new Map<string, string>();
   calls: Array<{ url: string; method: string; authorization: string | null; body?: string }> = [];
-  pluginPackage: object | number = { name: "carpool", version: "1.0.0", type: "module", lancerlogin: { moduleId: "carpool", contract: 1, core: ">=2.0.0-beta.11 <3.0.0", tablePrefix: "carpool_", entries: { manifest: "./src/manifest.ts", api: "./src/api.ts" }, migrations: "./migrations" } };
+  pluginPackage: object | number | string = { name: "carpool", version: "1.0.0", type: "module", lancerlogin: { moduleId: "carpool", contract: 1, core: ">=2.0.0-beta.11 <3.0.0", tablePrefix: "carpool_", entries: { manifest: "./src/manifest.ts", api: "./src/api.ts" }, migrations: "./migrations" } };
   conflictNextPut = false; putStatus?: number;
   /** The plugin repository's published releases, newest publication first, and what each tag resolves to. */
   releases: object[] | number = [
@@ -119,7 +126,7 @@ class GitHub {
       }
       if (path.startsWith("/repos/example/lancerlogin-carpool/contents/")) {
         assert.ok([null, `Bearer ${selectionToken}`].includes(headers.get("authorization")), "public plugin reads carry the stored selection credential or none, and only to api.github.com");
-        if (path.endsWith("/package.json")) return typeof this.pluginPackage === "number" ? new Response(null, { status: this.pluginPackage }) : Response.json(this.pluginPackage);
+        if (path.endsWith("/package.json")) return typeof this.pluginPackage === "number" ? new Response(null, { status: this.pluginPackage }) : typeof this.pluginPackage === "string" ? new Response(this.pluginPackage) : Response.json(this.pluginPackage);
         if (path.endsWith("/migrations")) return Response.json([{ type: "file", name: "0001_carpool.sql" }, { type: "file", name: "README.md" }]);
       }
       if (path === "/repos/example/private-install/actions/workflows/upgrade-web.yml") return Response.json({ state: "active", path: ".github/workflows/upgrade-web.yml", name: "Upgrade LancerLogin web (update channels v2)" });
@@ -539,6 +546,140 @@ test("an upgrade that skips a plugin's required earlier release is refused at re
     github.pluginPackage = { ...base, lancerlogin: { ...base.lancerlogin, upgradeRequiresMigrations: "0002_carpool_move.sql" } };
     const malformed = await reviewPluginChange(env, { action: "upgrade", id: "carpool", source: carpoolSource, commit: nextCommit }, installed);
     assert.equal(malformed.metadata?.state, "incompatible"); assert.match(String(malformed.metadata?.reason), /upgradeRequiresMigrations/);
+  });
+});
+
+test("committing a change stays within its subrequest budget, and a refusal for incompatibility adds none", async () => {
+  const env = environment();
+  await withGitHub(async (github) => {
+    const measure = async (run: () => Promise<unknown>) => { const before = { fetches: github.calls.length, queries: env.DB.subrequests }; await run(); return { fetches: github.calls.length - before.fetches, queries: env.DB.subrequests - before.queries }; };
+    const current = () => github.files.has("lancerlogin.modules.json") ? blob(github.files.get("lancerlogin.modules.json")!) : "0".repeat(40);
+    // Add: the repository, the selection, the allowlist, package.json, the migration names and the PUT; D1 reads the active
+    // update and the module phases, then writes the audit entry and expires prepared updates in one batch.
+    assert.deepEqual(await measure(() => commitPluginChange(env, fresh, { ...add, selectionSha: current(), trustConfirmed: true }, installed)), { fetches: 6, queries: 3 });
+    // An upgrade that declares a required earlier release also reads the module's migration ledger.
+    const base = github.pluginPackage as { lancerlogin: object };
+    github.pluginPackage = { ...base, lancerlogin: { ...base.lancerlogin, upgradeRequiresMigrations: ["0001_carpool.sql"] } };
+    assert.deepEqual(await measure(() => commitPluginChange(env, fresh, { action: "upgrade", id: "carpool", source: carpoolSource, commit: nextCommit, selectionSha: current(), trustConfirmed: true }, installed)), { fetches: 6, queries: 4 });
+    // Removal reads no plugin metadata.
+    assert.deepEqual(await measure(() => commitPluginChange(env, fresh, { action: "remove", id: "carpool", selectionSha: current() }, installed)), { fetches: 4, queries: 3 });
+  });
+});
+
+test("the Worker refuses to commit a commit whose metadata is incompatible, with the review's reason and a stable code", async () => {
+  const env = environment();
+  await withGitHub(async (github) => {
+    const base = github.pluginPackage as { lancerlogin: Record<string, unknown> };
+    const field = (changes: Record<string, unknown>) => ({ ...base, lancerlogin: { ...base.lancerlogin, ...changes } });
+    const cases: Array<[string, object | string, RegExp]> = [
+      ["module_package_invalid", "{ not json", /^The module repository's package\.json is not valid JSON\.$/],
+      ["module_metadata_missing", { name: "carpool", version: "1.0.0" }, /^The module repository's package\.json has no lancerlogin field\.$/],
+      ["module_id_mismatch", field({ moduleId: "rideshare" }), /^The repository declares module ID "rideshare", not carpool\.$/],
+      ["module_upgrade_requirements_invalid", field({ upgradeRequiresMigrations: "0002_carpool_move.sql" }), /^The module's upgradeRequiresMigrations is not a list of its own migration file names\.$/],
+      ["module_contract_unsupported", field({ contract: 99 }), /^The module needs module contract 99; this LancerLogin supports 1\.$/],
+      ["module_core_unsupported", field({ core: ">=3.0.0" }), /^The module supports LancerLogin >=3\.0\.0; this installation runs 2\.0\.0-beta\.11\.$/],
+      ["module_core_range_invalid", field({ core: "^2.0.0" }), /^Core range "\^2\.0\.0" is not supported/],
+    ];
+    for (const [code, pluginPackage, message] of cases) {
+      github.pluginPackage = pluginPackage;
+      // Review still answers, so the dialog can show the reason; the same reason and its code refuse the commit.
+      const review = await reviewPluginChange(env, add, installed);
+      assert.equal(review.metadata?.state, "incompatible", code); assert.equal(review.metadata?.code, code); assert.match(String(review.metadata?.reason), message);
+      const before = { fetches: github.calls.length, queries: env.DB.subrequests };
+      await assert.rejects(commitPluginChange(env, fresh, { ...add, selectionSha: "0".repeat(40), trustConfirmed: true }, installed), (error: { status?: number; code?: string; message?: string }) => {
+        assert.equal(error.status, 409, code); assert.equal(error.code, code); assert.equal(error.message, review.metadata?.reason);
+        return true;
+      });
+      // Refused before the migration names are read or anything is written: fewer subrequests than a commit makes.
+      assert.deepEqual({ fetches: github.calls.length - before.fetches, queries: env.DB.subrequests - before.queries }, { fetches: 4, queries: 2 }, code);
+    }
+    // A repository with several modules keeps its own refusal, at review as well.
+    github.pluginPackage = field({ moduleId: ["carpool", "rideshare"] });
+    await assert.rejects(commitPluginChange(env, fresh, { ...add, selectionSha: "0".repeat(40), trustConfirmed: true }, installed), { status: 422, code: "multiple_modules" });
+    assert.equal(github.calls.some((call) => call.method === "PUT"), false);
+    assert.equal(github.files.has("lancerlogin.modules.json"), false);
+    assert.equal(env.DB.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'module_selection.changed'").get()?.n, 0);
+  });
+});
+
+test("an incompatible module can still be kept, moved between tracks at its commit, replaced and removed", async () => {
+  const env = environment();
+  await withGitHub(async (github) => {
+    const base = github.pluginPackage as { lancerlogin: Record<string, unknown> };
+    const current = () => blob(github.files.get("lancerlogin.modules.json")!);
+    const select = (commit = pluginCommit) => github.files.set("lancerlogin.modules.json", serializeSelection({ modules: [{ id: "carpool", source: carpoolSource, commit }] }));
+    const withCarpool: InstalledPlugins = { ...installed, carpool: { source: carpoolSource, commit: pluginCommit, selected: true } };
+    select();
+    // LancerLogin was updated past the range the installed commit declares.
+    github.pluginPackage = { ...base, lancerlogin: { ...base.lancerlogin, core: ">=2.0.0-beta.1 <2.0.0-beta.5" } };
+    const trackOnly = { action: "upgrade", id: "carpool", source: carpoolSource, commit: pluginCommit, track: "nightly" };
+    assert.equal((await reviewPluginChange(env, trackOnly, withCarpool)).metadata?.code, "module_core_unsupported");
+    // Its commit is already pinned, so a release track change is not a new selection.
+    await commitPluginChange(env, fresh, { ...trackOnly, selectionSha: current(), trustConfirmed: true }, withCarpool);
+    assert.deepEqual(JSON.parse(github.files.get("lancerlogin.modules.json")!).modules, [{ id: "carpool", source: carpoolSource, commit: pluginCommit, track: "nightly" }]);
+    // Moving it to another incompatible commit is refused; nothing is written.
+    const text = github.files.get("lancerlogin.modules.json");
+    await assert.rejects(commitPluginChange(env, fresh, { action: "upgrade", id: "carpool", source: carpoolSource, commit: nextCommit, selectionSha: current(), trustConfirmed: true }, withCarpool), { status: 409, code: "module_core_unsupported" });
+    assert.equal(github.files.get("lancerlogin.modules.json"), text);
+    // A selection that pins another commit can be returned to the commit this build runs.
+    select(nextCommit);
+    await commitPluginChange(env, fresh, { action: "upgrade", id: "carpool", source: carpoolSource, commit: pluginCommit, selectionSha: current(), trustConfirmed: true }, withCarpool);
+    assert.equal(JSON.parse(github.files.get("lancerlogin.modules.json")!).modules[0].commit, pluginCommit);
+    // Removal reads no metadata, so an incompatible module can always be removed.
+    select();
+    const fetches = github.calls.length;
+    await commitPluginChange(env, fresh, { action: "remove", id: "carpool", selectionSha: current() }, withCarpool);
+    assert.deepEqual(JSON.parse(github.files.get("lancerlogin.modules.json")!).modules, []);
+    assert.equal(github.calls.slice(fetches).some((call) => call.url.includes("/lancerlogin-carpool/")), false);
+    // An official module that the selection does not pin can be pinned at the commit it runs, not at another one.
+    const official: InstalledPlugins = { "hour-tracking": { source: carpoolSource, commit: "e".repeat(40), official: true } };
+    await assert.rejects(commitPluginChange(env, fresh, { action: "upgrade", id: "hour-tracking", source: carpoolSource, commit: nextCommit, selectionSha: current(), trustConfirmed: true }, official), { code: "module_id_mismatch" });
+    await commitPluginChange(env, fresh, { action: "upgrade", id: "hour-tracking", source: carpoolSource, commit: "e".repeat(40), track: "nightly", selectionSha: current(), trustConfirmed: true }, official);
+    assert.deepEqual(JSON.parse(github.files.get("lancerlogin.modules.json")!).modules, [{ id: "hour-tracking", source: carpoolSource, commit: "e".repeat(40), track: "nightly" }]);
+    // A compatible commit replaces an incompatible one.
+    select(); github.pluginPackage = base;
+    await commitPluginChange(env, fresh, { action: "upgrade", id: "carpool", source: carpoolSource, commit: nextCommit, selectionSha: current(), trustConfirmed: true }, withCarpool);
+    assert.equal(JSON.parse(github.files.get("lancerlogin.modules.json")!).modules[0].commit, nextCommit);
+  });
+});
+
+test("metadata that cannot be read or checked here does not refuse a commit; composition checks it", async () => {
+  await withGitHub(async (github) => {
+    // GitHub fails, refuses or does not have the file: the state is unknown, as at review, and the change is committed.
+    for (const status of [404, 500, 403]) {
+      const env = environment(); github.files.delete("lancerlogin.modules.json"); github.pluginPackage = status;
+      assert.equal((await reviewPluginChange(env, add, installed)).metadata?.state, "unknown");
+      await commitPluginChange(env, fresh, { ...add, selectionSha: "0".repeat(40), trustConfirmed: true }, installed);
+      assert.equal(JSON.parse(github.files.get("lancerlogin.modules.json")!).modules[0].commit, pluginCommit, String(status));
+    }
+    // Another host is never contacted, and an installation that is not on an official release cannot check a Core range.
+    github.files.delete("lancerlogin.modules.json");
+    await commitPluginChange(environment(), fresh, { ...add, source: "https://git.example.org/example/carpool.git", selectionSha: "0".repeat(40), trustConfirmed: true }, installed);
+    github.files.delete("lancerlogin.modules.json"); github.pluginPackage = new GitHub().pluginPackage;
+    const development = { ...environment(), RELEASE_VERSION: "development" } as ReturnType<typeof environment>;
+    assert.equal((await reviewPluginChange(development, add, installed)).metadata?.state, "unknown");
+    await commitPluginChange(development, fresh, { ...add, selectionSha: "0".repeat(40), trustConfirmed: true }, installed);
+    assert.equal(JSON.parse(github.files.get("lancerlogin.modules.json")!).modules[0].commit, pluginCommit);
+  });
+});
+
+test("a beta Core satisfies the ranges the pinned official and known plugins declare, at commit as in composition", async () => {
+  // The Core ranges declared at the commits in scripts/official-modules.json and scripts/known-modules.json.
+  const declared = { "hour-tracking": ">=2.1.0-beta.7 <3.0.0", carpool: ">=2.0.0-beta.11 <3.0.0" };
+  const version = (JSON.parse(readFileSync("package.json", "utf8")) as { version: string }).version;
+  await withGitHub(async (github) => {
+    const base = github.pluginPackage as { lancerlogin: Record<string, unknown> };
+    const commitOn = (core: string, range: string) => {
+      github.files.delete("lancerlogin.modules.json"); github.pluginPackage = { ...base, lancerlogin: { ...base.lancerlogin, core: range } };
+      return commitPluginChange({ ...environment(), RELEASE_VERSION: core } as ReturnType<typeof environment>, fresh, { ...add, selectionSha: "0".repeat(40), trustConfirmed: true }, installed);
+    };
+    for (const core of [version, "2.1.0-beta.10", "2.1.0"]) for (const range of Object.values(declared)) {
+      await commitOn(core, range);
+      assert.equal(JSON.parse(github.files.get("lancerlogin.modules.json")!).modules[0].commit, pluginCommit, `${core} ${range}`);
+    }
+    // A stable upper bound still excludes that release's betas, and a beta below the lower bound is refused.
+    await assert.rejects(commitOn("3.0.0-beta.1", declared.carpool), { code: "module_core_unsupported" });
+    await assert.rejects(commitOn("2.1.0-beta.6", declared["hour-tracking"]), { code: "module_core_unsupported" });
   });
 });
 

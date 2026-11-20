@@ -4,13 +4,12 @@ import { KioskDebugTools } from "./kiosk-debug-tools";
 import { OpenWebKioskOnThisDevice } from "./kiosk-debug-web-kiosk";
 import { KioskPossibleWrongMatches } from "./kiosk-possible-wrong-matches";
 import { KioskReenrollSuggestions } from "./kiosk-reenroll-suggestions";
-import { DiscordUnmatchedRoleMembers } from "./discord-unmatched-role-members";
 import { visiblePoll } from "./visible-poll";
-import { RouteLink, usePath } from "./router";
+import { AppLink, RouteLink, usePath } from "./router";
 import "./mobile-kiosks.css";
 import "./web-kiosk-admin.css";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { api } from "./dashboard-api";
+import { api, ApiError } from "./dashboard-api";
 import { dashboardReleaseVersion } from "./hardware-pairing-key";
 import { PairKioskDialog } from "./pair-kiosk-dialog";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
@@ -20,7 +19,8 @@ import { kioskHonoursRequirePin } from "../../../packages/shared/src/release-pol
 import { useReleaseCheck } from "./use-release-check";
 import { diagnosticUrl } from "./web-update";
 import { KioskEnrollmentDialog, type EnrollmentSession } from "./kiosk-enrollment-dialog";
-import { KioskPinRequests } from "./kiosk-pin-requests";
+import { KioskPinRequests, kioskPinRequestsCardId } from "./kiosk-pin-requests";
+import { pinRequestCountText, usePinRequestCounts } from "./pin-request-counts";
 
 type Kiosk = { id: string; name: string; active: number; kind?: KioskKind; memberLookup?: MemberLookup; requirePin?: boolean; discordCode?: boolean; discordCodeBackup?: DiscordCodeBackup; lastSeenAt?: string; readerOnline?: number; authenticationMethod?: KioskAuthenticationMethod; configuredAuthenticationMethod?: KioskAuthenticationMethod; releaseVersion?: string; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string; pendingEvents?: number; lastSyncAt?: string; errorCategory?: string; scansNeedReview?: number | null; clockConfirmed?: number | null; clockPendingScans?: number | null; reviewSyncFailing?: number | null; weakMatches?: number | null; readerTemplates?: number | null; linkedTemplates?: number | null; pairedAt: string };
 type KioskCommand = "reload_display" | "restart_service" | "reboot" | "reset_network_pin" | "install_latest" | "erase_unlinked_fingerprints";
@@ -29,7 +29,7 @@ type KioskKind = "pi" | "web";
 type MemberLookup = "entry" | "search";
 // Discord code is a way of identifying at a member_id kiosk; the member lookup and Require PIN are then its backup method.
 type DiscordCodeBackup = "offline" | "always";
-type Notice = { message: string; tone: "neutral" | "success" | "error" };
+type Notice = { message: string; tone: "neutral" | "success" | "warning" | "error" };
 const authenticationMethodLabels: Record<KioskAuthenticationMethod, string> = { fingerprint: "Fingerprint", rfid: "RFID badge", nfc: "NFC badge", member_id: "Member ID entry", qr: "QR code" };
 // Member search is a lookup style of the member_id method; kiosks from before web kiosks report no kind and are Pis.
 const methodLabel = (method: KioskAuthenticationMethod, lookup?: MemberLookup, discordCode = false) => method === "member_id" && discordCode ? "Discord code" : method === "member_id" && lookup === "search" ? "Member search" : authenticationMethodLabels[method];
@@ -41,6 +41,13 @@ const identificationWarning = "Without a PIN, anyone can sign in someone else. U
 const backupWarnings: Record<DiscordCodeBackup, string> = {
   offline: "Without a PIN, the backup method lets anyone sign in someone else while the kiosk is offline. Use Require PIN for the backup method where that matters.",
   always: "Without a PIN, anyone can skip the code and sign in someone else with the backup method. Use Require PIN for the backup method, or offer the backup only when the kiosk is offline.",
+};
+// The same notices for a Pi kiosk that must be updated before Require PIN can be turned on: they say so, instead of
+// pointing at a checkbox that is disabled. They also describe that checkbox, so they are its reason for being disabled.
+const identificationWarningBlocked = "Without a PIN, anyone can sign in someone else. Update this kiosk to use Require PIN, or use a fingerprint kiosk where that matters.";
+const backupWarningsBlocked: Record<DiscordCodeBackup, string> = {
+  offline: "Without a PIN, the backup method lets anyone sign in someone else while the kiosk is offline. Update this kiosk to use Require PIN for the backup method where that matters.",
+  always: "Without a PIN, anyone can skip the code and sign in someone else with the backup method. Update this kiosk to use Require PIN for the backup method, or offer the backup only when the kiosk is offline.",
 };
 
 function formatUptime(seconds?: number) {
@@ -124,6 +131,7 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
   const [discordCodeBackup, setDiscordCodeBackup] = useState<DiscordCodeBackup>("offline");
   const [authenticationBusy, setAuthenticationBusy] = useState(false);
   const release = useReleaseCheck();
+  const pinRequests = usePinRequestCounts();
   const latestRelease = formatVersion(release.release?.tag_name);
 
   async function load({ preserveNotice = false }: { preserveNotice?: boolean } = {}) {
@@ -182,7 +190,7 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
     finally { setRenameBusy(false); }
   }
   async function retire() { if (!active || example || !window.confirm(`Retire ${active.name}? Its credential will stop working, but its history will remain.`)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}`, { method: "DELETE", body: JSON.stringify({ confirmation: "RETIRE KIOSK" }) }); setNotice({ message: "Kiosk retired. Other active kiosks continue working.", tone: "success" }); await load({ preserveNotice: true }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
-  async function command(type: KioskCommand, label: string, confirmation?: string) { if (!active || example || active.kind === "web" && !webKioskCommands.includes(type) || type === "install_latest" && (!release.fresh || release.checking || !["upgrade", "replace-development"].includes(kioskUpdateTransition(release.release, active.releaseVersion ?? ""))) || confirmation && !window.confirm(confirmation)) return; if (type === "install_latest" && kioskUpdateTransition(release.release, active.releaseVersion ?? "") === "replace-development" && !window.confirm(`Replace development build ${active.releaseVersion} with verified official release ${latestRelease}? Development-only changes may be removed.`)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}/commands`, { method: "POST", body: JSON.stringify({ command: type, ...(type === "install_latest" && kioskUpdateTransition(release.release, active.releaseVersion ?? "") === "replace-development" ? { replaceDevelopmentBuild: true } : {}) }) }); setNotice({ message: `${label} queued. The kiosk normally receives it within ${active.kind === "web" ? "ten" : "five"} seconds.`, tone: "success" }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } }
+  async function command(type: KioskCommand, label: string, confirmation?: string) { if (!active || example || active.kind === "web" && !webKioskCommands.includes(type) || type === "install_latest" && (!release.fresh || release.checking || !["upgrade", "replace-development"].includes(kioskUpdateTransition(release.release, active.releaseVersion ?? ""))) || confirmation && !window.confirm(confirmation)) return; if (type === "install_latest" && kioskUpdateTransition(release.release, active.releaseVersion ?? "") === "replace-development" && !window.confirm(`Replace development build ${active.releaseVersion} with verified official release ${latestRelease}? Development-only changes may be removed.`)) return; try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}/commands`, { method: "POST", body: JSON.stringify({ command: type, ...(type === "install_latest" && kioskUpdateTransition(release.release, active.releaseVersion ?? "") === "replace-development" ? { replaceDevelopmentBuild: true } : {}) }) }); setNotice({ message: `${label} queued. The kiosk normally receives it within ${active.kind === "web" ? "ten" : "five"} seconds.`, tone: "success" }); } catch (error) { /* A release check GitHub refused or could not answer is not a kiosk fault, so it is a warning. */ setNotice({ message: (error as Error).message, tone: error instanceof ApiError && error.code?.startsWith("kiosk_release_") ? "warning" : "error" }); } }
   async function saveAuthenticationMethod(event: FormEvent) { event.preventDefault(); if (!active || example || authenticationBusy) return; setAuthenticationBusy(true); try { await api(`/admin/kiosks/${encodeURIComponent(active.id)}/authentication-method`, { method: "PATCH", body: JSON.stringify({ authenticationMethod: web ? "member_id" : authenticationMethod, ...(authenticationMethod === "member_id" ? { memberLookup, requirePin, discordCode, ...(discordCode ? { discordCodeBackup } : {}) } : {}) }) }); setNotice({ message: `${methodLabel(authenticationMethod, memberLookup, discordCode)}${authenticationMethod === "member_id" && requirePin ? codeSelected ? " with Require PIN for the backup method" : " with Require PIN" : ""} selected for ${active.name}. It will use this method after its next sync.`, tone: "success" }); await load({ preserveNotice: true }); } catch (error) { setNotice({ message: (error as Error).message, tone: "error" }); } finally { setAuthenticationBusy(false); } }
   async function syncDiscordStatus() {
     if (example) return;
@@ -212,9 +220,12 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
         {example && <p className="ui-status" data-tone="neutral">Example kiosk for this walkthrough. No device is paired; these management controls are disabled.</p>}
         {active && !managing && <div className="kiosk-device-switcher" role="group" aria-label="Active kiosks">{(example ? [active] : activeKiosks).map((kiosk) => {
           const state = kioskHealth(kiosk);
+          // Waiting PIN requests at this kiosk, for Admins and Operators; the count links to its Manage page.
+          const waiting = !example && (role === "admin" || role === "operator") ? pinRequests.kiosks[kiosk.id] ?? 0 : 0;
           return <div className="kiosk-device-option" key={kiosk.id} data-selected={active?.id === kiosk.id ? "true" : undefined}>
             <div className="kiosk-device-row" data-walkthrough={active?.id === kiosk.id ? "kiosk-status" : undefined}>
               <button className="ui-button kiosk-device-select" type="button" disabled={example} aria-pressed={active?.id === kiosk.id} onClick={() => { setSelectedKioskId(kiosk.id); setEditing(undefined); setMaintenanceHelp(false); }}><span className="kiosk-device-name"><strong>{kiosk.name}</strong><small className="kiosk-kind">{kindLabel(kiosk)}</small></span><span className="status-pill ui-status" data-tone={state.health === "healthy" ? "success" : state.health === "degraded" ? "warning" : "error"}>{state.label}</span></button>
+              {waiting > 0 && <AppLink className="status-pill ui-status kiosk-pin-request-count" data-tone="warning" href={`/kiosks/${encodeURIComponent(kiosk.id)}/manage#${kioskPinRequestsCardId}`} navigate={navigate} aria-label={`${pinRequestCountText(waiting)} waiting at ${kiosk.name}. Open ${waiting === 1 ? "it" : "them"}.`}>{pinRequestCountText(waiting)}</AppLink>}
               {role === "admin" && <button className="ui-button kiosk-edit-button" type="button" aria-label={`Rename ${kiosk.name}`} title={`Rename ${kiosk.name}`} disabled={example || renameBusy} data-walkthrough={active?.id === kiosk.id ? "kiosk-rename" : undefined} ref={element => { editButtons.current[kiosk.id] = element; }} onClick={() => { setSelectedKioskId(kiosk.id); setName(kiosk.name); setEditing(kiosk.id); }}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m16 3 5 5-12 12-6 1 1-6Z M14 5l5 5" /></svg></button>}
             </div>
             {editing === kiosk.id && <form className="kiosk-rename-form ui-form" onSubmit={event => void rename(event)} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); cancelRename(); } }}><label htmlFor="kiosk-device-name">Device name</label><input className="ui-control" id="kiosk-device-name" ref={renameInput} required maxLength={80} value={name} disabled={renameBusy} onChange={event => setName(event.target.value)} /><div className="kiosk-rename-actions"><button className="ui-button ui-button--primary" type="submit" disabled={renameBusy}>{renameBusy ? "Saving..." : "Save name"}</button><button className="ui-button" type="button" disabled={renameBusy} onClick={cancelRename}>Cancel</button></div></form>}
@@ -238,8 +249,8 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
               {!web && saveMethodButton}
               {!web && authenticationMethod === "member_id" && <div className="kiosk-lookup-field"><label htmlFor="kiosk-member-lookup">Member lookup</label><select id="kiosk-member-lookup" className="ui-native-select" value={discordCode ? "discord_code" : memberLookup} disabled={example || authenticationBusy} onChange={(event) => { const code = event.target.value === "discord_code"; setDiscordCode(code); if (!code) setMemberLookup(event.target.value as MemberLookup); }}><option value="entry">Member ID entry</option><option value="search">Member search</option><option value="discord_code">Discord code</option></select></div>}
               {codeBackupFields}
-              {authenticationMethod === "member_id" && <label className="checkbox-field kiosk-require-pin"><input className="ui-checkbox" type="checkbox" aria-labelledby="kiosk-require-pin-label" aria-describedby={requirePinBlocked ? "kiosk-require-pin-detail kiosk-require-pin-blocked" : "kiosk-require-pin-detail"} checked={requirePin} disabled={example || authenticationBusy || requirePinBlocked} onChange={(event) => setRequirePin(event.target.checked)} /><span><strong id="kiosk-require-pin-label">{codeSelected ? "Require PIN for the backup method" : "Require PIN"}</strong><small id="kiosk-require-pin-detail">Members enter a 4 to 6 digit PIN after confirming their name.</small>{requirePinBlocked && <small id="kiosk-require-pin-blocked">Update this kiosk to turn on Require PIN.</small>}</span></label>}
-              {authenticationMethod === "member_id" && !requirePin && <div className="warning-callout">{codeSelected ? backupWarnings[discordCodeBackup] : identificationWarning}</div>}
+              {authenticationMethod === "member_id" && <label className="checkbox-field kiosk-require-pin"><input className="ui-checkbox" type="checkbox" aria-labelledby="kiosk-require-pin-label" aria-describedby={requirePinBlocked && !requirePin ? "kiosk-require-pin-detail kiosk-require-pin-warning" : "kiosk-require-pin-detail"} checked={requirePin} disabled={example || authenticationBusy || requirePinBlocked} onChange={(event) => setRequirePin(event.target.checked)} /><span><strong id="kiosk-require-pin-label">{codeSelected ? "Require PIN for the backup method" : "Require PIN"}</strong><small id="kiosk-require-pin-detail">Members enter a 4 to 6 digit PIN after confirming their name.</small></span></label>}
+              {authenticationMethod === "member_id" && !requirePin && <div className="warning-callout" id="kiosk-require-pin-warning">{codeSelected ? (requirePinBlocked ? backupWarningsBlocked : backupWarnings)[discordCodeBackup] : requirePinBlocked ? identificationWarningBlocked : identificationWarning}</div>}
               {web && saveMethodButton}
               <p>{web ? `Applies to ${active.name}. Web kiosks identify members by Discord code, member ID or member search.` : `Applies to ${active.name}. Badge and QR mappings stay local. Fingerprint recovery is in Settings.`}</p></form>
               {!web && <button type="button" disabled={example} data-walkthrough="kiosk-fingerprints" onClick={() => setMaintenanceHelp((value) => !value)}>Authentication maintenance</button>}
@@ -272,7 +283,6 @@ export function KiosksPage({ role, discordConfigured, walkthroughOpen = false, k
       <KioskFingerprintMatch />
       <KioskPossibleWrongMatches />
       <KioskReenrollSuggestions role={role} />
-      <DiscordUnmatchedRoleMembers />
     </KioskDebugTools>}
     {pairing && <PairKioskDialog onClose={() => setPairing(false)} onPaired={load} />}
     {enrolling && <KioskEnrollmentDialog kiosk={enrolling.kiosk} initial={enrolling.session} onClose={() => setEnrolling(undefined)} />}

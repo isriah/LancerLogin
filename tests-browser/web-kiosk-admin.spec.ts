@@ -214,7 +214,8 @@ test("a Pi kiosk keeps its method choice and adds the member lookup for Member I
   await expect(page.locator(".kiosk-authentication-form .warning-callout")).toHaveCount(0);
   await method.selectOption("member_id");
   await expect(page.getByLabel("Member lookup")).toHaveValue("entry");
-  await expect(page.locator(".kiosk-authentication-form .warning-callout")).toHaveText("Without a PIN, anyone can sign in someone else. Use Require PIN or a fingerprint kiosk where that matters.");
+  // This kiosk reports a release from before member PINs, so the notice says to update it instead of pointing at the disabled checkbox.
+  await expect(page.locator(".kiosk-authentication-form .warning-callout")).toHaveText("Without a PIN, anyone can sign in someone else. Update this kiosk to use Require PIN, or use a fingerprint kiosk where that matters.");
   await page.getByLabel("Member lookup").selectOption("search");
   await page.getByRole("button", { name: "Save method" }).click();
   await expect(page.getByRole("status").filter({ hasText: "selected for" })).toHaveText("Member search selected for Front desk. It will use this method after its next sync.");

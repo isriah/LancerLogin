@@ -187,12 +187,13 @@ test("portable publication snapshots validate before restore and adapt schema 35
     const id = await batchActivity(database, "2026-11-01", now);
     await outreachPublicationRoute(database, providers, "admin", request(`/admin/hours/activities/${id}/publication`, "POST"), { activityRevision: 0, publicationRevision: null, provider: "google_calendar" }, now);
     const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://synthetic.test", SESSION_KEY: "A".repeat(43), DB: database } as unknown as Env;
-    const session = await createSessionCodec("A".repeat(43)).issue({ userId: "admin", role: "admin" }); const cookie = `lancerlogin_session=${session}`;
+    const session = await createSessionCodec("A".repeat(43)).issue({ userId: "admin", role: "admin" }); let cookie = `lancerlogin_session=${session}`;
     const result = await worker.fetch(new Request("https://synthetic.test/admin/data/backup?scope=installation", { headers: { cookie } }), env); assert.equal(result.status, 200, await result.clone().text());
     const backup = await result.json() as { schemaVersion: number; tables: Record<string, Array<Record<string, unknown>>> };
     // Outreach rows travel in the Outreach plugin section; older schemas below carry them in Core's section, as first-party Outreach exported them.
     assert.equal(backup.schemaVersion, 52); const snapshot = JSON.parse(String(pluginSectionTables(backup, "hour-tracking")!.hours_publication_operations![0]!.event_snapshot_json)); assert.equal(snapshot.allDay, true);
-    const restore = (value: unknown) => worker.fetch(new Request("https://synthetic.test/admin/data/restore", { method: "POST", headers: { cookie, origin: "https://synthetic.test", "content-type": "application/json" }, body: JSON.stringify({ scope: "installation", confirmation: "RESTORE INSTALLATION", backup: value }) }), env);
+    // An installation restore ends every earlier session and sets the restoring Admin's new cookie, as a browser keeps it.
+    const restore = async (value: unknown) => { const restored = await worker.fetch(new Request("https://synthetic.test/admin/data/restore", { method: "POST", headers: { cookie, origin: "https://synthetic.test", "content-type": "application/json" }, body: JSON.stringify({ scope: "installation", confirmation: "RESTORE INSTALLATION", backup: value }) }), env); cookie = restored.headers.get("set-cookie")?.split(";")[0] ?? cookie; return restored; };
     const corrupted = structuredClone(backup); pluginSectionTables(corrupted, "hour-tracking")!.hours_publication_operations![0]!.event_snapshot_json = JSON.stringify({ ...snapshot, activityId: "unrelated" });
     const rejected = await restore(corrupted); assert.equal(rejected.status, 400, await rejected.clone().text()); assert.match(await rejected.text(), /publication snapshots/); assert.equal(database.sqlite.prepare("SELECT status FROM hours_publication_operations WHERE activity_id=?").get(id)?.status, "pending");
     const currentRestore = await restore(backup); assert.equal(currentRestore.status, 200, await currentRestore.clone().text());

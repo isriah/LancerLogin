@@ -1,5 +1,5 @@
 import { createModuleRegistry, firstPartyModules, requiredModuleIds, type ModuleDefinition } from "../../../packages/shared/src/module-platform.ts";
-import type { D1Database, D1Statement } from "./d1-usage.ts";
+import type { D1Database, D1Result, D1Statement } from "./d1-usage.ts";
 import { HttpError } from "./http-error.ts";
 import { externalModuleIds, type ApiModuleContribution, type ModuleBackupAdapter, type ModuleBackupRestoreContext, type ModuleBackupTables } from "./module-contributions.ts";
 
@@ -17,7 +17,6 @@ export type ExternalBackupModule = {
   readonly definition: ModuleDefinition;
   readonly adapter?: ModuleBackupAdapter;
 };
-export type ExternalModuleSource = { readonly source: string | null; readonly commit: string | null };
 export type ExternalModuleBackupEntry = {
   readonly id: string;
   readonly label: string;
@@ -72,22 +71,29 @@ export function externalBackupModules(registry: { readonly modules: readonly Mod
   }));
 }
 
-/** The plugin's git source and pinned commit as recorded in the installed-module catalog, or null before the first reconciliation. */
-export async function installedExternalModuleSource(db: D1Database, moduleId: string): Promise<ExternalModuleSource> {
-  const row = await db.prepare("SELECT source,source_commit AS sourceCommit FROM platform_module_catalog WHERE installation_id='primary' AND module_id=?").bind(moduleId).first<{ source: string | null; sourceCommit: string | null }>();
-  return { source: row?.source ?? null, commit: row?.sourceCommit ?? null };
-}
-
-/** The `externalModules` section of an entire-installation backup. Every installed external module has an entry. */
-export async function exportExternalModules(db: D1Database, modules: readonly ExternalBackupModule[], source = installedExternalModuleSource) {
-  return Promise.all(modules.map(async ({ definition, adapter }) => {
-    const tables = Object.fromEntries(await Promise.all(Object.entries(adapter?.tables ?? {}).map(async ([table, columns]) => {
-      const result = await db.prepare(`SELECT ${columns.join(", ")} FROM ${table} WHERE installation_id = 'primary'`).all<Row>();
-      return [table, result.results ?? []] as const;
-    })));
-    const recorded = await source(db, definition.id);
-    return { id: definition.id, label: definition.label, contractVersion: definition.contractVersion, backupVersion: definition.backup.version, source: recorded.source, commit: recorded.commit, tables };
-  }));
+/**
+ * The reads for the `externalModules` section of an entire-installation backup, and the section built from their results.
+ * The caller sends `statements` in the batch that reads Core's tables, so plugin rows belong to the same snapshot and the
+ * backup makes one D1 query however many plugins and tables are installed. Every installed external module has an entry.
+ */
+export function externalModuleExport(db: D1Database, modules: readonly ExternalBackupModule[]) {
+  const tables = modules.flatMap(({ definition, adapter }) => Object.entries(adapter?.tables ?? {}).map(([table, columns]) => ({ id: definition.id, table, columns })));
+  const statements: D1Statement[] = [
+    ...tables.map(({ table, columns }) => db.prepare(`SELECT ${columns.join(", ")} FROM ${table} WHERE installation_id = 'primary'`)),
+    // Each plugin's git source and pinned commit as the installed-module catalog records them; absent before the first reconciliation.
+    ...(modules.length ? [db.prepare("SELECT module_id AS moduleId,source,source_commit AS sourceCommit FROM platform_module_catalog WHERE installation_id='primary'")] : []),
+  ];
+  return {
+    statements,
+    section(results: readonly D1Result[]) {
+      const recorded = new Map(((results[tables.length]?.results ?? []) as { moduleId: string; source: string | null; sourceCommit: string | null }[]).map((row) => [row.moduleId, row]));
+      return modules.map(({ definition }) => {
+        const source = recorded.get(definition.id);
+        return { id: definition.id, label: definition.label, contractVersion: definition.contractVersion, backupVersion: definition.backup.version, source: source?.source ?? null, commit: source?.sourceCommit ?? null,
+          tables: Object.fromEntries(tables.flatMap((entry, index) => entry.id === definition.id ? [[entry.table, (results[index]?.results ?? []) as Row[]] as const] : [])) };
+      });
+    },
+  };
 }
 
 /**
@@ -260,7 +266,25 @@ export function freshExternalModuleStatements(db: D1Database, modules: readonly 
   ]);
 }
 
+/** D1 accepts at most 100 bound parameters in one statement. */
+const maxBoundParameters = 100;
+/**
+ * INSERT statements for `rows`, each carrying as many rows as fit in D1's bound-parameter limit. A restore of tens of
+ * thousands of records then builds, wraps and sends a fraction of the statements one INSERT per row would, which is most of
+ * the Worker CPU a restore spends after parsing the file. `suffix` is an optional conflict clause.
+ */
+export function insertRowsStatements(db: D1Database, table: string, columns: readonly string[], rows: readonly Row[], suffix = ""): D1Statement[] {
+  const perStatement = Math.max(1, Math.floor(maxBoundParameters / columns.length)); const tuple = `(${columns.map(() => "?").join(", ")})`;
+  const sql = (count: number) => `INSERT INTO ${table} (${columns.join(", ")}) VALUES ${Array.from({ length: count }, () => tuple).join(", ")}${suffix}`;
+  const full = rows.length >= perStatement ? sql(perStatement) : ""; const statements: D1Statement[] = [];
+  for (let start = 0; start < rows.length; start += perStatement) {
+    const end = Math.min(start + perStatement, rows.length); const values: unknown[] = [];
+    for (let index = start; index < end; index++) { const row = rows[index]!; for (const column of columns) values.push(row[column]); }
+    statements.push(db.prepare(end - start === perStatement ? full : sql(end - start)).bind(...values));
+  }
+  return statements;
+}
+
 export function insertExternalModuleStatements(db: D1Database, modules: readonly PreparedExternalModule[]): D1Statement[] {
-  return modules.flatMap(({ module, tables }) => Object.entries(module.adapter?.tables ?? {}).flatMap(([table, columns]) => (tables[table] ?? []).map((row) =>
-    db.prepare(`INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`).bind(...columns.map((column) => row[column])))));
+  return modules.flatMap(({ module, tables }) => Object.entries(module.adapter?.tables ?? {}).flatMap(([table, columns]) => insertRowsStatements(db, table, columns, tables[table] ?? [])));
 }

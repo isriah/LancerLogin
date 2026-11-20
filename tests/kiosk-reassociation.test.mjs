@@ -172,8 +172,10 @@ test("scanner pause waits for the current scan to be durably queued", async () =
 async function runtime(t, { pending = false } = {}) {
   const { root, pinPath, cleanup } = await fixture(t);
   await createNetworkPinStore(pinPath).set("123456");
+  const pairings = [];
   const cloud = createServer(async (request, response) => {
     response.setHeader("content-type", "application/json");
+    if (request.url === "/kiosk/pair") { let text = ""; for await (const chunk of request) text += chunk; pairings.push(JSON.parse(text)); }
     if (request.url === "/kiosk/pair") response.end(JSON.stringify({ kioskId: "synthetic-new-kiosk", pairingId: "synthetic-new-pairing", kioskToken: "synthetic-new-token", name: "New installation" }));
     else if (request.url === "/kiosk/roster") response.end(JSON.stringify({ members: [{ memberId: "synthetic-new-member", firstName: "New", lastName: "Member", rosterId: "synthetic-new-identity" }] }));
     else response.end(JSON.stringify({ settings: {} }));
@@ -185,7 +187,7 @@ async function runtime(t, { pending = false } = {}) {
   await writeFile(join(root, "roster-cache.json"), JSON.stringify({ version: 1, members: [{ memberId: "synthetic-old-member" }] }), { mode: 0o600 });
   const queue = createFileQueue(join(root, "attendance-queue.json"));
   if (pending) await queue.enqueue({ eventId: "synthetic-pending", memberId: "synthetic-member", occurredAt: new Date().toISOString(), pairingId: "synthetic-old-pairing" });
-  const env = { ...process.env, NODE_ENV: "test", LANCERLOGIN_SENSOR_PATH: "disabled" };
+  const env = { ...process.env, NODE_ENV: "test", LANCERLOGIN_SENSOR_PATH: "disabled", LANCERLOGIN_VERSION: "2.1.0-beta.10" };
   for (const [key, name] of Object.entries({ CONFIG: "pairing.json", NETWORK_PIN: "network-pin.json", QUEUE: "attendance-queue.json", MAPPINGS: "slot-mappings.json", BRANDING: "branding.json", AUTHENTICATION: "authentication.json", CREDENTIAL_MAPPINGS: "credential-mappings.json", ROSTER_CACHE: "roster-cache.json", FINGERPRINT_SYNC: "fingerprint-sync", FINGERPRINT_VAULT: "fingerprint-vault", FINGERPRINT_RESET: "fingerprint-reset", FINGERPRINT_REVIEW: "fingerprint-review" })) env[`LANCERLOGIN_${key}`] = join(root, name);
   async function start() {
     const child = spawn(process.execPath, ["--input-type=module", "--eval", `import { server } from ${JSON.stringify(new URL("../apps/kiosk/src/service.mjs", import.meta.url).href)}; server.listen(0,"127.0.0.1",()=>console.log(server.address().port));`], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -197,11 +199,11 @@ async function runtime(t, { pending = false } = {}) {
     const request = (path, method = "GET", input, headers = {}) => fetch(url + path, { method, ...(input ? { body: JSON.stringify(input) } : {}), headers: { "content-type": "application/json", ...headers }, signal: AbortSignal.timeout(10000) });
     return { child, url, request };
   }
-  return { root, apiUrl, start };
+  return { root, apiUrl, start, pairings };
 }
 
 test("runtime unpair requires local authorization and confirmation, restarts, then pairs without old caches", { timeout: 20000 }, async t => {
-  const { root, apiUrl, start } = await runtime(t);
+  const { root, apiUrl, start, pairings } = await runtime(t);
   const old = await start();
   assert.equal((await old.request("/maintenance/unpair", "POST", { confirmation: "UNPAIR" })).status, 403);
   assert.equal((await old.request("/network/unlock", "POST", { pin: "999999" })).status, 401);
@@ -221,13 +223,16 @@ test("runtime unpair requires local authorization and confirmation, restarts, th
   const fresh = await start();
   const health = await (await fresh.request("/health")).json();
   assert.equal(health.paired, false); assert.equal(health.setupReady, true); assert.equal(health.pendingEvents, 0);
-  assert.equal((await fresh.request("/attendance", "POST", { memberId: "synthetic-member" })).status, 400);
+  // The loopback service has no direct attendance route: a scan is recorded only through the identity flow.
+  assert.equal((await fresh.request("/attendance", "POST", { eventId: "synthetic-direct", memberId: "synthetic-member" })).status, 404);
   assert.equal((await fresh.request("/identity", "POST", { memberId: "synthetic-member" })).status, 400);
   assert.equal((await fresh.request("/maintenance/pairing")).status, 403);
   assert.equal((await fresh.request("/network/unlock", "POST", { pin: "123456" })).status, 200);
   const pairingKey = "LL1." + Buffer.from(JSON.stringify({ apiUrl, code: "SYNTHETIC", kioskName: "New installation" })).toString("base64url");
   const paired = await fresh.request("/pair", "POST", { pairingKey });
   assert.equal(paired.status, 201);
+  // The kiosk states its release when it pairs, so the installation knows it before the first heartbeat.
+  assert.deepEqual(pairings, [{ code: "SYNTHETIC", kioskName: "New installation", releaseVersion: "2.1.0-beta.10" }]);
   assert.equal(JSON.parse(await readFile(join(root, "pairing.json"), "utf8")).pairingId, "synthetic-new-pairing");
   assert.deepEqual((await (await fresh.request("/mappings")).json()).mappings, {});
   assert.deepEqual((await (await fresh.request("/credential-mappings")).json()).mappings, []);
@@ -252,7 +257,7 @@ test("runtime starts fail-closed after interruption and requires local confirmat
   const kiosk = await start();
   const health = await (await kiosk.request("/health")).json();
   assert.equal(health.paired, false); assert.equal(health.setupReady, false);
-  for (const [path, method] of [["/pair", "POST"], ["/attendance", "POST"], ["/identity", "POST"], ["/mappings", "GET"], ["/fingerprint-sync", "PATCH"]]) assert.equal((await kiosk.request(path, method, method === "POST" || method === "PATCH" ? {} : undefined)).status, 409);
+  for (const [path, method] of [["/pair", "POST"], ["/identity", "POST"], ["/mappings", "GET"], ["/fingerprint-sync", "PATCH"]]) assert.equal((await kiosk.request(path, method, method === "POST" || method === "PATCH" ? {} : undefined)).status, 409);
   assert.equal((await kiosk.request("/maintenance/unpair", "POST", { confirmation: "UNPAIR" })).status, 403);
   await kiosk.request("/network/unlock", "POST", { pin: "123456" });
   assert.equal((await (await kiosk.request("/maintenance/pairing")).json()).recoveryPending, true);

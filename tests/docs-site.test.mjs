@@ -83,8 +83,8 @@ test("each guide shows the real screenshots for its steps", async () => {
   const expected = {
     "setup.html": ["github-template-create-repo", "github-environment-create", "cloudflare-token-chooser", "cloudflare-token-start-from-scratch", "cloudflare-token-review", "cloudflare-account-id", "github-environment-secret", "github-environment-secrets", "github-run-workflow", "github-workflow-summary", "google-oauth-client"],
     "first-run.html": ["first-run-create-installation", "first-run-choose-modules", "first-run-attendance-setup", "first-run-roster-step", "first-run-input-step", "first-run-attendance-ready"],
-    "kiosk.html": ["kiosk-add-kiosk-dialog", "kiosk-pairing-page", "kiosk-attendance-screen", "r503-uart-pinout"],
-    "operations.html": ["settings-integrations"],
+    "kiosk.html": ["kiosk-add-kiosk-dialog", "kiosk-pairing-page", "kiosk-attendance-screen", "r503-uart-pinout", "kiosk-rejected-scans", "kiosk-add-web-kiosk-dialog", "web-kiosk-start", "kiosk-identification-discord-code", "web-kiosk-too-early"],
+    "operations.html": ["settings-integrations", "settings-labels-discord-roles", "kiosks-pin-requests", "pin-requests-dialog"],
     "updates.html": ["github-fine-grained-token", "github-fine-grained-token-permissions"],
   };
   for (const [page, images] of Object.entries(expected)) {
@@ -145,6 +145,12 @@ test("troubleshooting lists every installer error code", async () => {
   const codes = new Set([...workflow.matchAll(/::error title=([a-z_]+)::/g)].map((match) => match[1]).filter((code) => code !== "dispatch_credential_expiry_required"));
   assert.ok(codes.size > 15);
   for (const code of codes) assert.match(troubleshooting, new RegExp(`<code>${code}</code>`), `troubleshooting.html should explain ${code}`);
+  // The optional update token's codes are passed to the annotation as arguments, so the pattern above does not find them.
+  for (const code of [...workflow.matchAll(/skip_token ([a-z_]+) "/g)].map((match) => match[1]).filter((code) => code !== "dispatch_credential_expiry_required")) assert.match(troubleshooting, new RegExp(`<code>${code}</code>`), `troubleshooting.html should explain ${code}`);
+  assert.match(workflow, /skip_token dispatch_credential_rejected "/);
+  // An unusable optional token is a warning for resume and upgrade, and the tokenless update path says so.
+  assert.match(troubleshooting, /For <code>resume<\/code> and <code>upgrade<\/code> this is a warning, not a failure: the run continues as if the token were not set/);
+  assert.match(await read("updates.html"), /An expired token does not block this path\..*You do not need a new token for every update/s);
   const setup = await read("setup.html");
   assert.match(setup, /"Write" here/);
   assert.match(setup, /<code>workers\.dev<\/code> subdomain/);
@@ -172,7 +178,7 @@ test("operations guide matches the current navigation and recovery paths", async
   assert.match(operations, /spreadsheet formulas as text/);
   assert.match(operations, /id="discord-commands"/);
   assert.match(operations, /No manual HTTP request or command payload is required/);
-  assert.match(operations, /creates or updates exactly the guild-scoped <code>\/pair<\/code>, <code>\/attendance-report<\/code>, <code>\/code<\/code>, <code>\/label<\/code>, <code>\/outreach-submit<\/code>, and <code>\/outreach-correction<\/code> commands/);
+  assert.match(operations, /creates or updates exactly the guild-scoped <code>\/pair<\/code>, <code>\/attendance-report<\/code>, <code>\/code<\/code>, and <code>\/label<\/code> commands, plus the commands each installed plugin declares: Outreach adds <code>\/outreach-submit<\/code> and <code>\/outreach-correction<\/code>\./);
   assert.match(operations, /<code>\/code<\/code> gives the member a one-time code to sign in at a kiosk that takes Discord codes\./);
   assert.doesNotMatch(operations, /POST \/applications|"name": "member-id"/);
   assert.match(operations, /ephemeral responses/);
@@ -193,6 +199,17 @@ test("update guide gives one dashboard procedure and separate kiosk and plugin s
   assert.match(updates, /<strong>Actions<\/strong> to <strong>Read and write<\/strong>/);
   assert.match(updates, /Refresh web update credential/);
   assert.match(updates, /operation <code>upgrade<\/code>/);
+  // The token is optional on both tracks: the installation workflow installs a beta too, for an installation on the Beta track.
+  const manual = updates.slice(updates.indexOf('id="manual-update"'), updates.indexOf('id="kiosk-updates"'));
+  assert.match(manual, /<code>latest stable<\/code>, or <code>latest beta<\/code> if your installation is on the <a href="#tracks">Beta track<\/a>/);
+  assert.match(manual, /Choose the Beta track first/);
+  assert.match(manual, /href="#repository-files-by-hand"/);
+  assert.match(manual, /never installs an older release/);
+  assert.match(updates, /id="repository-files-by-hand"/);
+  // Expiry advice: a long expiration, not a short one that has to be replaced for every update.
+  assert.match(updates, /choose a long expiration, such as one year/);
+  assert.match(updates, /docs\.github\.com\/en\/authentication\/keeping-your-account-and-data-secure\/managing-your-personal-access-tokens/);
+  assert.doesNotMatch(updates, /Choose an expiration,|a 7-day expiration,/);
   assert.match(updates, /id="kiosk-updates"/);
   assert.match(updates, /Update kiosk/);
   assert.match(updates, /switches back to the previous release/);

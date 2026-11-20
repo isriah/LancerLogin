@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { countText, hoursMinutesAsMinutes, installationToday, lastMonthRange, latestTrendPoints, minutesAsHoursMinutes, reportColumnFilterText, reportExportFilename, reportFilterValueText, reportPeriodChoice, reportPeriodFromChoice } from "../apps/dashboard/src/report-view.ts";
+import { countText, hoursMinutesAsMinutes, installationToday, lastMonthRange, latestTrendPoints, leaderboardDateLimits, leaderboardDateProblem, minutesAsHoursMinutes, reportColumnFilterText, reportExportFilename, reportFilterValueText, reportPeriodChoice, reportPeriodFromChoice } from "../apps/dashboard/src/report-view.ts";
 
 test("a report's today is the installation's date, not the UTC date", () => {
   // Regression: 8:30 PM in New York on November 3 is already November 4 in UTC, so a new custom range started tomorrow.
@@ -108,7 +108,7 @@ test("report and leaderboard counts use the shared singular-aware helper", async
   const page = await readFile(new URL("../apps/dashboard/src/reports-page.tsx", import.meta.url), "utf8");
   const table = await readFile(new URL("../apps/dashboard/src/report-result-table.tsx", import.meta.url), "utf8");
   assert.match(page, /countText\(visibleResult\.pagination\.totalRows, "matching row"\)/);
-  assert.match(page, /countText\(report\?\.pagination\.totalRows \?\? 0, "member"\)/);
+  assert.match(page, /countText\(shown\?\.pagination\.totalRows \?\? 0, "member"\)/);
   assert.doesNotMatch(page, /" matching rows"|\} members<\/span>/);
   assert.match(table, /countText\(count, "column"\)/);
 });
@@ -119,4 +119,36 @@ test("InfoTip content is always start-aligned, even inside right-aligned report 
   const rule = css.match(/^\.info-tip-content \{([^}]*)\}/m)?.[1] ?? "";
   assert.match(rule, /text-align: start;/);
   assert.match(rule, /white-space: normal;/);
+});
+
+test("a Leaderboard To date before the attendance baseline is explained instead of requested", () => {
+  // Regression: From is locked to the baseline, so an earlier To was sent and came back as "Report dates must be valid and in order".
+  const baseline = "2026-08-24";
+  assert.deepEqual(leaderboardDateProblem({ useBaseline: true, baseline, from: "", to: "2026-08-01" }), { kind: "to-before-baseline", to: "2026-08-01", baseline });
+  assert.deepEqual(leaderboardDateProblem({ useBaseline: true, baseline, from: "", to: "2026-08-23" }), { kind: "to-before-baseline", to: "2026-08-23", baseline });
+  assert.equal(leaderboardDateProblem({ useBaseline: true, baseline, from: "", to: "2026-08-24" }), undefined);
+  assert.equal(leaderboardDateProblem({ useBaseline: true, baseline, from: "", to: "2026-11-19" }), undefined);
+  assert.equal(leaderboardDateProblem({ useBaseline: true, baseline, from: "", to: "" }), undefined);
+  // The fixed From field is ignored while the baseline is the period, and no baseline means nothing to be before.
+  assert.equal(leaderboardDateProblem({ useBaseline: true, baseline, from: "2026-12-01", to: "2026-09-01" }), undefined);
+  assert.equal(leaderboardDateProblem({ useBaseline: true, baseline: "", from: "", to: "2026-08-01" }), undefined);
+});
+
+test("Leaderboard fixed dates with From after To are explained, and blank or equal dates are fine", () => {
+  assert.deepEqual(leaderboardDateProblem({ useBaseline: false, baseline: "2026-08-24", from: "2026-10-10", to: "2026-10-01" }), { kind: "from-after-to", from: "2026-10-10", to: "2026-10-01" });
+  assert.equal(leaderboardDateProblem({ useBaseline: false, baseline: "2026-08-24", from: "2026-10-01", to: "2026-10-01" }), undefined);
+  assert.equal(leaderboardDateProblem({ useBaseline: false, baseline: "2026-08-24", from: "2026-10-01", to: "2026-10-31" }), undefined);
+  assert.equal(leaderboardDateProblem({ useBaseline: false, baseline: "2026-08-24", from: "2026-10-10", to: "" }), undefined);
+  assert.equal(leaderboardDateProblem({ useBaseline: false, baseline: "2026-08-24", from: "", to: "2026-10-01" }), undefined);
+  // With fixed dates the baseline doesn't limit To: a future or later baseline is not applied (all history).
+  assert.equal(leaderboardDateProblem({ useBaseline: false, baseline: "2027-01-04", from: "", to: "2026-10-01" }), undefined);
+});
+
+test("the Leaderboard's date pickers stop at the baseline, or at each other with fixed dates", () => {
+  assert.deepEqual(leaderboardDateLimits({ useBaseline: true, baseline: "2026-08-24", from: "2026-10-10", to: "2026-10-01" }), { toMin: "2026-08-24" });
+  assert.deepEqual(leaderboardDateLimits({ useBaseline: true, baseline: "", from: "", to: "" }), {});
+  assert.deepEqual(leaderboardDateLimits({ useBaseline: false, baseline: "2026-08-24", from: "2026-10-10", to: "2026-10-31" }), { toMin: "2026-10-10", fromMax: "2026-10-31" });
+  assert.deepEqual(leaderboardDateLimits({ useBaseline: false, baseline: "2026-08-24", from: "2026-10-10", to: "" }), { toMin: "2026-10-10" });
+  assert.deepEqual(leaderboardDateLimits({ useBaseline: false, baseline: "2026-08-24", from: "", to: "2026-10-31" }), { fromMax: "2026-10-31" });
+  assert.deepEqual(leaderboardDateLimits({ useBaseline: false, baseline: "2027-01-04", from: "", to: "" }), {});
 });

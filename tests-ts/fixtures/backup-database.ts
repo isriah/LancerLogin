@@ -14,24 +14,40 @@ export const backupSeed = () => new InstallationSeed("2026-01-01T00:00:00.000Z",
 
 export class BackupDatabase extends TestD1Database {
   batches = 0;
+  /** Batches holding at least one statement that is not a read. A backup reads its tables in a batch and writes nothing. */
+  writeBatches = 0;
   // D1 records every applied Core migration in d1_migrations; module reconciliation reads it to accept adopted baselines.
   constructor() { super({ recordMigrations: true, seed: backupSeed() }); }
   get raw() { return this.sqlite; }
-  override async batch(statements: Parameters<TestD1Database["batch"]>[0]) { this.batches += 1; return super.batch(statements); }
+  override async batch(statements: Parameters<TestD1Database["batch"]>[0]) {
+    this.batches += 1;
+    if (statements.some((statement) => !(statement as { sql?: string }).sql?.trimStart().toUpperCase().startsWith("SELECT"))) this.writeBatches += 1;
+    return super.batch(statements);
+  }
   rows<T = Record<string, unknown>>(sql: string, ...values: unknown[]) { return this.raw.prepare(sql).all(...values as never[]).map((row) => ({ ...row })) as T[]; }
   count(sql: string, ...values: unknown[]) { return Number((this.raw.prepare(sql).get(...values as never[]) as { n: number }).n); }
 }
 
 type Fetcher = { fetch(request: Request, env: unknown): Promise<Response> };
+/** The session cookie a response sets (an installation restore replaces the restoring Admin's), as a browser would send it back. */
+export function restoredSessionCookie(response: Response): string | undefined {
+  const cookie = response.headers.get("set-cookie")?.split(";")[0];
+  return cookie?.startsWith("lancerlogin_session=") && cookie.length > "lancerlogin_session=".length ? cookie : undefined;
+}
 export function backupClient(worker: Fetcher, db: BackupDatabase) {
   const env = { DB: db, SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, APP_MODE: "configured" };
   // A Worker isolate reconciles installed modules before its first request. Serve that request up front so the batch
   // count measures only writes made by the requests under test.
   let started: Promise<void> | undefined;
+  // As a browser does, keep the session cookie a response sets: an installation restore ends every earlier session and
+  // gives the restoring Admin a cookie for the new session epoch.
+  let session: string | undefined;
   const call = async (path: string, body?: unknown) => {
-    await (started ??= worker.fetch(new Request("https://fixture.test/health"), env).then(() => { db.batches = 0; }));
-    const cookie = "lancerlogin_session=" + await createSessionCodec(sessionSecret).issue({ userId: "admin", role: "admin" });
-    return worker.fetch(new Request("https://fixture.test" + path, { method: body ? "POST" : "GET", headers: { cookie, ...(body ? { "content-type": "application/json" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
+    await (started ??= worker.fetch(new Request("https://fixture.test/health"), env).then(() => { db.batches = 0; db.writeBatches = 0; }));
+    const cookie = session ?? "lancerlogin_session=" + await createSessionCodec(sessionSecret).issue({ userId: "admin", role: "admin" });
+    const result = await worker.fetch(new Request("https://fixture.test" + path, { method: body ? "POST" : "GET", headers: { cookie, ...(body ? { "content-type": "application/json" } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }), env);
+    session = restoredSessionCookie(result) ?? session;
+    return result;
   };
   return {
     call,

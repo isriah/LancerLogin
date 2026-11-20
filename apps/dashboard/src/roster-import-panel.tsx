@@ -1,7 +1,7 @@
 import { type ChangeEvent, useMemo, useRef, useState } from "react";
 import { api } from "./dashboard-api";
 import { downloadCsvTemplate } from "./csv-import.ts";
-import { useModalFocus } from "./modal-focus";
+import { useFocusAfterRender, useModalFocus } from "./modal-focus";
 import { parseRosterText, rosterFieldHelp, rosterFieldLabels, rosterTemplateCsv, type RosterField, type RosterRecord } from "./roster-csv";
 import type { RosterMember } from "./user-settings";
 
@@ -18,6 +18,7 @@ export function RosterImportPanel({ members, onImported, open, onClose, embedded
   const [csv, setCsv] = useState(""); const [sourceName, setSourceName] = useState(""); const [readingFile, setReadingFile] = useState(false); const [mode, setMode] = useState<"merge" | "replace">("merge"); const [preview, setPreview] = useState<PreviewRow[]>(); const [incoming, setIncoming] = useState<IncomingMember[]>([]); const [errors, setErrors] = useState<string[]>([]); const [warnings, setWarnings] = useState<string[]>([]); const [recognised, setRecognised] = useState<RosterField[]>([]); const [busy, setBusy] = useState(false); const dialog = useRef<HTMLDivElement>(null); const fileInput = useRef<HTMLInputElement>(null);
   const existing = useMemo(() => new Map(members.map((member) => [member.memberId, member])), [members]);
 
+  const focusAfterRender = useFocusAfterRender();
   useModalFocus(dialog, modal && visible, busy, () => { if (preview) setPreview(undefined); else onClose?.(); });
 
   function close() { if (busy) return; setPreview(undefined); setErrors([]); setWarnings([]); onClose?.(); }
@@ -47,7 +48,7 @@ export function RosterImportPanel({ members, onImported, open, onClose, embedded
     if (!values.length && !(parsed.hasHeader && parsed.errors.length)) nextErrors.push("Add at least one roster row.");
     if (values.length > 500) nextErrors.push("Import no more than 500 roster members at a time.");
     setErrors(nextErrors); setWarnings(nextWarnings); setRecognised(parsed.recognised);
-    if (nextErrors.length) { window.requestAnimationFrame(() => document.getElementById("roster-import-errors")?.focus()); return; }
+    if (nextErrors.length) { focusAfterRender("roster-import-errors"); return; }
     const rows: PreviewRow[] = values.map((member) => { const current = existing.get(member.memberId); const unchanged = current && current.firstName === member.firstName && current.lastName === member.lastName && (current.email ?? "") === (member.email ?? "") && (current.discordUserId ?? "") === (member.discordUserId ?? "") && Boolean(current.active); return { ...member, status: !current ? "Add" : unchanged ? "Unchanged" : "Update" }; });
     if (mode === "replace") for (const member of members.filter((item) => item.active && !seen.has(item.memberId))) rows.push({ memberId: member.memberId, firstName: member.firstName, lastName: member.lastName, email: member.email, discordUserId: member.discordUserId, status: "Deactivate", accountLinked: Boolean(member.hasDashboardAccess) });
     setIncoming(values); setPreview(rows); window.requestAnimationFrame(() => dialog.current?.focus());
@@ -55,7 +56,7 @@ export function RosterImportPanel({ members, onImported, open, onClose, embedded
   async function confirm() {
     setBusy(true);
     try { const result = await api<{ warnings?: string[] }>("/admin/members", { method: "POST", body: JSON.stringify({ members: incoming, mode }) }); await onImported(); setWarnings(result.warnings ?? []); setPreview(undefined); if (modal) onClose?.(); }
-    catch (error) { setErrors([(error as Error).message]); setPreview(undefined); window.requestAnimationFrame(() => document.getElementById("roster-import-errors")?.focus()); }
+    catch (error) { setErrors([(error as Error).message]); setPreview(undefined); focusAfterRender("roster-import-errors"); }
     finally { setBusy(false); }
   }
 

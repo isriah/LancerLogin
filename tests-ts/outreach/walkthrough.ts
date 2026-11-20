@@ -43,21 +43,24 @@ class Database {
   }
   prepare(sql: string) {
     let values: unknown[] = []; const db = this.sqlite;
-    return { bind(...next: unknown[]) { values = next; return this; },
+    return { sql, bind(...next: unknown[]) { values = next; return this; },
       async first() { return db.prepare(sql).get(...values as []) ?? null; },
       async all() { return { results: db.prepare(sql).all(...values as []) }; },
       async run() { return { success: true, meta: { changes: Number(db.prepare(sql).run(...values as []).changes) } }; } };
   }
-  async batch(statements: { run(): Promise<unknown> }[]) {
+  // As in D1, a read inside a batch returns its rows.
+  async batch(statements: { sql: string; all(): Promise<unknown>; run(): Promise<unknown> }[]) {
     this.sqlite.exec("BEGIN");
-    try { const results = []; for (const statement of statements) results.push(await statement.run()); this.sqlite.exec("COMMIT"); return results; }
+    try { const results = []; for (const statement of statements) results.push(/^\s*(?:SELECT|WITH)\b/i.test(statement.sql) ? await statement.all() : await statement.run()); this.sqlite.exec("COMMIT"); return results; }
     catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
   }
 }
 const secret = "A".repeat(43);
 const origin = "https://dashboard.example.test";
 async function call(database: Database, path: string, user = "admin", body?: unknown, requestOrigin = origin) {
-  const token = user ? await createSessionCodec(secret).issue({ userId: user, role: user === "operator" ? "operator" : "admin" }) : "";
+  // A session for the account's current epoch, as signing in gives: an installation restore ends every earlier session.
+  const epoch = Number(database.sqlite.prepare("SELECT session_epoch AS epoch FROM users WHERE id = ?").get(user)?.epoch ?? 0);
+  const token = user ? await createSessionCodec(secret).issue({ userId: user, role: user === "operator" ? "operator" : "admin", epoch }) : "";
   const request = new Request(`https://api.example.test${path}`, { method: body ? path === "/admin/data/restore" || path === "/admin/setup/reset" ? "POST" : "PATCH" : "GET", headers: { origin: requestOrigin, "content-type": "application/json", cookie: `lancerlogin_session=${token}` }, body: body ? JSON.stringify(body) : undefined });
   return worker.fetch(request, { APP_MODE: "configured", ALLOWED_ORIGIN: origin, SESSION_KEY: secret, DB: database } as unknown as Env);
 }

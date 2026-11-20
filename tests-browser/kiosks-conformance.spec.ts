@@ -44,7 +44,6 @@ async function useKioskContext(page: Page, { role = "admin", state = "healthy", 
   await page.route("**/admin/kiosks/fingerprint-vault", route => route.fulfill({ json: { enabled: false, keyStatus: "ready", storedFingerprints: 0, serverManagedKeys: true } }));
   await page.route("**/admin/kiosks/possible-wrong-matches", route => route.fulfill({ json: { windowSeconds: 30, matches: [] } }));
   await page.route("**/admin/kiosks/reenroll-suggestions", route => route.fulfill({ json: { threshold: 70, scans: 5, members: [] } }));
-  await page.route("**/admin/integrations/discord/label-roles/unmatched", route => route.fulfill({ json: { labels: [] } }));
   await mockSetupStatus(page, { settings: {
     organizationName: "Reference Arts Collective",
     subtitle: "Shared operations",
@@ -363,8 +362,10 @@ test("Debug tools hold rejected scans, fingerprint matching and weak-match diagn
     await expect(tools).toHaveCount(debugMode ? 1 : 0);
     await expect(page.getByRole("region", { name: "Rejected scans", exact: true })).toHaveCount(debugMode ? 1 : 0);
     await expect(page.getByRole("region", { name: "Fingerprint matching" })).toHaveCount(debugMode ? 1 : 0);
-    for (const name of ["Possible wrong matches", "Re-enroll suggested", "Discord users not on the roster"]) await expect(page.getByRole("region", { name, exact: true })).toHaveCount(debugMode ? 1 : 0);
-    if (debugMode) await expect(tools.getByRole("heading", { level: 3 })).toHaveText(["Open web kiosk on this device", "Rejected scans", "Fingerprint matching", "Possible wrong matches", "Re-enroll suggested", "Discord users not on the roster"]);
+    for (const name of ["Possible wrong matches", "Re-enroll suggested"]) await expect(page.getByRole("region", { name, exact: true })).toHaveCount(debugMode ? 1 : 0);
+    if (debugMode) await expect(tools.getByRole("heading", { level: 3 })).toHaveText(["Open web kiosk on this device", "Rejected scans", "Fingerprint matching", "Possible wrong matches", "Re-enroll suggested"]);
+    // The unmatched Discord users list lives on Settings > Labels, not here, and Kiosks never asks for it.
+    await expect(page.getByText("Discord users not on the roster")).toHaveCount(0);
     if (debugMode) { await expect(tools.getByRole("region", { name: "Rejected scans", exact: true })).toBeVisible(); await expect(tools.getByRole("region", { name: "Fingerprint matching" })).toBeVisible(); await expectResponsiveFit(page, responsiveFit); }
     await page.getByRole("link", { name: "Manage kiosk", exact: true }).click();
     await page.getByText("Diagnostics", { exact: true }).click();

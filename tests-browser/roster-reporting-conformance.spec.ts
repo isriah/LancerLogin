@@ -1265,7 +1265,7 @@ for(const view of [{ width: 1280,height: 800,theme: "light" },{ width: 390,heigh
     await directionPicker.selectOption("two_way");
     await expect(card.getByRole("note")).toContainText("FRC 321 is used by 1 attendance policy and 2 weekly targets. With two-way sync on, adding or removing @FRC 321 in Discord changes these members' attendance requirements.");
     await expect(card).toContainText("2 people don't match · 0 of 2 decided");
-    await expect(card).toContainText("2 Discord users with @FRC 321 aren't linked to anyone on the roster. They're listed in Debug tools on the Kiosks page and won't be changed.");
+    await expect(card).toContainText("2 Discord users with @FRC 321 aren't linked to anyone on the roster. They won't be changed. With two-way sync on, they're listed under Discord users not on the roster in the Discord roles card on this page.");
     await expect(card).toContainText("No changes chosen yet.");
     const confirm=card.getByRole("button",{ name: "Confirm and turn on two-way sync" });
     await expect(confirm).toBeDisabled(); await expect(confirm).toHaveAttribute("title","Choose the correct side for 2 more people");
@@ -1991,4 +1991,422 @@ test("an Admin unlinks the Discord role a retired label still holds, so the role
   await expect(row.getByRole("button", { name: /Unlink/ })).toHaveCount(0);
   await expect(row.getByRole("button", { name: "Restore" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Discord role for FRC 321" }).getByRole("option", { name: "Old Club Role" })).toBeAttached();
+});
+
+test("a two-way label's role sync queued by the scheduler shows as syncing or stuck, and View sync follows it",async ({ page }) => {
+  await page.setViewportSize({ width: 1280,height: 800 });
+  await useReferenceContext(page);
+  const labelsPayload={ labels: [{ id: "label-a",name: "Test Label A",active: 1,formulaEnabled: 0 },{ id: "label-b",name: "Test Label B",active: 1,formulaEnabled: 0 }],history: [],periods: [],rules: [],meetingCounts: {},today: "2026-10-30" };
+  await page.route("**/settings/labels",(route) => route.continue()); await page.route((url) => url.pathname==="/labels",(route) => route.fulfill({ json: labelsPayload }));
+  const minutesAgo=(minutes: number) => new Date(Date.now()-minutes*60_000).toISOString();
+  // Label A's job was queued by a two-way check a minute ago and is moving; label B's has done nothing for an hour.
+  const mapping=(id: string,name: string,roleId: string,latestJob: Record<string,unknown>) => ({ labelId: id,labelName: name,roleId,roleName: `${name} Role`,health: "ready",syncState: "no_label_changes",syncDirection: "two_way",twoWayCheckedAt: minutesAgo(1),createdAt: "2026-09-23T00:00:00Z",latestJob });
+  await page.route("**/admin/integrations/discord/label-roles",(route) => route.fulfill({ json: { integrationAvailable: true,mappings: [
+    mapping("label-a","Test Label A","423456789012345678",{ id: "job-a",status: "pending",createdAt: minutesAgo(1),updatedAt: minutesAgo(0),total: 10,completed: 4,failed: 0 }),
+    mapping("label-b","Test Label B","523456789012345678",{ id: "job-b",status: "pending",createdAt: minutesAgo(60),updatedAt: minutesAgo(0),total: 10,completed: 0,failed: 0 }),
+  ] } }));
+  await page.route("**/admin/integrations/discord/roles",(route) => route.fulfill({ json: { canManageRoles: true,roles: [] } }));
+  const items=(completed: number) => Array.from({ length: 10 },(_,index) => ({ discordUserId: String(800000000000000000n+BigInt(index)),action: "add",status: index<completed ? "completed" : "pending",attempts: index<completed ? 1 : 0 }));
+  let checks=0;
+  await page.route("**/admin/integrations/discord/label-role-jobs/job-a",(route) => { checks+=1; const completed=Math.min(10,4+checks*3); return route.fulfill({ json: { id: "job-a",labelId: "label-a",status: completed===10 ? "completed" : "pending",updatedAt: minutesAgo(0),items: items(completed) } }); });
+  await page.goto("/settings/labels");
+  const rowA=page.getByRole("row").filter({ has: page.getByRole("rowheader",{ name: "Test Label A" }) });
+  const rowB=page.getByRole("row").filter({ has: page.getByRole("rowheader",{ name: "Test Label B" }) });
+  await expect(rowA.locator(".label-sync-text")).toHaveText("Syncing");
+  await expect(rowA.getByRole("button",{ name: "Syncing…" })).toBeDisabled();
+  await expect(rowA.getByRole("combobox",{ name: "Sync direction for Test Label A" })).toBeDisabled();
+  await expect(rowA.getByRole("button",{ name: "Sync status for Test Label A: Syncing" })).toBeVisible();
+  await expect(rowB.locator(".label-sync-text")).toHaveText("Sync stuck");
+  await expect(rowB.getByRole("button",{ name: "Sync status for Test Label B: Sync stuck" })).toBeVisible();
+  await expect(rowB.getByRole("note")).toHaveCount(0);
+  await expect(rowB.getByRole("button",{ name: "View sync" })).toBeEnabled();
+  // The open dialog refreshes until the job finishes.
+  // Bring More into view first: the table scrolls sideways here, and a scroll closes an open menu.
+  const moreA=rowA.getByRole("button",{ name: "More actions for Test Label A" });
+  await moreA.scrollIntoViewIfNeeded(); await page.waitForTimeout(100); await moreA.click();
+  await page.getByRole("menuitem",{ name: "View sync" }).click();
+  const dialog=page.getByRole("dialog",{ name: "Sync: Test Label A" });
+  await expect(dialog).toContainText("completed, ");
+  await expect(dialog).toContainText("10 completed, 0 pending, 0 failed",{ timeout: 20_000 });
+  await expect(dialog).toContainText("Sync completed");
+  const finished=checks; await page.waitForTimeout(5_000); expect(checks).toBe(finished);
+});
+
+for(const view of [{ width: 1280,height: 900,theme: "dark" },{ width: 375,height: 812,theme: "light" }]) {
+  test(`Discord users not on the roster is a collapsed Admin section of the Discord roles card at ${view.width}px in ${view.theme} mode`,async ({ page }) => {
+    await page.setViewportSize({ width: view.width,height: view.height });
+    await page.addInitScript((theme) => localStorage.setItem("lancerlogin-theme",theme),view.theme);
+    // Debug mode stays off: the section does not depend on it.
+    await useReferenceContext(page);
+    const labelsPayload={ labels: ["a","b","c"].map((key) => ({ id: `label-${key}`,name: `Test Label ${key.toUpperCase()}`,active: 1,formulaEnabled: 0 })),history: [],periods: [],rules: [],meetingCounts: {},today: "2026-11-19" };
+    const routeLabels=async () => { await page.route("**/settings/labels",(route) => route.continue()); await page.route((url) => url.pathname==="/labels",(route) => route.fulfill({ json: labelsPayload })); };
+    await routeLabels();
+    let integrationAvailable=true; let directions: Record<string,string>={ a: "two_way",b: "two_way",c: "to_discord" };
+    await page.route("**/admin/integrations/discord/label-roles",(route) => route.fulfill({ json: { integrationAvailable,mappings: ["a","b","c"].map((key,index) => ({ labelId: `label-${key}`,labelName: `Test Label ${key.toUpperCase()}`,roleId: `10000000000000001${index}`,roleName: `test-role-${key}`,health: "ready",syncState: "no_label_changes",syncDirection: directions[key],twoWayCheckedAt: directions[key]==="two_way" ? "2026-11-19T15:40:00Z" : null,createdAt: "2026-11-01T00:00:00Z" })) } }));
+    await page.route("**/admin/integrations/discord/roles",(route) => route.fulfill({ json: { canManageRoles: true,roles: ["a","b","c"].map((key,index) => ({ id: `10000000000000001${index}`,name: `test-role-${key}`,manageable: true,labelId: `label-${key}`,labelName: `Test Label ${key.toUpperCase()}` })) } }));
+    const longName="test-user-with-a-very-long-discord-display-name-that-must-wrap-c";
+    let users: Record<string,string[]>={ a: ["test-user-a","test-user-b"],b: [longName] }; let unmatchedRequests=0;
+    await page.route("**/admin/integrations/discord/label-roles/unmatched",(route) => { unmatchedRequests+=1; return route.fulfill({ json: { labels: ["a","b"].map((key) => ({ labelId: `label-${key}`,labelName: `Test Label ${key.toUpperCase()}`,roleId: `role-${key}`,roleName: `test-role-${key}`,checkedAt: "2026-11-19T15:40:00Z",users: (users[key] ?? []).map((displayName,index) => ({ discordUserId: `10000000000000000${key==="a" ? index+1 : 3}`,displayName,seenAt: "2026-11-19T15:40:00Z" })) })) } }); });
+    await page.goto("/settings/labels");
+
+    // Collapsed even with users waiting; the count shows without opening it.
+    const card=page.getByRole("region",{ name: "Discord roles",exact: true });
+    const section=card.locator("details.settings-disclosure").filter({ hasText: "Discord users not on the roster" });
+    const summary=section.locator("summary");
+    await expect(summary).toHaveText("Discord users not on the roster 3");
+    await expect(section).toHaveJSProperty("open",false);
+    await expect(summary.locator(".status-pill")).toHaveAttribute("data-tone","warning");
+    await expect(section.getByText("test-user-a")).toBeHidden();
+    expect((await summary.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await expectResponsiveFit(page, responsiveFit);
+
+    // Opened: each two-way label's users under a heading one level below the card's.
+    await summary.click();
+    await expect(section).toHaveJSProperty("open",true);
+    await expect(section).toContainText("These people hold a two-way label's Discord role but aren't linked to anyone on the roster, so two-way sync leaves them alone. Pair them in Roster to sync their label.");
+    await expect(section.getByRole("link",{ name: "Roster",exact: true })).toHaveAttribute("href","/roster");
+    await expect(section.getByRole("heading",{ level: 3 })).toHaveText(["Test Label A · @test-role-a","Test Label B · @test-role-b"]);
+    await expect(section.getByRole("listitem")).toHaveText(["test-user-a 100000000000000001","test-user-b 100000000000000002",`${longName} 100000000000000003`]);
+    await expect(section.locator(".discord-unmatched-checked")).toHaveCount(2);
+    const heading=await section.getByRole("heading",{ level: 3 }).first().evaluate((element) => { const style=getComputedStyle(element); const probe=document.createElement("span"); probe.style.cssText="font-family:var(--font-display);font-size:var(--text-body)"; element.closest(".app")!.append(probe); const expected=getComputedStyle(probe); const result={ margin: style.margin,size: style.fontSize,family: style.fontFamily,expectedSize: expected.fontSize,expectedFamily: expected.fontFamily }; probe.remove(); return result; });
+    expect(heading.margin).toBe("0px"); expect(heading.size).toBe(heading.expectedSize); expect(heading.family).toBe(heading.expectedFamily);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+    await expectResponsiveFit(page, responsiveFit);
+
+    // Nobody unmatched: a quiet 0, still collapsed, with a line per label inside.
+    users={}; await page.reload();
+    await expect(summary).toHaveText("Discord users not on the roster 0");
+    await expect(summary.locator(".status-pill")).toHaveAttribute("data-tone","neutral");
+    await expect(section).toHaveJSProperty("open",false);
+    await summary.click();
+    await expect(section.locator(".discord-unmatched-label p")).toHaveText(["Everyone with @test-role-a is on the roster.","Everyone with @test-role-b is on the roster."]);
+    await expect(section.getByRole("listitem")).toHaveCount(0);
+    await expectResponsiveFit(page, responsiveFit);
+
+    // Only a two-way label records unmatched users, so without one the section is gone and nothing is requested.
+    const requested=unmatchedRequests; expect(requested).toBeGreaterThan(0);
+    directions={ a: "to_discord",b: "to_discord",c: "to_discord" }; await page.reload();
+    await expect(card).toContainText("3 labels are linked to Discord roles.");
+    await expect(page.getByText("Discord users not on the roster")).toHaveCount(0);
+    // Nor when Discord isn't enabled and verified.
+    directions={ a: "two_way",b: "two_way",c: "to_discord" }; integrationAvailable=false; await page.reload();
+    await expect(card).toContainText("Enable and verify Discord in Settings → Integrations");
+    await expect(page.getByText("Discord users not on the roster")).toHaveCount(0);
+    // An Operator never sees it, and their page never asks for the list.
+    integrationAvailable=true; users={ a: ["test-user-a"] };
+    await useReferenceContext(page,"operator"); await routeLabels(); await page.reload();
+    await expect(page.getByRole("region",{ name: "Discord roles",exact: true })).toContainText("3 labels are linked to Discord roles.");
+    await expect(page.getByText("Discord users not on the roster")).toHaveCount(0);
+    expect(unmatchedRequests).toBe(requested);
+  });
+}
+
+/** A Leaderboard whose attendance baseline is `baseline`. Like the API, it rejects From after To. Returns each request's query. */
+async function useLeaderboardBaseline(page: Page, role: Role, baseline: string, today = "2026-09-22") {
+  await useReferenceContext(page, role);
+  await page.route("**/reports/catalog", (route) => route.fulfill({ json: { datasets: [attendanceDataset], columns: reportColumns, labels: [{ id: "mentor", name: "Mentor", active: 1 }], reportFilters: [], baseline, today, timeZone: "UTC", defaultDefinition: defaultReportDefinition, role, attendanceAvailable: true } }));
+  const queries: URLSearchParams[] = [];
+  await page.route("**/reports/leaderboard?*", (route) => {
+    const query = new URL(route.request().url()).searchParams; queries.push(query);
+    const from = query.get("from"), to = query.get("to");
+    if (from && to && from > to) return route.fulfill({ status: 400, json: { error: "Report dates must be valid and in order" } });
+    const data = referenceAttendanceReport(from ?? undefined);
+    return route.fulfill({ json: { ...data, baseline, today, pagination: { page: 1, pageSize: 25, totalRows: data.members.length, totalPages: 1, rangeStart: data.members.length ? 1 : 0, rangeEnd: data.members.length }, insights: { policyAlerts: [], trend: data.meetings.map((meeting) => ({ meetingId: meeting.id, title: meeting.title, startsAt: meeting.startsAt, rate: 50 })) } } });
+  });
+  return queries;
+}
+/** Lets React finish the effects of the last change, so a request it would send has been sent. */
+const settle = (page: Page) => page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+/** Saves the page at 1280 and 375 px wide, checks nothing is cut off on the phone, then returns to 1280. */
+async function captureLeaderboardState(page: Page, name: string) {
+  for (const width of [1280, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    if (width === 375) await expectResponsiveFit(page, { controls: ".report-filters input, .report-filters select, .report-filters .inline-messages, .report-filters .report-field-help", scrollers: ".report-tabs" });
+    await page.screenshot({ path: test.info().outputPath(`${name}-${width}.png`), fullPage: true });
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+}
+const rawDatesError = "Report dates must be valid and in order";
+
+for (const role of ["admin", "operator"] as const) {
+  test(`a Leaderboard To date typed before the attendance baseline is explained to an ${role === "admin" ? "Admin" : "Operator"} without a request`, async ({ page }) => {
+    const baseline = "2026-08-24";
+    const queries = await useLeaderboardBaseline(page, role, baseline);
+    const requests: string[] = [];
+    page.on("request", (request) => { if (/\/reports\/leaderboard|\/discord\/contests/.test(request.url())) requests.push(request.url()); });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/reports");
+    const board = page.getByRole("table", { name: "Attendance leaderboard" });
+    const controls = page.locator(".report-filters");
+    const to = page.getByLabel("To", { exact: true });
+    await expect(board).toContainText("Avery Stone");
+    await expect(page.getByRole("combobox", { name: "Reporting period", exact: true }).locator("option:checked")).toHaveText(`Attendance baseline (${baseline})`);
+    await expect(page.getByLabel("From", { exact: true })).toHaveValue(baseline);
+    await expect(page.getByLabel("From", { exact: true })).toBeDisabled();
+
+    // Prevent: the picker's earliest day is the baseline, and a help line under the controls says why.
+    await expect(to).toHaveAttribute("min", baseline);
+    const help = controls.locator("#leaderboard-to-help");
+    await expect(help).toHaveText(`The leaderboard counts attendance from ${baseline}, the attendance baseline, so To can't be earlier than that.`);
+    await expect(help).toHaveClass("report-field-help");
+    await expect(to).toHaveAttribute("aria-describedby", "leaderboard-to-help");
+    await expect(to).not.toHaveAttribute("aria-invalid", /.*/);
+    await captureLeaderboardState(page, `leaderboard-baseline-help-${role}`);
+
+    // Explain: a date typed past the picker's limit sends nothing, empties the results and says what to do.
+    await settle(page);
+    const sentBefore = requests.length;
+    if (role === "admin") await to.pressSequentially("08012026"); else await to.fill("2026-08-01");
+    await expect(to).toHaveValue("2026-08-01");
+    const note = controls.locator("#leaderboard-period-note");
+    await expect(note).toHaveText(role === "admin"
+      ? `No attendance to show: the To date, 2026-08-01, is before the attendance baseline, ${baseline}. Choose a later To date, or change the Attendance reporting start date (operational baseline) in Settings > Modules > Attendance > Meeting configuration.`
+      : `No attendance to show: the To date, 2026-08-01, is before the attendance baseline, ${baseline}. Choose a later To date, or ask an Admin to change the Attendance reporting start date (operational baseline).`);
+    await expect(note).toHaveClass("inline-messages warning");
+    await expect(note).toHaveAttribute("role", "status");
+    if (role === "admin") await expect(note.getByRole("link", { name: "Settings > Modules > Attendance > Meeting configuration", exact: true })).toHaveAttribute("href", "/settings/configuration");
+    else await expect(note.getByRole("link")).toHaveCount(0);
+    await expect(to).toHaveAttribute("aria-invalid", "true");
+    await expect(to).toHaveAttribute("aria-describedby", "leaderboard-period-note");
+    await expect(to).toHaveAttribute("min", baseline);
+    if (role === "admin") await expect(to).toBeFocused();
+    await expect(help).toHaveCount(0);
+    await expect(board).not.toContainText("Avery Stone");
+    await expect(board.locator(".empty-state")).toHaveText("No attendance records match these filters.");
+    await expect(page.locator(".trend-card .empty-state")).toHaveText("No completed meetings match these filters.");
+    await expect(page.locator(".trend-chart")).toHaveCount(0);
+    await expect(controls.locator(".report-filter-heading .ui-status")).toHaveText("0 members");
+    await expect(page.locator(".leaderboard-card .report-pagination > span")).toHaveText("0 rows");
+    await expect(page.getByText(rawDatesError)).toHaveCount(0);
+    await expect(page.getByText("Loading leaderboard…", { exact: true })).toHaveCount(0);
+    await settle(page);
+    expect(requests.slice(sentBefore)).toEqual([]);
+    expect(queries.filter((query) => (query.get("to") ?? "9999") < baseline)).toEqual([]);
+    const style = await note.evaluate((element) => { const value = getComputedStyle(element); return { color: value.color, border: value.borderTopColor, background: value.backgroundColor }; });
+    expect(style.color).toBe(style.border);
+    expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
+    await captureLeaderboardState(page, `leaderboard-to-before-baseline-${role}`);
+
+    // A To date on or after the baseline asks again and brings the results and the help line back.
+    await to.fill(baseline);
+    await expect(board).toContainText("Avery Stone");
+    await expect(note).toHaveCount(0);
+    await expect(help).toBeVisible();
+    await expect(to).not.toHaveAttribute("aria-invalid", /.*/);
+    await expect.poll(() => queries.some((query) => query.get("from") === baseline && query.get("to") === baseline)).toBe(true);
+    expect(queries.filter((query) => (query.get("to") ?? "9999") < baseline)).toEqual([]);
+  });
+}
+
+test("Leaderboard fixed dates with From after To are explained without a request, and a rejection that still arrives is reworded", async ({ page }) => {
+  const queries = await useLeaderboardBaseline(page, "admin", "2026-08-24");
+  await page.route("**/reports/leaderboard?*", (route) => new URL(route.request().url()).searchParams.get("to") === "2026-12-31" ? route.fulfill({ status: 400, json: { error: rawDatesError } }) : route.fallback());
+  const requests: string[] = [];
+  page.on("request", (request) => { if (/\/reports\/leaderboard|\/discord\/contests/.test(request.url())) requests.push(request.url()); });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/reports");
+  const board = page.getByRole("table", { name: "Attendance leaderboard" });
+  const from = page.getByLabel("From", { exact: true }), to = page.getByLabel("To", { exact: true });
+  const note = page.locator(".report-filters #leaderboard-period-note");
+  await expect(board).toContainText("Avery Stone");
+  await page.getByRole("combobox", { name: "Reporting period", exact: true }).selectOption("custom");
+  await expect(from).toBeEnabled();
+  await expect(page.locator("#leaderboard-to-help")).toHaveCount(0);
+  await expect(to).not.toHaveAttribute("min", /.*/);
+  await expect(from).not.toHaveAttribute("max", /.*/);
+  await from.fill("2026-08-10");
+  await expect(to).toHaveAttribute("min", "2026-08-10");
+  await expect.poll(() => queries.some((query) => query.get("from") === "2026-08-10" && !query.get("to"))).toBe(true);
+  await expect(board).toContainText("Avery Stone");
+  await settle(page);
+  const sentBefore = requests.length;
+
+  await to.fill("2026-08-01");
+  await expect(note).toHaveText("Choose an end date on or after the start date.");
+  await expect(note).toHaveClass("inline-messages error");
+  await expect(note).toHaveAttribute("role", "alert");
+  for (const field of [from, to]) { await expect(field).toHaveAttribute("aria-invalid", "true"); await expect(field).toHaveAttribute("aria-describedby", "leaderboard-period-note"); }
+  await expect(to).toHaveAttribute("min", "2026-08-10");
+  await expect(from).toHaveAttribute("max", "2026-08-01");
+  await expect(board).not.toContainText("Avery Stone");
+  await expect(board.locator(".empty-state")).toHaveText("No attendance records match these filters.");
+  await expect(page.locator(".trend-card .empty-state")).toHaveText("No completed meetings match these filters.");
+  await expect(page.locator(".report-filters .report-filter-heading .ui-status")).toHaveText("0 members");
+  await expect(page.getByText(rawDatesError)).toHaveCount(0);
+  await settle(page);
+  expect(requests.slice(sentBefore)).toEqual([]);
+  await captureLeaderboardState(page, "leaderboard-from-after-to");
+
+  // Dates in order ask again; equal dates are in order.
+  await to.fill("2026-08-10");
+  await expect(note).toHaveCount(0);
+  await expect(board).toContainText("Avery Stone");
+  await expect.poll(() => queries.some((query) => query.get("from") === "2026-08-10" && query.get("to") === "2026-08-10")).toBe(true);
+  expect(queries.filter((query) => query.get("from") && query.get("to") && query.get("from")! > query.get("to")!)).toEqual([]);
+
+  // The API still validates. If it rejects dates the page let through, the page says so in its own words.
+  await to.fill("2026-12-31");
+  await expect(page.locator("main p.setup-status")).toHaveText("These dates can't be used. Check that From is on or before To, then try again.");
+  await expect(page.getByText(rawDatesError)).toHaveCount(0);
+});
+
+test("Last month under a started baseline fills both Leaderboard dates in order and requests them", async ({ page }) => {
+  const queries = await useLeaderboardBaseline(page, "admin", "2026-08-24", "2026-11-30");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/reports");
+  const board = page.getByRole("table", { name: "Attendance leaderboard" });
+  const period = page.getByRole("combobox", { name: "Reporting period", exact: true });
+  const from = page.getByLabel("From", { exact: true }), to = page.getByLabel("To", { exact: true });
+  await expect(board).toContainText("Avery Stone");
+  await period.selectOption("last_month");
+  await expect(from).toHaveValue("2026-10-01");
+  await expect(to).toHaveValue("2026-10-31");
+  await expect.poll(() => queries.some((query) => query.get("from") === "2026-10-01" && query.get("to") === "2026-10-31")).toBe(true);
+  await expect(page.locator("#leaderboard-period-note")).toHaveCount(0);
+  await expect(page.locator("#leaderboard-to-help")).toHaveCount(0);
+  await expect(period.locator("option:checked")).toHaveText("Last month");
+  // Back on the baseline, leaving Last month clears its dates as before, and the help line returns.
+  await period.selectOption("baseline");
+  await expect(from).toHaveValue("2026-08-24");
+  await expect(to).toHaveValue("");
+  await expect(page.locator("#leaderboard-period-note")).toHaveCount(0);
+  await expect(page.locator("#leaderboard-to-help")).toBeVisible();
+  await expect(board).toContainText("Avery Stone");
+  expect(queries.filter((query) => query.get("from") && query.get("to") && query.get("from")! > query.get("to")!)).toEqual([]);
+});
+
+test("a baseline after today stays a disabled Leaderboard choice, so any To date is requested with no From", async ({ page }) => {
+  const queries = await useLeaderboardBaseline(page, "admin", "2027-01-04");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/reports");
+  const board = page.getByRole("table", { name: "Attendance leaderboard" });
+  const period = page.getByRole("combobox", { name: "Reporting period", exact: true });
+  const from = page.getByLabel("From", { exact: true }), to = page.getByLabel("To", { exact: true });
+  await expect(board).toContainText("Avery Stone");
+  await expect(period.locator("option:checked")).toHaveText("All history / fixed dates");
+  await expect(period.locator("option").first()).toHaveText("Attendance baseline (2027-01-04, not started)");
+  await expect(period.locator("option").first()).toHaveJSProperty("disabled", true);
+  await expect(from).toBeEnabled();
+  await expect(from).toHaveValue("");
+  await expect(to).not.toHaveAttribute("min", /.*/);
+  await expect(page.locator("#leaderboard-to-help")).toHaveCount(0);
+  await to.fill("2026-08-01");
+  await expect.poll(() => queries.some((query) => !query.get("from") && query.get("to") === "2026-08-01")).toBe(true);
+  await expect(board).toContainText("Avery Stone");
+  await expect(page.locator("#leaderboard-period-note")).toHaveCount(0);
+  await expect(to).not.toHaveAttribute("aria-invalid", /.*/);
+  await expect(page.getByText(rawDatesError)).toHaveCount(0);
+  await captureLeaderboardState(page, "leaderboard-baseline-not-started");
+});
+
+test("a saved report's period chip is a standard-height button at 1280 and 375 px", async ({ page }) => {
+  await useReferenceContext(page);
+  for (const width of [1280, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/reports/view/class-report");
+    await expect(page.getByRole("table", { name: /Report results/ })).toContainText("Avery Stone");
+    const chip = page.getByRole("button", { name: /^Report period:/ });
+    const sizes = await chip.evaluate((element) => {
+      const edit = element.closest(".report-builder-heading")!.querySelector<HTMLElement>(".report-builder-heading-actions button.report-icon-button")!;
+      return { chip: element.getBoundingClientRect().height, edit: edit.getBoundingClientRect().height, control: 2.75 * parseFloat(getComputedStyle(document.documentElement).fontSize), minHeight: parseFloat(getComputedStyle(element).minHeight) };
+    });
+    test.info().annotations.push({ type: `period chip at ${width}px`, description: JSON.stringify(sizes) });
+    expect(sizes.chip, `period chip height at ${width}px`).toBeGreaterThanOrEqual(44);
+    expect(sizes.minHeight).toBeCloseTo(sizes.control, 1);
+    expect(sizes.chip).toBeCloseTo(sizes.edit, 1);
+    await expectResponsiveFit(page, { controls: ".report-builder-heading button, .report-builder-heading summary", scrollers: ".report-tabs" });
+    await page.screenshot({ path: test.info().outputPath(`saved-report-tap-targets-${width}.png`), fullPage: true });
+    // The chip still opens the period.
+    await chip.click();
+    await expect(page.getByRole("combobox", { name: "Period", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+  }
+});
+
+test("a column's funnel keeps its size with a 44 px tap area that leaves the column name button and the header layout alone", async ({ page }) => {
+  await useReferenceContext(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/reports/view/class-report");
+  const table = page.getByRole("table", { name: /Report results/ });
+  await expect(table).toContainText("Avery Stone");
+  const measure = () => page.locator(".editable-report-table").evaluate((element) => {
+    const rect = (node: Element) => { const box = node.getBoundingClientRect(); return { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height }; };
+    const root = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const hit = (x: number, y: number) => document.elementFromPoint(x, y);
+    const headers = Array.from(element.querySelectorAll("thead th"));
+    return {
+      root, rowHeight: rect(element.querySelector("thead tr")!).height, tableWidth: rect(element).width, widths: headers.map((th) => rect(th).width),
+      funnels: headers.flatMap((th) => {
+        const funnel = th.querySelector<HTMLElement>(".report-column-filter-button"); if (!funnel) return [];
+        const trigger = th.querySelector<HTMLElement>(".report-column-trigger")!; const tip = th.querySelector<HTMLElement>(".info-tip-button");
+        const box = rect(funnel), name = rect(trigger), after = getComputedStyle(funnel, "::after"), style = getComputedStyle(funnel);
+        const left = box.left + parseFloat(style.borderLeftWidth) + parseFloat(after.left), top = box.top + parseFloat(style.borderTopWidth) + parseFloat(after.top);
+        const area = { left, top, right: left + parseFloat(after.width), bottom: top + parseFloat(after.height), width: parseFloat(after.width), height: parseFloat(after.height) };
+        const middleX = (area.left + area.right) / 2, middleY = (area.top + area.bottom) / 2;
+        const edges = [[area.left + 1, area.top + 1], [area.right - 1, area.top + 1], [area.left + 1, area.bottom - 1], [area.right - 1, area.bottom - 1], [area.left + 1, middleY], [area.right - 1, middleY], [middleX, area.top + 1], [middleX, area.bottom - 1], [middleX, middleY]];
+        return [{
+          label: funnel.getAttribute("aria-label")!, column: trigger.getAttribute("aria-label")!, box, name, area, lastInHeader: funnel.matches(":last-child"), cell: rect(th),
+          edgesHitFunnel: edges.every(([x, y]) => hit(x!, y!) === funnel || funnel.contains(hit(x!, y!))),
+          // The column name button's corners are rounded, so its right edge is probed between them.
+          nameKeepsItsEdge: [0.25, 0.5, 0.75].every((part) => trigger.contains(hit(name.right - 1, name.top + name.height * part))),
+          tip: tip ? { box: rect(tip), keepsItsEdge: tip.contains(hit(rect(tip).left + 1, (rect(tip).top + rect(tip).bottom) / 2)) } : null,
+        }];
+      }),
+    };
+  });
+  const built = await measure();
+  expect(built.funnels.length).toBeGreaterThanOrEqual(3);
+  const control = 2.75 * built.root;
+  for (const funnel of built.funnels) {
+    // The look: a 2rem square. The tap area: the standard control height, as wide as fits without covering a neighbour.
+    expect(funnel.box.width, funnel.label).toBeCloseTo(2 * built.root, 1); expect(funnel.box.height, funnel.label).toBeCloseTo(2 * built.root, 1);
+    expect(funnel.area.height, funnel.label).toBeGreaterThanOrEqual(44); expect(funnel.area.height, funnel.label).toBeCloseTo(control, 1);
+    expect(funnel.area.width, funnel.label).toBeCloseTo(funnel.lastInHeader ? control : 2.5 * built.root, 1);
+    if (funnel.lastInHeader) expect(funnel.area.width, funnel.label).toBeGreaterThanOrEqual(44);
+    expect(funnel.area.left, funnel.label).toBeGreaterThanOrEqual(funnel.name.right - 0.05);
+    expect(funnel.area.right, funnel.label).toBeLessThanOrEqual(funnel.cell.right + 0.05);
+    expect(funnel.area.top, funnel.label).toBeGreaterThanOrEqual(funnel.cell.top - 0.05); expect(funnel.area.bottom, funnel.label).toBeLessThanOrEqual(funnel.cell.bottom + 0.05);
+    if (funnel.tip) { expect(funnel.area.right, funnel.label).toBeLessThanOrEqual(funnel.tip.box.left + 0.05); expect(funnel.tip.keepsItsEdge, funnel.label).toBe(true); }
+    expect(funnel.edgesHitFunnel, funnel.label).toBe(true);
+    expect(funnel.nameKeepsItsEdge, funnel.label).toBe(true);
+  }
+  expect(built.funnels.some((funnel) => funnel.tip)).toBe(true);
+  expect(built.funnels.some((funnel) => funnel.lastInHeader)).toBe(true);
+  test.info().annotations.push({ type: "funnel sizes", description: JSON.stringify(built.funnels.map((funnel) => ({ label: funnel.label, button: [funnel.box.width, funnel.box.height], area: [funnel.area.width, funnel.area.height], gapToName: funnel.area.left - funnel.name.right }))) });
+
+  // Real clicks: each corner of the area opens that column's filter, and the column name's last pixel still opens its menu.
+  for (const funnel of built.funnels) {
+    const filter = page.getByRole("dialog", { name: funnel.label, exact: true });
+    for (const [x, y] of [[funnel.area.left + 1, funnel.area.top + 1], [funnel.area.right - 1, funnel.area.bottom - 1], [funnel.area.left + 1, funnel.area.bottom - 1], [funnel.area.right - 1, funnel.area.top + 1]]) {
+      await page.mouse.click(x!, y!);
+      await expect(filter, `${funnel.label} at ${x},${y}`).toBeVisible();
+      await expect(page.getByRole("button", { name: funnel.label, exact: true })).toHaveAttribute("aria-expanded", "true");
+      await page.keyboard.press("Escape");
+      await expect(filter).toHaveCount(0);
+    }
+    const options = page.getByRole("dialog", { name: `${funnel.label.replace(/^Filter /, "")} options`, exact: true });
+    await page.mouse.click(funnel.name.right - 1, (funnel.name.top + funnel.name.bottom) / 2);
+    await expect(options, funnel.column).toBeVisible();
+    await expect(filter).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(options).toHaveCount(0);
+  }
+  // The column menu still sorts.
+  await page.getByRole("button", { name: "Overall rate column options", exact: true }).click();
+  await page.getByRole("dialog", { name: "Overall rate options", exact: true }).getByRole("button", { name: "Descending", exact: true }).click();
+  await expect(table.locator('th[aria-sort="descending"]')).toContainText("Overall rate");
+  await expect(table.locator("tbody tr").first()).toContainText("Avery Stone");
+  const sorted = await measure();
+
+  // Without the tap area the header measures the same: it adds no height or width.
+  await page.addStyleTag({ content: ".app button.report-column-filter-button { position: static !important; } .app button.report-column-filter-button::after { content: none !important; }" });
+  const plain = await measure();
+  expect(sorted.rowHeight).toBe(plain.rowHeight);
+  expect(sorted.widths).toEqual(plain.widths);
+  expect(sorted.tableWidth).toBe(plain.tableWidth);
+  test.info().annotations.push({ type: "header layout", description: JSON.stringify({ rowHeight: sorted.rowHeight, widths: sorted.widths, withoutTapArea: { rowHeight: plain.rowHeight, widths: plain.widths } }) });
+
+  // On a phone the funnel stays hidden, as before.
+  await page.setViewportSize({ width: 375, height: 900 });
+  await expect(page.locator(".report-column-filter-button").first()).toBeHidden();
 });

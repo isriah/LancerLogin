@@ -4,6 +4,7 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import worker, { registeredCoreSchedulerJobs, registeredModuleSchedulerJobs, type Env } from "../apps/api/src/index.ts";
+import { resetReleaseCaches } from "../apps/api/src/release-discovery.ts";
 const schedulerJobIds = [...registeredCoreSchedulerJobs, ...registeredModuleSchedulerJobs].map((job) => job.id);
 /** A scheduledTime whose pass starts with this job. */
 const schedulerSlotFor = (jobId: string) => schedulerJobIds.indexOf(jobId) * 300_000;
@@ -178,6 +179,18 @@ test("protected setup routes reject anonymous and Operator access", async () => 
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   assert.equal((await worker.fetch(request("/admin/branding"), env)).status, 401);
   assert.equal((await worker.fetch(request("/admin/branding", undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
+});
+
+test("only an Admin can read the Discord users not on the roster, with or without Debug mode", async () => {
+  const database = new FakeDatabase();
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+  const path = "/admin/integrations/discord/label-roles/unmatched";
+  assert.equal((await worker.fetch(request(path), env)).status, 401);
+  assert.equal((await worker.fetch(request(path, undefined, { cookie: await sessionCookie("operator") }), env)).status, 403);
+  // The Labels page reads it for any Admin: the route takes no Debug mode flag and makes no Discord call.
+  const result = await worker.fetch(request(path, undefined, { cookie: await sessionCookie("admin") }), env);
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), { labels: [] });
 });
 
 test("only an Admin can discover the private deployment updater", async () => {
@@ -534,6 +547,7 @@ test("Admin queues only fixed recovery and latest-stable update commands", async
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT INTO kiosk_commands") && call.values.includes("reload_display")));
   assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("'kiosk.command_queued'")));
   const originalFetch = globalThis.fetch;
+  resetReleaseCaches();
   globalThis.fetch = async (input, init) => {
     if (String(input) === "https://api.github.com/repos/isriah/LancerLogin/commits/v0.22.0") return Response.json({ sha: "b".repeat(40) });
     assert.equal(String(input), "https://api.github.com/repos/isriah/LancerLogin/releases/latest");
@@ -604,6 +618,8 @@ test("latest kiosk update accepts strict stable majors and rejects incomplete re
       database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1, releaseVersion: "0.23.2" });
       const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, WEB_UPDATE_TOKEN: "synthetic-token", WEB_UPDATE_TOKEN_EXPIRES_AT: new Date(Date.now() + 86_400_000).toISOString(), DB: database } as unknown as Env;
       let calls = 0;
+      // Each case starts as a new Worker isolate would: nothing cached, so the feed and the commit are both read.
+      resetReleaseCaches();
       globalThis.fetch = async (input, init) => { calls++; assert.equal(String(input), calls === 1 ? "https://api.github.com/repos/isriah/LancerLogin/releases/latest" : `https://api.github.com/repos/isriah/LancerLogin/commits/${item.payload.tag_name}`); assert.equal(new Headers(init?.headers).get("authorization"), "Bearer synthetic-token"); assert.equal(init?.redirect, "manual"); return Response.json(calls === 1 ? item.payload : { sha: "b".repeat(40) }); };
       const result = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest" }, { cookie }), env);
       assert.equal(result.status, item.status, JSON.stringify(item.payload));
@@ -615,18 +631,66 @@ test("latest kiosk update accepts strict stable majors and rejects incomplete re
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("latest kiosk update keeps malformed or rate-limited release feeds unavailable", async () => {
-  const database = new FakeDatabase();
-  database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1, releaseVersion: "0.21.0" });
-  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+test("a kiosk update that cannot read GitHub says why instead of claiming no release exists", async () => {
   const cookie = await sessionCookie("admin");
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response("not-json", { status: 200 });
-  try {
+  const start = async (answer: () => Response | Promise<Response>) => {
+    const database = new FakeDatabase();
+    database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", active: 1, releaseVersion: "0.21.0" });
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+    resetReleaseCaches();
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; return answer(); };
     const result = await worker.fetch(request("/admin/kiosks/kiosk-1/commands", { command: "install_latest" }, { cookie }), env);
     assert.equal(result.status, 503);
-    assert.match(await result.text(), /No compatible official kiosk release/);
-  } finally { globalThis.fetch = originalFetch; }
+    assert.equal(calls, 1);
+    assert.equal(database.batches.some(batch => batch.some(call => call.sql.includes("INSERT INTO kiosk_commands"))), false);
+    return await result.json() as { error: string; code: string; retryAfterSeconds?: number };
+  };
+  try {
+    const reset = String(Math.floor(Date.now() / 1000) + 30 * 60);
+    const quota = await start(() => Response.json({ message: "API rate limit exceeded" }, { status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": reset } }));
+    assert.equal(quota.code, "kiosk_release_rate_limited");
+    assert.match(quota.error, /^GitHub is limiting release checks right now, so the kiosk update was not started\. Nothing is wrong with the kiosk\. Try again in about (29|30) minutes\. Setting up or refreshing the optional web update token \(Settings > Updates\) signs this server's release checks, which avoids this shared limit\.$/);
+    assert.ok(quota.retryAfterSeconds! > 29 * 60 && quota.retryAfterSeconds! <= 30 * 60);
+    const throttled = await start(() => new Response("slow down", { status: 429 }));
+    assert.equal(throttled.code, "kiosk_release_rate_limited");
+    assert.match(throttled.error, /Try again in about a minute\./);
+    const offline = await start(() => { throw new TypeError("fetch failed"); });
+    assert.equal(offline.code, "kiosk_release_unreachable");
+    assert.match(offline.error, /^This server could not reach GitHub to check the release/);
+    const malformed = await start(() => new Response("not-json", { status: 200 }));
+    assert.equal(malformed.code, "kiosk_release_unreadable");
+    assert.match(malformed.error, /^GitHub's answer to the release check could not be read/);
+    const none = await start(() => Response.json({ tag_name: "v1.0.0", draft: false, prerelease: false, assets: [] }));
+    assert.deepEqual(none, { error: "GitHub's release list was read, but it has no complete official kiosk release on the Stable track, so there is nothing to install yet.", code: "kiosk_release_none" });
+    for (const body of [quota, throttled, offline, malformed]) assert.doesNotMatch(body.error, /No compatible|no complete official/i);
+  } finally { globalThis.fetch = originalFetch; resetReleaseCaches(); }
+});
+
+test("starting kiosk updates costs at most the two GitHub subrequests it did before, and none once the release is cached", async () => {
+  const cookie = await sessionCookie("admin");
+  const originalFetch = globalThis.fetch;
+  const assets = ["install-lancerlogin.sh", "install-lancerlogin.sh.sha256", ...["arm64", "armv7"].flatMap(arch => { const archive = `lancerlogin-kiosk-1.3.0-linux-${arch}.tar.gz`; return [archive, `${archive}.sha256`]; })].map(name => ({ name }));
+  const requested: string[] = [];
+  globalThis.fetch = async (input) => { requested.push(String(input)); return String(input).includes("/commits/") ? Response.json({ sha: "d".repeat(40) }) : Response.json({ tag_name: "v1.3.0", draft: false, prerelease: false, assets }); };
+  const update = async (kioskId: string) => {
+    const database = new FakeDatabase();
+    database.rows.set("FROM kiosks", { id: kioskId, name: "Front desk", active: 1, releaseVersion: "1.2.0" });
+    const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
+    const result = await worker.fetch(request(`/admin/kiosks/${kioskId}/commands`, { command: "install_latest" }, { cookie }), env);
+    assert.equal(result.status, 202);
+    const insert = database.batches.at(-1)?.find(call => call.sql.includes("INSERT INTO kiosk_commands"));
+    assert.ok(insert?.values.includes("v1.3.0") && insert.values.includes("d".repeat(40)));
+  };
+  try {
+    resetReleaseCaches();
+    await update("kiosk-1");
+    assert.deepEqual(requested, ["https://api.github.com/repos/isriah/LancerLogin/releases/latest", "https://api.github.com/repos/isriah/LancerLogin/commits/v1.3.0"]);
+    // Updating the rest of the room's kiosks pins the same release and commit without asking GitHub again.
+    for (const kioskId of ["kiosk-2", "kiosk-3", "kiosk-4"]) await update(kioskId);
+    assert.equal(requested.length, 2);
+  } finally { globalThis.fetch = originalFetch; resetReleaseCaches(); }
 });
 
 test("kiosk heartbeats durably reconcile requested update releases", async () => {
@@ -3420,7 +3484,9 @@ test("schema 17 installation backups default fields added by parallel attendance
   const restored = await worker.fetch(request("/admin/data/restore", { scope: "installation", confirmation: "RESTORE INSTALLATION", backup }, { cookie }), env);
   assert.equal(restored.status, 200, await restored.clone().text());
   const batch = database.batches.at(-1) ?? [];
-  assert.equal(batch.find((item) => item.sql.startsWith("INSERT INTO users"))?.values.at(-1), 0);
+  // The restored account's last backup column (debug_mode) defaults to 0; the session epoch the restore assigns follows it.
+  const user = batch.find((item) => item.sql.startsWith("INSERT INTO users"))?.values ?? [];
+  assert.equal(user.at(-2), 0); assert.ok(Number(user.at(-1)) > 0);
   assert.equal(batch.find((item) => item.sql.startsWith("INSERT INTO label_attendance_rules"))?.values.at(-1), "exclude");
   assert.equal(batch.find((item) => item.sql.startsWith("INSERT INTO discord_attendance_notifications"))?.values.at(-1), null);
 });
@@ -3563,7 +3629,7 @@ test("retained scan review routes require an active Admin, dashboard origin and 
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const listing = "/admin/kiosks/scan-reviews", review = "/admin/kiosks/kiosk-a/scan-reviews/synthetic-scan/review";
   database.lists.set("FROM kiosk_scan_reviews r JOIN kiosks", [{ kioskId: "kiosk-a", kioskName: "Synthetic kiosk", evidence: JSON.stringify({ eventId: "synthetic-scan", memberId: "synthetic-member", occurredAt: "2020-01-01T07:00:00Z", reasonCode: "clock_unverified", httpStatus: null }), reviewStatus: "open", reviewedAt: null, reviewNote: null, receivedAt: "2026-10-25T10:00:00Z" }]);
-  database.lists.set("SELECT review_status AS status FROM kiosk_scan_reviews", [{ status: "reviewed" }]);
+  database.lists.set("AS recorded FROM kiosk_scan_reviews", [{ status: "reviewed", recorded: 1 }]);
   assert.equal((await worker.fetch(request(listing), env)).status, 401);
   assert.equal((await worker.fetch(request(listing, undefined, { cookie: operator }), env)).status, 403);
   const listed = await worker.fetch(request(listing, undefined, { cookie: admin }), env);

@@ -98,8 +98,10 @@ test("scan review mirror preserves evidence, audited monotonic review, isolation
     assert.equal((await listKioskScanReviews(db, "open", 0)).records.length, 1, "conflicting batch rolls back earlier inserts");
     await assert.rejects(markKioskScanReviewed(db, "operator", kiosk.id, record().eventId, { note: "No authority" }), /authorization/);
     await assert.rejects(markKioskScanReviewed(db, "other-admin", kiosk.id, record().eventId, { note: "Wrong installation" }), /authorization/);
-    await markKioskScanReviewed(db, "admin", kiosk.id, record().eventId, { note: "Attendance corrected separately.\nReviewed the meeting and retained evidence." });
-    await markKioskScanReviewed(db, "admin", kiosk.id, record().eventId, { note: "Retry must not replace the original note" });
+    assert.deepEqual(await markKioskScanReviewed(db, "admin", kiosk.id, record().eventId, { note: "Attendance corrected separately.\nReviewed the meeting and retained evidence." }), { reviewed: true, alreadyReviewed: false });
+    // A second review keeps the first note and audit entry, and says so instead of reporting a plain success.
+    assert.deepEqual(await markKioskScanReviewed(db, "admin", kiosk.id, record().eventId, { note: "Retry must not replace the original note" }), { reviewed: true, alreadyReviewed: true });
+    await assert.rejects(markKioskScanReviewed(db, "admin", kiosk.id, "no-such-scan", { note: "Missing scan" }), /Retained scan not found/);
     assert.equal((await database.prepare("SELECT COUNT(*) AS n FROM audit_log").first<{ n: number }>())!.n, 1);
     assert.deepEqual(await syncKioskScanReviews(db, kiosk, { records: [record()] }), { reviews: [{ eventId: "synthetic-scan", reviewStatus: "reviewed" }] });
     page = await listKioskScanReviews(db, "reviewed", 0);

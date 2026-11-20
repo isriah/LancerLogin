@@ -124,6 +124,23 @@ test("housekeeping runs reconcile, prune and cleanup as three small slices on th
   assert.equal((db.sqlite.prepare("SELECT COUNT(*) AS n FROM auth_rate_limits").get() as { n: number }).n, 0, "one cron pass ran every step");
 });
 
+test("the label job's slice calls Discord for nothing while every two-way label waits on a role sync", async () => {
+  const { db, env } = await installation();
+  for (const [index, label] of ["Test Label A", "Test Label B", "Test Label C"].entries()) {
+    const id = `label-${index}`; const roleId = String(700000000000000000n + BigInt(index));
+    db.sqlite.prepare("INSERT INTO member_labels(id,installation_id,name,created_at) VALUES (?,'primary',?,'2026-01-01')").run(id, label);
+    db.sqlite.prepare("INSERT INTO discord_label_role_mappings(installation_id,label_id,guild_id,role_id,role_name,created_at,sync_direction) VALUES ('primary',?,'123456789012345678',?,?,'2026-01-01','two_way')").run(id, roleId, label);
+    // Each label's queued role changes wait out a Discord rate limit.
+    db.sqlite.prepare("INSERT INTO discord_label_role_jobs(id,installation_id,label_id,guild_id,role_id,status,source_fingerprint,next_attempt_at,created_at,updated_at) VALUES (?,'primary',?,'123456789012345678',?,'pending','synthetic','2999-01-01T00:00:00.000Z','2026-01-01','2026-01-01')").run(`job-${index}`, id, roleId);
+  }
+  await withDiscord(async (requests) => {
+    quietJobs(db); const slices = await round(env, "attendance.discord-label-roles", requests);
+    assert.equal(slices.length, 1);
+    assert.deepEqual(slices[0]!.requests, [], "no role check and no member list while every label is syncing");
+    assert.ok(estimatedCpuMs(slices[0]!.d1, slices[0]!.provider) <= steadyBudgetMs, JSON.stringify(slices[0]));
+  });
+});
+
 test("a Durable Object slice records its job in the object's storage, not with a D1 write", async () => {
   const { db, env } = await installation(); quietJobs(db);
   const marks = hooks(); let writes = 0;

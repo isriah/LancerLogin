@@ -1,7 +1,7 @@
 import { type ChangeEvent, useRef, useState } from "react";
 import { api } from "./dashboard-api";
 import { downloadCsvTemplate, formatCsvDate, formatCsvTimeRange } from "./csv-import.ts";
-import { useModalFocus } from "./modal-focus";
+import { useFocusAfterRender, useModalFocus } from "./modal-focus";
 import { meetingCsvFieldHelp, meetingCsvFieldLabels, meetingCsvRowLimit, meetingCsvTemplate, parseMeetingCsvText, type MeetingCsvField, type MeetingCsvRow } from "../../../packages/shared/src/meeting-csv.ts";
 
 type Local = { title: string; date: string; startTime: string; endDate: string; endTime: string; required: boolean; audience: string[] };
@@ -33,11 +33,12 @@ export function MeetingImportDialog({ open, timeZone, onClose, onImported }: Pro
   const [importError, setImportError] = useState("");
   const [busy, setBusy] = useState(false); const dialog = useRef<HTMLDivElement>(null); const fileInput = useRef<HTMLInputElement>(null);
 
+  const focusAfterRender = useFocusAfterRender();
   useModalFocus(dialog, open, busy, () => { if (preview) back(); else close(); });
 
   function back() { setPreview(undefined); setImportError(""); }
   function close() { if (busy) return; back(); setErrors([]); setChoices({}); onClose(); }
-  function showErrors(next: string[]) { setErrors(next); window.requestAnimationFrame(() => document.getElementById("meeting-import-errors")?.focus()); }
+  function showErrors(next: string[]) { setErrors(next); focusAfterRender("meeting-import-errors"); }
   async function chooseFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = "";
@@ -69,7 +70,7 @@ export function MeetingImportDialog({ open, timeZone, onClose, onImported }: Pro
   async function confirm() {
     setBusy(true); setImportError("");
     try { const result = await api<MeetingImportResult>("/meetings/import", { method: "POST", body: JSON.stringify({ rows, dryRun: false, actions: choices }) }); setPreview(undefined); setCsv(""); setSourceName(""); setChoices({}); await onImported(result); onClose(); }
-    catch (error) { setImportError((error as Error).message || "Request failed"); window.requestAnimationFrame(() => document.getElementById("meeting-import-failure")?.focus()); }
+    catch (error) { setImportError((error as Error).message || "Request failed"); focusAfterRender("meeting-import-failure"); }
     finally { setBusy(false); }
   }
 

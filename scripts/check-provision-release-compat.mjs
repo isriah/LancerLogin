@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { newestOfficialRelease } from "../packages/shared/src/release-policy.mjs";
 
 // Confirms that every official release the installation workflow can select contains the files the workflow runs from it.
 // It also checks the other direction. Installation and update workflows published with earlier releases keep running in
-// adopters' private repositories and resolve "latest stable" to this release. Each must either compose plugins itself or
+// adopters' private repositories and resolve "latest stable" or "latest beta" to this release. Each must either compose plugins itself or
 // reach this release's composition guard (the dashboard prebuild) before any D1 migration.
 export const officialRepository = "isriah/LancerLogin";
 const workflowPath = ".github/workflows/provision-template.yml";
@@ -95,10 +96,16 @@ async function github(path, token, { raw = false, optional = false } = {}) {
   return raw ? response.text() : response.json();
 }
 
-/** The installation workflow installs only the latest stable release. */
+/** The releases the installation workflow installs: GitHub Latest for "latest stable", and the Beta track's newest for "latest beta". */
 export async function selectableReleases(token) {
   const latest = await github(`repos/${officialRepository}/releases/latest`, token);
-  return [latest.tag_name];
+  const releases = [];
+  for (let page = 1; page <= 5; page++) {
+    const values = await github(`repos/${officialRepository}/releases?per_page=100&page=${page}`, token);
+    releases.push(...values);
+    if (values.length < 100) break;
+  }
+  return [...new Set([latest.tag_name, newestOfficialRelease(releases, "beta")?.tag].filter(Boolean))];
 }
 
 /** Every published (non-draft) official release. */

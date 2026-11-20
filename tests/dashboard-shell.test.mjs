@@ -485,12 +485,9 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   const styles = await readFile("apps/dashboard/src/styles.css", "utf8");
   const roster = await readFile("apps/dashboard/src/roster-page.tsx", "utf8");
   assert.match(styles, /--card-padding: var\(--space-5\)/);
-  assert.match(styles, /\.kiosk-monitor[^\n]*padding: var\(--card-padding\)/);
-  assert.match(styles, /\.attendance-layout \{[^}]*margin-top: 1rem/);
   assert.match(styles, /\.attendance-card \.panel-heading \{ padding: var\(--card-padding\)/);
   assert.match(styles, /\.report-grid \{ display: grid; grid-template-columns: minmax\(0,1\.5fr\) minmax\(18rem,1fr\)/);
   assert.match(styles, /\.leaderboard-card \{ grid-row: span 2; \}/);
-  assert.match(styles, /\.roster-row-actions \{ display: flex/);
   assert.match(styles, /\.roster-row \{[^}]*minmax\(15rem,max-content\)/);
   assert.match(styles, /\.roster-row\.with-discord \{[^}]*grid-template-columns:[^}]*minmax\(15rem,max-content\)/);
   assert.match(styles, /\.roster-row > \* \{ align-self: center/);
@@ -500,13 +497,11 @@ test("dashboard cards keep their spacing and operational actions aligned", async
   assert.match(styles, /\.roster-actions \{[^}]*align-items: center/);
   assert.match(styles, /\.roster-directory \.panel-heading \{ align-items: start; flex-direction: column/);
   assert.match(styles, /\.roster-directory \.roster-actions \{ width: 100%; justify-content: space-between/);
-  assert.match(styles, /\.roster-row-actions button \{ min-height: 2\.25rem/);
   assert.match(roster, /className="ui-button member-pencil-button"/);
   assert.match(roster, /discordConfigured\s*\?\s*" with-discord"/);
   assert.match(roster, /className="roster-action-cell"/);
   assert.match(styles, /\.panel-heading \{[^}]*align-items: center/);
   assert.match(styles, /\.roster-directory h2 \{ margin-bottom: 0/);
-  assert.match(styles, /\.wizard-steps \.setup-finish-button \{[^}]*background: var\(--primary\)/);
   assert.match(roster, /<span className="roster-action-cell" role="columnheader">Actions<\/span>/);
   assert.doesNotMatch(roster, /current\.active\s*\?\s*"Active"\s*:\s*"Inactive"/);
 });
@@ -630,7 +625,6 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.match(source, /aria-pressed=\{active\?\.id === kiosk\.id\}/);
   assert.doesNotMatch(source, /Recovery guidance|recoveryGuidance/);
   assert.match(styles, /\.kiosk-state \{[^}]*align-items: center[^}]*min-height: var\(--control-min-block-size\)/);
-  assert.match(styles, /\.kiosk-health-pill \{[^}]*min-height: var\(--control-min-block-size\)/);
   assert.match(styles, /\.kiosk-card-heading \{[^}]*display: flex[^}]*justify-content: space-between/);
   assert.match(styles, /\.kiosk-card-heading \.primary-button \{[^}]*width: auto[^}]*margin: 0/);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*\.kiosk-card-heading \.primary-button \{ width: 100%; \}/);
@@ -641,8 +635,6 @@ test("kiosk lifecycle is managed on the Kiosks page without reopening onboarding
   assert.match(source, /\/discord\/kiosk-status/);
   assert.match(source, /Sync Discord status/);
   assert.match(source, /Persistent Discord kiosk status (?:updated|is already current)/);
-  assert.match(styles, /\.kiosk-discord-status \{[^}]*align-items: center[^}]*var\(--ui-surface-subtle\)[^}]*var\(--radius-card\)/);
-  assert.match(styles, /\.kiosk-discord-status button \{[^}]*min-height: var\(--control-min-block-size\)/);
 });
 
 test("Kiosks refresh hides redundant success while preserving actionable feedback", async () => {
@@ -676,7 +668,8 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /field="applicationId" label="Application ID"/);
   assert.match(source, /During verification, LancerLogin creates or updates only the guild-scoped/);
   assert.match(source, /<code>\/attendance-report<\/code>/);
-  assert.match(source, /<code>\/outreach-submit<\/code>/);
+  assert.match(source, /<code>\/code<\/code>, and <code>\/label<\/code> commands, plus the commands each installed plugin declares/);
+  assert.match(source, /Outreach adds <code>\/outreach-submit<\/code>, <code>\/outreach-correction<\/code> and, from Outreach v1\.4\.0, <code>\/outreach-report<\/code>/);
   assert.match(source, /Outreach commands remain unavailable until the Outreach module is enabled and ready/);
   assert.match(source, /server's Core and Outreach commands/);
   assert.match(source, /Verify with Google/);

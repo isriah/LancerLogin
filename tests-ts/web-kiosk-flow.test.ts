@@ -485,8 +485,8 @@ test("a render error shows a reload screen instead of a blank kiosk", async () =
   assert.doesNotMatch(fallback, /store\b/);
 });
 
-test("the waiting screen says where an Operator approves a PIN request", async () => {
+test("the waiting screen says who approves a PIN request and where", async () => {
   const screens = await readFile(new URL("../apps/dashboard/src/web-kiosk/member-pin-screens.tsx", import.meta.url), "utf8");
-  assert.match(screens, /Waiting for an Operator to approve on this kiosk's Manage page in the dashboard/);
+  assert.match(screens, /Waiting for an Operator or Admin to approve in the dashboard/);
   assert.doesNotMatch(screens, /approve here from maintenance/);
 });

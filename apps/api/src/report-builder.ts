@@ -165,7 +165,12 @@ export function defaultReportDefinition(hasBaseline: boolean, datasetId = "atten
   return { version: 2, dataset: dataset.id, groupBy: [...dataset.groupBy], period: dataset.filters.includes("period") && hasBaseline ? { type: "baseline" } : { type: "all" }, roster: "active", meetingType: "all", labelIds: [], labelMatch: "any", ...emptyModuleFilterSelections(), membership: "current", columns: dataset.defaultColumns.map(column), columnFilters: [], sort: { column: column(dataset.defaultSort.field), direction: dataset.defaultSort.direction } };
 }
 
-const isDate = (value: unknown): value is string => typeof value === "string" && datePattern.test(value) && new Date(value + "T00:00:00.000Z").toISOString().slice(0, 10) === value;
+// An impossible date such as 2026-13-45 parses to an invalid Date, whose toISOString() throws; it is simply not a date.
+const isDate = (value: unknown): value is string => {
+  if (typeof value !== "string" || !datePattern.test(value)) return false;
+  const parsed = new Date(value + "T00:00:00.000Z");
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+};
 const columnId = (column: ReportColumn) => `${column.key}${column.labelId ? `:${column.labelId}` : ""}`;
 export { columnId as reportColumnId };
 

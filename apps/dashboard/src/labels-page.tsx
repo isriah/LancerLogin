@@ -5,18 +5,19 @@ import { useModalFocus } from "./modal-focus";
 import { AttendanceSettingsSections } from "./settings-section-navigation";
 import { RouteLink, usePath } from "./router";
 import type { LabelData } from "./member-labels";
-import { autoSyncText, linkedSyncText, roleJobPollDelay, sortDiscordRoles, splitBySync } from "./discord-roles";
+import { autoSyncText, hasUnmatchedRoleList, linkedSyncText, roleJobPollDelay, roleJobPollMs, roleJobStuck, sortDiscordRoles, splitBySync, type RoleJobProgress } from "./discord-roles";
+import { DiscordUnmatchedRoleMembers } from "./discord-unmatched-role-members";
 import { DiscordLabelReconciliation, type ReconciliationConfirmInput, type ReconciliationPreview } from "./discord-label-reconciliation";
 
 type LabelsData = LabelData & { rules?: { labelId: string }[]; meetingCounts?: Record<string, number> };
 type SyncState = "never_synced" | "label_changes" | "no_label_changes";
 type SyncDirection = "to_discord" | "two_way";
-type Mapping = { labelId: string; labelName: string; roleId: string; roleName: string; health: string; healthDetail?: string; syncState?: SyncState; syncDirection?: SyncDirection; twoWayCheckedAt?: string | null; twoWayError?: string | null; twoWayPaused?: boolean; latestJob?: { id: string; status: string; updatedAt: string; completedAt?: string } };
+type Mapping = { labelId: string; labelName: string; roleId: string; roleName: string; health: string; healthDetail?: string; syncState?: SyncState; syncDirection?: SyncDirection; twoWayCheckedAt?: string | null; twoWayError?: string | null; twoWayPaused?: boolean; latestJob?: RoleJobProgress & { id: string; completedAt?: string } };
 type Role = { id: string; name: string; manageable: boolean; problem?: string; labelId?: string; labelName?: string };
 type Person = { discordUserId: string; displayName: string; memberId?: string };
 type Preview = { previewId: string; expiresAt: string; labelId: string; labelName?: string; roleName: string; memberCount: number; additions: Person[]; removals: Person[]; unpaired: { memberId: string; name: string }[]; absent: { memberId: string; name: string; discordUserId: string }[]; inactive: { memberId: string; name: string; discordUserId?: string }[] };
 type Job = { id: string; labelId?: string; status: string; updatedAt: string; items: { discordUserId: string; action: "add" | "remove"; status: string; attempts: number; lastError?: string }[] };
-const running = (job: Job) => ["pending", "running"].includes(job.status);
+const running = (job: { status: string }) => ["pending", "running"].includes(job.status);
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 const healthText: Record<string, string> = { ready: "Ready to sync", retired: "Label is retired", integration_unavailable: "Discord is not enabled and verified", different_server: "Linked in a different Discord server", unavailable: "Cannot sync" };
 
@@ -66,9 +67,20 @@ function SyncIcon({ state }: { state: SyncIconState }) {
 }
 const twoWayPausedText = "Two-way sync paused after a restore. Review differences to turn it back on.";
 const syncedAt = (mapping: Mapping) => mapping.latestJob ? ` Last synced ${new Date(mapping.latestJob.completedAt ?? mapping.latestJob.updatedAt).toLocaleString()}.` : "";
-/** What a linked label's sync icon shows: a running job first, then the link's health, the last job's outcome and label changes since. */
-function syncStatus(mapping: Mapping, job?: Job): { state: SyncIconState; text: string; detail: string } {
-  if (job && running(job)) return { state: "syncing", text: "Syncing", detail: `${job.items.filter((item) => item.status === "completed").length} of ${plural(job.items.length, "change")} done.` };
+const progressText = (completed: number, total: number) => `${completed} of ${plural(total, "change")} done`;
+/**
+ * What a linked label's sync icon shows: a running job first (one started on this page, or the label's latest job,
+ * which may come from a two-way check), then the link's health, the last job's outcome and label changes since. A
+ * running job that has made no progress for a long time is shown as stuck, not as syncing.
+ */
+function syncStatus(mapping: Mapping, job?: Job, now = Date.now()): { state: SyncIconState; text: string; detail: string; stuck?: boolean } {
+  if (job && running(job)) return { state: "syncing", text: "Syncing", detail: `${progressText(job.items.filter((item) => item.status === "completed").length, job.items.length)}.` };
+  const latest = mapping.latestJob;
+  if (latest && ["pending", "running"].includes(latest.status)) {
+    const progress = latest.total === undefined ? "" : `${progressText(latest.completed ?? 0, latest.total)}.`;
+    if (roleJobStuck(latest, now)) return { state: "failed", stuck: true, text: "Sync stuck", detail: `${progress ? `${progress} ` : ""}No role changes have gone through for over 15 minutes. Open View sync for details. Updating LancerLogin in Settings → Updates fixes a known cause; if it stays stuck, ask whoever maintains your installation to check its background scheduler.` };
+    return { state: "syncing", text: "Syncing", detail: progress || "Role changes are on their way to Discord." };
+  }
   if (mapping.twoWayPaused) return { state: "changed", text: "Two-way, needs reconciliation", detail: `${twoWayPausedText}${mapping.health === "ready" ? "" : ` ${healthText[mapping.health] ?? "Cannot sync"}${mapping.healthDetail ? `: ${mapping.healthDetail}` : ""}.`}` };
   if (mapping.health !== "ready") return { state: "failed", text: healthText[mapping.health] ?? "Cannot sync", detail: mapping.healthDetail ? `${mapping.healthDetail}.` : "" };
   if (mapping.latestJob?.status === "partial") return { state: "failed", text: "Last sync failed for some members", detail: `Retry the failed changes, or open View last sync for details.${syncedAt(mapping)}` };
@@ -114,7 +126,7 @@ function LabelDialog({ title, onClose, children }: { title: string; onClose: () 
 /** The latest sync job for one label, with its failed changes and, for Admins, a retry. */
 function JobDialog({ labelName, job, admin, busy, onRetry, onClose }: { labelName: string; job: Job; admin: boolean; busy: boolean; onRetry: () => void; onClose: () => void }) {
   const count = (status: string) => job.items.filter((item) => item.status === status).length;
-  return <LabelDialog title={`Last sync: ${labelName}`} onClose={onClose}><p><strong>Sync {job.status}</strong> · {count("completed")} completed, {count("pending")} pending, {count("failed")} failed. Updated {new Date(job.updatedAt).toLocaleString()}.</p>{count("failed") > 0 && <ul className="compact-list">{job.items.filter((item) => item.status === "failed").map((item) => <li key={item.discordUserId}>{item.action} {item.discordUserId}: {item.lastError}</li>)}</ul>}{job.status === "stale" && <p>Roster labels or pairing changed during sync. Review a fresh preview before continuing.</p>}<div className="dialog-actions"><button className="ui-button" type="button" onClick={onClose}>Close</button>{admin && job.status === "partial" && <button className="ui-button ui-button--primary" type="button" disabled={busy} onClick={onRetry}>Retry failed changes</button>}</div></LabelDialog>;
+  return <LabelDialog title={`${running(job) ? "Sync" : "Last sync"}: ${labelName}`} onClose={onClose}><p><strong>Sync {job.status}</strong> · {count("completed")} completed, {count("pending")} pending, {count("failed")} failed. Updated {new Date(job.updatedAt).toLocaleString()}.</p>{running(job) && <p className="field-help" role="status">This updates while the sync runs.</p>}{count("failed") > 0 && <ul className="compact-list">{job.items.filter((item) => item.status === "failed").map((item) => <li key={item.discordUserId}>{item.action} {item.discordUserId}: {item.lastError}</li>)}</ul>}{job.status === "stale" && <p>Roster labels or pairing changed during sync. Review a fresh preview before continuing.</p>}<div className="dialog-actions"><button className="ui-button" type="button" onClick={onClose}>Close</button>{admin && job.status === "partial" && <button className="ui-button ui-button--primary" type="button" disabled={busy} onClick={onRetry}>Retry failed changes</button>}</div></LabelDialog>;
 }
 
 export function LabelsPage({ role }: { role: "admin" | "operator" }) {
@@ -123,6 +135,8 @@ export function LabelsPage({ role }: { role: "admin" | "operator" }) {
   const [data, setData] = useState<LabelsData>();
   const [mappings, setMappings] = useState<Mapping[]>([]);
   const [available, setAvailable] = useState(false);
+  /** Counts role-link loads, so the unmatched Discord users list is read again after each one. */
+  const [loads, setLoads] = useState(0);
   const [roles, setRoles] = useState<Role[]>();
   const [rolesError, setRolesError] = useState("");
   const [name, setName] = useState("");
@@ -141,7 +155,7 @@ export function LabelsPage({ role }: { role: "admin" | "operator" }) {
   const reconcileSection = useRef<HTMLDivElement>(null);
   async function load() {
     const [labels, discord] = await Promise.all([api<LabelsData>("/labels"), api<{ mappings: Mapping[]; integrationAvailable: boolean }>("/admin/integrations/discord/label-roles")]);
-    setData(labels); setMappings(discord.mappings); setAvailable(discord.integrationAvailable);
+    setData(labels); setMappings(discord.mappings); setAvailable(discord.integrationAvailable); setLoads((count) => count + 1);
     if (admin && discord.integrationAvailable) await api<{ roles: Role[] }>("/admin/integrations/discord/roles").then((result) => { setRoles(sortDiscordRoles(result.roles)); setRolesError(""); }).catch((error: Error) => { setRoles(undefined); setRolesError(error.message); });
   }
   useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); }, []);
@@ -205,6 +219,21 @@ export function LabelsPage({ role }: { role: "admin" | "operator" }) {
     await load();
   };
   const showJob = (id: string, labelId: string, labelName: string) => void act(async () => { setViewing({ job: { ...await api<Job>(`/admin/integrations/discord/label-role-jobs/${encodeURIComponent(id)}`), labelId }, labelName }); });
+  // An open sync dialog refreshes while its job is pending or running, and stops once the job finishes or the dialog
+  // closes. It only reads the job: the scheduler, or this page's own check of a sync it started, moves it along. A
+  // check that fails is tried again after a growing wait, and given up after five in a row.
+  const viewingId = viewing?.job.id, viewingRunning = viewing ? running(viewing.job) : false;
+  useEffect(() => {
+    if (!viewingId || !viewingRunning) return;
+    let current = true, failures = 0, timer = 0;
+    const check = () => { timer = window.setTimeout(() => { void api<Job>(`/admin/integrations/discord/label-role-jobs/${encodeURIComponent(viewingId)}`).then((next) => {
+      if (!current) return; failures = 0;
+      setViewing((old) => old && old.job.id === viewingId ? { ...old, job: { ...next, labelId: next.labelId ?? old.job.labelId } } : old);
+      if (running(next)) check(); else void load().catch((error: Error) => setNotice(error.message));
+    }).catch(() => { if (!current) return; failures += 1; if (roleJobPollDelay(failures) !== undefined) check(); }); }, failures ? roleJobPollDelay(failures) ?? roleJobPollMs : roleJobPollMs); };
+    check();
+    return () => { current = false; window.clearTimeout(timer); };
+  }, [viewingId, viewingRunning]);
   const retry = (id: string, labelId: string) => { if (!window.confirm("Retry only failed role changes that are still needed?")) return; void act(async () => { const result = await api<{ jobId?: string; retried: number }>(`/admin/integrations/discord/label-role-jobs/${encodeURIComponent(id)}/retry`, { method: "POST", body: "{}" }); const next = result.jobId ? { ...await api<Job>(`/admin/integrations/discord/label-role-jobs/${encodeURIComponent(result.jobId)}`), labelId } : undefined; setViewing(undefined); setJobs((old) => [...old.filter((job) => job.labelId !== labelId), ...(next && running(next) ? [next] : [])]); await load(); return result.retried ? `Retrying ${result.retried} role changes.` : "No failed changes are still needed."; }); };
 
   const counts = data ? holderCounts(data) : new Map<string, number>();
@@ -225,14 +254,14 @@ export function LabelsPage({ role }: { role: "admin" | "operator" }) {
         const mapping = mappingFor(label.id); const holders = counts.get(label.id) ?? 0; const meetings = data.meetingCounts?.[label.id] ?? 0;
         const job = jobs.find((item) => item.labelId === label.id); const status = mapping && syncStatus(mapping, job);
         const twoWay = mapping?.syncDirection === "two_way"; const pausedTwoWay = Boolean(mapping?.twoWayPaused);
-        const primary = !admin || !mapping || !status ? undefined : status.state === "syncing" ? <button className="ui-button label-primary-action" type="button" disabled>Syncing…</button> : mapping.latestJob?.status === "partial" && mapping.health === "ready" ? <button className="ui-button label-primary-action" type="button" disabled={busy} onClick={() => retry(mapping.latestJob!.id, label.id)}>Retry failed</button> : pausedTwoWay ? <button className="ui-button label-primary-action" type="button" disabled={busy || mapping.health !== "ready"} onClick={() => changeDirection(mapping, "two_way")}>Review differences</button> : twoWay ? <><span className="label-auto-sync" role="note" title={autoSyncText} aria-describedby={`label-auto-sync-${label.id}`}><SyncIcon state="syncing" /><span>Every 5 min</span></span><span id={`label-auto-sync-${label.id}`} hidden>{autoSyncText}</span></> : <button className="ui-button label-primary-action" type="button" disabled={busy || mapping.health !== "ready"} onClick={() => previewOne(label.id)}>Sync to Discord</button>;
-        const menu: MenuItem[] = [...(admin ? [{ label: "Rename", onSelect: () => setRenaming({ id: label.id, name: label.name }) }] : []), ...(mapping?.latestJob ? [{ label: "View last sync", onSelect: () => showJob(mapping.latestJob!.id, label.id, label.name) }] : []), ...(admin && mapping ? [{ label: "Unlink role", danger: true, onSelect: () => unlink(mapping) }] : []), ...(admin ? [{ label: "Retire label", danger: true, onSelect: () => setActive(label, false) }] : [])];
+        const primary = !admin || !mapping || !status ? undefined : status.stuck ? <button className="ui-button label-primary-action" type="button" disabled={busy} onClick={() => showJob(mapping.latestJob!.id, label.id, label.name)}>View sync</button> : status.state === "syncing" ? <button className="ui-button label-primary-action" type="button" disabled>Syncing…</button> : mapping.latestJob?.status === "partial" && mapping.health === "ready" ? <button className="ui-button label-primary-action" type="button" disabled={busy} onClick={() => retry(mapping.latestJob!.id, label.id)}>Retry failed</button> : pausedTwoWay ? <button className="ui-button label-primary-action" type="button" disabled={busy || mapping.health !== "ready"} onClick={() => changeDirection(mapping, "two_way")}>Review differences</button> : twoWay ? <><span className="label-auto-sync" role="note" title={autoSyncText} aria-describedby={`label-auto-sync-${label.id}`}><SyncIcon state="syncing" /><span>Every 5 min</span></span><span id={`label-auto-sync-${label.id}`} hidden>{autoSyncText}</span></> : <button className="ui-button label-primary-action" type="button" disabled={busy || mapping.health !== "ready"} onClick={() => previewOne(label.id)}>Sync to Discord</button>;
+        const menu: MenuItem[] = [...(admin ? [{ label: "Rename", onSelect: () => setRenaming({ id: label.id, name: label.name }) }] : []), ...(mapping?.latestJob ? [{ label: running(mapping.latestJob) ? "View sync" : "View last sync", onSelect: () => showJob(mapping.latestJob!.id, label.id, label.name) }] : []), ...(admin && mapping ? [{ label: "Unlink role", danger: true, onSelect: () => unlink(mapping) }] : []), ...(admin ? [{ label: "Retire label", danger: true, onSelect: () => setActive(label, false) }] : [])];
         return <tr key={label.id}>
           <th scope="row">{label.name}</th>
           <td data-label="Members"><RouteLink href={`/roster?label=${encodeURIComponent(label.id)}&scope=all`} currentPath={path} navigate={navigate}>{plural(holders, "member")}</RouteLink></td>
           <td data-label="Attendance policy">{data.rules?.some((rule) => rule.labelId === label.id) ? <RouteLink href="/settings/attendance" currentPath={path} navigate={navigate}>Has a policy</RouteLink> : "None"}</td>
           <td data-label="Meetings">{plural(meetings, "meeting")}</td>
-          <td data-label="Discord role">{mapping && status ? <div className="label-discord-role"><InfoTip label={`Sync status for ${label.name}: ${status.text}`} glyph={<SyncIcon state={status.state} />} tone={status.state}>{status.text}. {status.detail}</InfoTip><strong>{mapping.roleName}</strong><span className="label-sync-text">{status.text}</span>{admin && (mapping.health === "ready" || twoWay || pausedTwoWay) && <select className="label-sync-direction" aria-label={`Sync direction for ${label.name}`} value={pausedTwoWay ? "paused" : mapping.syncDirection ?? "to_discord"} disabled={busy || status.state === "syncing"} onChange={(event) => changeDirection(mapping, event.target.value as SyncDirection)}><option value="to_discord">Dashboard to Discord</option>{pausedTwoWay && <option value="paused" disabled>Two-way, needs reconciliation</option>}<option value="two_way">{pausedTwoWay ? "Two-way (review differences)" : "Two-way"}</option></select>}{primary && <span className="label-role-action">{primary}</span>}</div>
+          <td data-label="Discord role">{mapping && status ? <div className="label-discord-role"><InfoTip label={`Sync status for ${label.name}: ${status.text}`} glyph={<SyncIcon state={status.state} />} tone={status.state}>{status.text}. {status.detail}</InfoTip><strong>{mapping.roleName}</strong><span className="label-sync-text">{status.text}</span>{admin && (mapping.health === "ready" || twoWay || pausedTwoWay) && <select className="label-sync-direction" aria-label={`Sync direction for ${label.name}`} value={pausedTwoWay ? "paused" : mapping.syncDirection ?? "to_discord"} disabled={busy || status.state === "syncing" || status.stuck} onChange={(event) => changeDirection(mapping, event.target.value as SyncDirection)}><option value="to_discord">Dashboard to Discord</option>{pausedTwoWay && <option value="paused" disabled>Two-way, needs reconciliation</option>}<option value="two_way">{pausedTwoWay ? "Two-way (review differences)" : "Two-way"}</option></select>}{primary && <span className="label-role-action">{primary}</span>}</div>
             : admin && roles && !importable.length ? <div className="label-discord-role" data-muted="true"><InfoTip label="Why no roles can be linked" glyph={<SyncIcon state="info" />}>{noLinkableReason}.</InfoTip><span>No roles left to link</span></div>
             : admin && roles ? <select className="label-role-select" aria-label={`Discord role for ${label.name}`} value="" disabled={busy} onChange={(event) => { if (event.target.value) link(label.id, event.target.value); }}><option value="">Link a Discord role…</option>{linkable.map((item) => <option key={item.id} value={item.id} disabled={!item.manageable}>{item.manageable ? item.name : `${item.name} (${item.problem})`}</option>)}</select> : <span className="label-discord-role" data-muted="true">Not linked</span>}</td>
           <td className="label-actions"><div className="label-row-actions">{menu.length > 0 ? <RowMenu label={label.name} items={menu} /> : <span className="label-menu-slot" aria-hidden="true" />}</div></td>
@@ -246,6 +275,7 @@ export function LabelsPage({ role }: { role: "admin" | "operator" }) {
         <p>{mappings.length ? `${mappings.length} ${mappings.length === 1 ? "label is" : "labels are"} linked to Discord roles. ${linkedSyncText(mappings)}` : "No labels are linked to Discord roles. Choose a role in the Discord role column above."}</p>
         {paused.map((mapping) => <div className="ui-status label-two-way-paused" data-tone="warning" role="status" key={mapping.labelId}><p><strong>{mapping.labelName}:</strong> {twoWayPausedText}{admin ? "" : " Ask an Admin to review it."}</p>{admin && <div className="dialog-actions"><button className="ui-button" type="button" disabled={busy} onClick={() => changeDirection(mapping, "to_discord")}>Switch to Dashboard to Discord</button><button className="ui-button ui-button--primary" type="button" disabled={busy || mapping.health !== "ready"} onClick={() => changeDirection(mapping, "two_way")}>{`Review differences for ${mapping.labelName}`}</button></div>}</div>)}
         {admin && <div className="dialog-actions"><button className="ui-button ui-button--primary" type="button" disabled={busy || !syncable.length} onClick={previewAll}>Sync all linked roles</button></div>}
+        {admin && hasUnmatchedRoleList(mappings) && <DiscordUnmatchedRoleMembers refresh={loads} />}
         {admin && importable.length > 0 && <details className="settings-disclosure"><summary>Create labels from Discord roles</summary><p>Creates a label named after each role and links them. An existing unlinked label with the same name is linked instead.</p><div className="quick-label-options">{importable.map((item) => <label className="checkbox-field" key={item.id}><input type="checkbox" checked={importIds.includes(item.id)} onChange={(event) => setImportIds((old) => event.target.checked ? [...old, item.id] : old.filter((id) => id !== item.id))} />{item.name}</label>)}</div><button className="ui-button ui-button--primary" type="button" disabled={busy || !importIds.length} onClick={importRoles}>{`Create and link ${plural(importIds.length, "label")}`}</button></details>}
       </>}
       {previews && <section ref={previewSection} className="discord-role-preview-set" aria-labelledby="discord-role-preview-title"><h3 id="discord-role-preview-title">Review Discord role changes</h3>{previews[0] && <p>Discord returned {previews[0].memberCount} server members. This preview expires at {new Date(previews[0].expiresAt).toLocaleTimeString()}.</p>}{skipped.length > 0 && <ul className="compact-list">{skipped.map((item) => <li key={item.labelName}>{item.labelName}: skipped. {item.reason}</li>)}</ul>}{previews.map((preview) => <RolePreview key={preview.previewId} preview={preview} />)}

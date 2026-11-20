@@ -738,8 +738,11 @@ byId("member-pin-next").addEventListener("click", async () => {
   try {
     await call("/maintenance/member-pins", { method: "POST", body: JSON.stringify({ memberId: member.memberId, pin }) });
     byId("member-pin-sheet").hidden = true; message("PIN set for " + member.firstName + " " + member.lastName + ".");
-  } catch (error) { byId("member-pin-error").textContent = friendlyError(error); }
-  finally { memberPinFirst = ""; byId("member-pin-display").value = ""; byId("member-pin-next").disabled = false; }
+  } catch (error) {
+    // Nothing was saved, so start over at the first entry. Staying on "Type the PIN again" with the first entry
+    // cleared would answer the next try with "The two PINs don't match".
+    showMemberPinStep("first", friendlyError(error));
+  } finally { memberPinFirst = ""; byId("member-pin-display").value = ""; byId("member-pin-next").disabled = false; }
 });
 byId("reset-member-pin").addEventListener("click", async () => {
   const member = pinMember(); if (!member) { message("Choose a member first.", true); return; }

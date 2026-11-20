@@ -24,6 +24,30 @@ export function lastMonthRange(today: string): { from: string; to: string } {
   return { from: end.slice(0, 7) + "-01", to: end };
 }
 
+/** Leaderboard dates the API would reject as out of order, so the page explains them instead of asking. */
+export type LeaderboardDateProblem = { kind: "to-before-baseline"; to: string; baseline: string } | { kind: "from-after-to"; from: string; to: string };
+
+/**
+ * The problem with the Leaderboard's dates, or undefined when they can be requested. From the attendance baseline, From
+ * is the baseline and only To is chosen; with fixed dates both are, and either may be blank.
+ */
+export function leaderboardDateProblem({ useBaseline, baseline, from, to }: { useBaseline: boolean; baseline: string; from: string; to: string }): LeaderboardDateProblem | undefined {
+  if (!to) return undefined;
+  if (useBaseline) return baseline && to < baseline ? { kind: "to-before-baseline", to, baseline } : undefined;
+  return from && from > to ? { kind: "from-after-to", from, to } : undefined;
+}
+
+/** The earliest To and latest From the Leaderboard's date pickers offer, so a picked date can't be out of order. */
+export function leaderboardDateLimits({ useBaseline, baseline, from, to }: { useBaseline: boolean; baseline: string; from: string; to: string }): { toMin?: string; fromMax?: string } {
+  if (useBaseline) return baseline ? { toMin: baseline } : {};
+  return { ...(from ? { toMin: from } : {}), ...(to ? { fromMax: to } : {}) };
+}
+
+/** The API's answer to report dates that are invalid or out of order, which the Leaderboard rewords. */
+export const reportDatesRejectedError = "Report dates must be valid and in order";
+/** What the Leaderboard shows if the API still rejects its dates. */
+export const reportDatesRejectedText = "These dates can't be used. Check that From is on or before To, then try again.";
+
 export function reportExportFilename(name: string, detail: boolean, date = new Date()): string {
   const label = name.normalize("NFKC").trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 64) || "report";
   return `lancerlogin-${label}-${date.toISOString().slice(0, 10)}${detail ? "-detail" : ""}.csv`;

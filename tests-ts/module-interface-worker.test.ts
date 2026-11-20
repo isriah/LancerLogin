@@ -82,7 +82,9 @@ function installation() {
     const headers: Record<string, string> = {};
     // A stale session was signed in more than ten minutes ago, outside the fresh-authentication window.
     const issuedAt = init.stale ? Date.now() - 11 * 60_000 : Date.now();
-    if (init.signedIn !== false) headers.cookie = "lancerlogin_session=" + await createSessionCodec(sessionSecret, () => issuedAt).issue({ userId: init.user ?? "admin", role: init.user ?? "admin" });
+    // The account's current session epoch, as signing in reads it: an installation restore ends every earlier session.
+    const epoch = Number(db.raw.prepare("SELECT session_epoch AS epoch FROM users WHERE id = ?").get(init.user ?? "admin")?.epoch ?? 0);
+    if (init.signedIn !== false) headers.cookie = "lancerlogin_session=" + await createSessionCodec(sessionSecret, () => issuedAt).issue({ userId: init.user ?? "admin", role: init.user ?? "admin", epoch });
     if (init.body !== undefined) headers["content-type"] = "application/json";
     if (init.dashboard) headers.origin = origin;
     const response = await worker.fetch(new Request(`https://api.example.test${path}`, { method: init.method ?? (init.body === undefined ? "GET" : "POST"), headers, body: init.body === undefined ? undefined : JSON.stringify(init.body) }), env as never);

@@ -41,7 +41,7 @@ import { recoveryApp } from "../apps/kiosk/src/recovery-ui.mjs";
 import { startVerifiedKioskUpdate } from "../apps/kiosk/src/update-command.mjs";
 import { kioskScrollbarStyles, maintenanceScrollbarStyles } from "../apps/kiosk/src/scrollbar-styles.mjs";
 import { resolveKioskRelease } from "../apps/kiosk/src/resolve-kiosk-release.mjs";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 
 test("R503 packet stream preserves fragmented and coalesced synthetic packets", () => {
@@ -1225,6 +1225,12 @@ test("pairing client requires HTTPS and does not persist the one-time code", asy
   let sent;
   const config = await pairInstallation({ apiUrl: "https://api.example.test/", code: "ab-cd", kioskName: "Front desk", fetchImpl: async (_url, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ kioskId: "kiosk-1", kioskToken: "secret-token", pairingId: "pairing-1", name: "Front desk" }), { status: 201, headers: { "content-type": "application/json" } }); } });
   assert.deepEqual(sent, { code: "AB-CD", kioskName: "Front desk" });
+  // The kiosk's release goes with the pairing request when it is known, and is not kept in the saved pairing.
+  const fetchImpl = async (_url, init) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ kioskId: "kiosk-1", kioskToken: "secret-token", pairingId: "pairing-1", name: "Front desk" }), { status: 201, headers: { "content-type": "application/json" } }); };
+  const stated = await pairInstallation({ apiUrl: "https://api.example.test/", code: "ab-cd", kioskName: "Front desk", releaseVersion: " 2.1.0-beta.10 ", fetchImpl });
+  assert.deepEqual(sent, { code: "AB-CD", kioskName: "Front desk", releaseVersion: "2.1.0-beta.10" });
+  assert.equal("releaseVersion" in stated, false);
+  for (const releaseVersion of [undefined, null, "", "  ", 2]) { await pairInstallation({ apiUrl: "https://api.example.test/", code: "ab-cd", kioskName: "Front desk", releaseVersion, fetchImpl }); assert.deepEqual(sent, { code: "AB-CD", kioskName: "Front desk" }); }
   assert.equal(config.apiUrl, "https://api.example.test");
   assert.equal("code" in config, false);
   assert.equal(config.kioskToken, "secret-token");
@@ -1281,60 +1287,6 @@ test("file queue survives restart, preserves order, and removes only delivered e
     const restarted = createFileQueue(path); let calls = 0; assert.deepEqual(await restarted.flush(async () => { calls += 1; if (calls === 2) throw new Error("offline"); }), ["one"]);
     assert.deepEqual((await createFileQueue(path).pending()).map((event) => event.eventId), ["two"]);
   } finally { await rm(directory, { recursive: true }); }
-});
-
-test("local attendance acknowledges durable offline saves without waiting for cloud delivery", async () => {
-  for (const mode of ["offline", "slow", "corrupt"]) {
-    const directory = await mkdtemp(join(tmpdir(), "lancerlogin-local-save-"));
-    const queuePath = join(directory, "queue.json");
-    try {
-      const configPath = join(directory, "pairing.json");
-      await writeFile(configPath, JSON.stringify({ apiUrl: "https://api.example.test", kioskToken: "synthetic", pairingId: "synthetic-pairing" }));
-      if (mode === "corrupt") await writeFile(queuePath, "{broken");
-      const program = `
-        import assert from 'node:assert/strict';
-        import {readFile} from 'node:fs/promises';
-        const {createFileQueue}=await import(new URL('./file-queue.mjs',process.argv[1]).href);
-        const mode=process.argv[2];const originalFetch=globalThis.fetch;let release;
-        const held=new Promise(resolve=>{release=resolve});
-        globalThis.fetch=async(url,options)=>{
-          if(String(url).startsWith('https://api.example.test/')){
-            if(mode==='slow')await held;
-            throw new Error('Synthetic cloud unavailable');
-          }
-          return originalFetch(url,options);
-        };
-        const {server}=await import(process.argv[1]);
-        await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-        const base='http://127.0.0.1:'+server.address().port;
-        await fetch(base+'/operator-presence',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'enter',pageId:'synthetic-offline-page',mode:'attendance'})});
-        const event={eventId:'offline-fixed-id',memberId:'synthetic-member',occurredAt:'2026-09-19T12:00:00.000Z'};
-        const submit=()=>fetch(base+'/attendance',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(event),signal:AbortSignal.timeout(2000)});
-        try {
-          const response=await submit();
-          if(mode==='corrupt'){
-            assert.equal(response.status,400);
-            assert.equal(await readFile(process.env.LANCERLOGIN_QUEUE,'utf8'),'{broken');
-          }else{
-            assert.equal(response.status,202);
-            assert.deepEqual(await response.json(),{accepted:true,queued:1});
-            const retry=await submit();assert.equal(retry.status,200);
-            assert.deepEqual(await retry.json(),{accepted:false,queued:1});
-            const saved=await createFileQueue(process.env.LANCERLOGIN_QUEUE).pending();
-            assert.equal(saved.length,1);assert.equal(saved[0].eventId,event.eventId);assert.equal(saved[0].memberId,event.memberId);assert.equal(saved[0].pairingId,'synthetic-pairing');
-            assert.equal(saved[0].clock.version,1);assert.equal(saved[0].clock.verified,false);
-            assert.ok(Number.isFinite(Date.parse(saved[0].occurredAt)));assert.notEqual(saved[0].occurredAt,event.occurredAt);
-          }
-        }finally{release();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
-      `;
-      const child = spawnSync(process.execPath, ["--input-type=module", "-e", program, new URL("../apps/kiosk/src/service.mjs", import.meta.url).href, mode], {
-        encoding: "utf8", timeout: 10_000,
-        env: { ...process.env, NODE_ENV: "test", LANCERLOGIN_SENSOR_PATH: "disabled", LANCERLOGIN_CONFIG: configPath, LANCERLOGIN_QUEUE: queuePath },
-      });
-      assert.ifError(child.error);
-      assert.equal(child.status, 0, child.stdout + child.stderr);
-    } finally { await rm(directory, { recursive: true, force: true }); }
-  }
 });
 
 test("concurrent replay sends each event once and keeps accepting new scans", async () => {

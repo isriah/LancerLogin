@@ -119,3 +119,17 @@ export async function setMeetingState(request: APIRequestContext, state: Meeting
   await panelPost(request, "/api/meeting", { state });
   return (await status(request)).meeting;
 }
+
+/** One scan delivery the kiosk's link to the Worker saw: who it was for ("code" for a Discord code), and the answer. */
+export type LinkScan = { scan: string | null; status: number; forwarded: boolean };
+/** The scan deliveries the kiosk's link to the Worker has seen, in the order they arrived. */
+export async function linkScans(request: APIRequestContext): Promise<LinkScan[]> {
+  return (await (await request.get(`${panel()}/api/kiosks/0/link`)).json()).scans;
+}
+/**
+ * Has the kiosk's link answer its next scan deliveries itself with a refusal the kiosk does not know, so those scans stay
+ * queued while the Worker stays reachable. Zero passes scans again. clearScans starts the list of deliveries over.
+ */
+export async function refuseScanDeliveries(request: APIRequestContext, count: number, { clearScans = false } = {}) {
+  await panelPost(request, "/api/kiosks/0/link", { refuseScans: count, ...(clearScans ? { clearScans: true } : {}) });
+}

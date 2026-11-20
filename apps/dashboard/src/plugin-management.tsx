@@ -80,6 +80,9 @@ const removalBlocked = (phase: Phase) => phase === "enabled" ? "Turn this module
 function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; state: PluginState; onClose: () => void; onCommitted: (message: string) => void }) {
   const [form, setForm] = useState<Draft>({ ...draft, track: draft.track ?? "stable" });
   const [review, setReview] = useState<Review>();
+  // The request the review answered. Commit posts this, never the live form, so the commit that is pinned is the one
+  // the Admin was shown, whatever happens to the form afterwards.
+  const [reviewedChange, setReviewedChange] = useState<ReturnType<typeof body>>();
   const [lookup, setLookup] = useState<{ busy: boolean; result?: ReleaseLookup; error?: string }>({ busy: false });
   const lookupRun = useRef(0);
   const [trusted, setTrusted] = useState(false);
@@ -111,7 +114,10 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
   const canLookup = Boolean(form.id.trim() && form.source.trim());
   async function inspect(event?: FormEvent) {
     event?.preventDefault();
-    await run(async () => { setTrusted(false); setReview(await request<Review>("/admin/plugins/review", body(form))); });
+    // A release lookup still in flight fills in the commit when it lands, so the review waits for it.
+    if (lookup.busy) return;
+    const change = body(form);
+    await run(async () => { setTrusted(false); const result = await request<Review>("/admin/plugins/review", change); setReviewedChange(change); setReview(result); });
   }
   useEffect(() => { if (draft.action === "remove") void inspect(); else if (draft.action === "upgrade" && canLookup) void findRelease(form, false); }, []);
   async function reauthenticate(password: string) {
@@ -120,10 +126,11 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
     return confirmed;
   }
   async function commit() {
-    if (!review) return;
+    const change = reviewedChange;
+    if (!review || !change) return;
     await run(async () => {
-      await request("/admin/plugins/change", { ...body(form), selectionSha: review.selectionSha, ...(form.action === "remove" ? {} : { trustConfirmed: true }) });
-      onCommitted(`${form.action === "add" ? "Added" : form.action === "upgrade" ? "Pinned" : "Removed"} ${form.id}${form.action !== "remove" && form.track === "nightly" ? " on the Nightly track (testing only)" : ""} in the private deployment repository. Select Apply changes to deploy it.`);
+      await request("/admin/plugins/change", { ...change, selectionSha: review.selectionSha, ...(change.action === "remove" ? {} : { trustConfirmed: true }) });
+      onCommitted(`${change.action === "add" ? "Added" : change.action === "upgrade" ? "Pinned" : "Removed"} ${change.id}${change.action !== "remove" && change.track === "nightly" ? " on the Nightly track (testing only)" : ""} in the private deployment repository. Select Apply changes to deploy it.`);
     });
   }
   const verb = form.action === "add" ? "Add module" : form.action === "upgrade" ? "Update module" : "Remove module";
@@ -145,7 +152,7 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
         <p className="field-help" role="status" aria-live="polite">{lookupText}{diagnosticUrl(offered?.url) && <> <a href={diagnosticUrl(offered?.url)} target="_blank" rel="noreferrer">Release notes</a></>}</p></div>
       <label>Commit SHA<input className="ui-control" required value={form.commit} autoComplete="off" spellCheck={false} pattern="[0-9a-fA-F]{40}" aria-describedby={`${id}-commit-help`} data-modal-initial-focus={draft.action === "upgrade" ? "" : undefined} onChange={(event) => setForm({ ...form, commit: event.target.value })} /></label>
       <p id={`${id}-commit-help`} className="field-help">The full 40-character commit you reviewed. Branches, tags and shortened SHAs are not accepted.</p>
-      <div className="module-actions"><button className="ui-button ui-button--primary primary-button" type="submit" disabled={busy}>{busy ? "Checking…" : "Review change"}</button><button className="ui-button" type="button" disabled={busy} onClick={onClose}>Cancel</button></div>
+      <div className="module-actions"><button className="ui-button ui-button--primary primary-button" type="submit" disabled={busy || lookup.busy}>{busy ? "Checking…" : "Review change"}</button><button className="ui-button" type="button" disabled={busy} onClick={onClose}>Cancel</button></div>
     </form>}
     {!review && !editing && !error && <p className="ui-status" role="status">Checking the change…</p>}
     {review && <div className="plugin-review" aria-labelledby={`${id}-review-title`} role="group">

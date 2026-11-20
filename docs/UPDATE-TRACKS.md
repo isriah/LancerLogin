@@ -6,11 +6,11 @@ This page describes how update tracks behave. To choose a track, see [Choose an 
 
 An Admin chooses the track in **Settings > Updates > Update track**. Stable is the default and a newly provisioned installation starts on it. Choosing Beta requires acknowledging the warning and choosing **Save update track**. The server stores the installation-wide choice with a revision and records it in the audit log.
 
-Saving a track never installs software. Dashboard updates still require a prepared release, an entire-installation backup and an explicit start. Each physical kiosk needs its own **Update kiosk** command, and kiosk updates follow the same track.
+Saving a track never installs software. Dashboard updates still require a prepared release, an entire-installation backup and an explicit start. Neither track requires the optional dashboard update token: without it, **Install or upgrade LancerLogin** installs the track's newest release with operation `upgrade` and release `latest stable` or, on the Beta track only, `latest beta` (offered by the workflow file from v2.1.0-beta.10 on). See [web updates](WEB-UPDATES.md#update-without-the-token). Each physical kiosk needs its own **Update kiosk** command, and kiosk updates follow the same track.
 
 Stable offers complete official stable releases. Beta offers complete official beta and stable releases, selecting the highest version rather than the most recently published. For example, `2.0.0-beta.10` follows `2.0.0-beta.9`, and stable `2.0.0` follows every `2.0.0-beta.N`.
 
-Returning to Stable does not remove modules or downgrade installed software. If the latest stable version is older than the installed beta, the installation waits for a newer stable release. Restoring older code or a database is a separate recovery decision, not a track switch.
+Returning to Stable does not remove modules or downgrade installed software. If the latest stable version is older than the installed beta, the installation waits for a newer stable release; the installation workflow refuses that `latest stable` upgrade with `release_downgrade_refused`. Restoring older code or a database is a separate recovery decision, not a track switch.
 
 Changing tracks expires unstarted prepared web updates. Tracks cannot change during a started web update or a recent pending kiosk update. Track consent is operational state, excluded from application backups and restores like deployment locks; a full D1 export retains it.
 

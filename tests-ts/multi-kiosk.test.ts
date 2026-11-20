@@ -8,6 +8,7 @@ import { createHash, pbkdf2Sync, randomUUID } from "node:crypto";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { omitContestResubmissionFields } from "./fixtures/backup-versions.ts";
+import { restoredSessionCookie } from "./fixtures/backup-database.ts";
 import { verifyMemberPin } from "../apps/dashboard/src/web-kiosk/member-pin.ts";
 import { verifyCachedPin } from "../apps/kiosk/src/member-pins.mjs";
 
@@ -165,12 +166,17 @@ async function fixture(context: TestContext, legacySchema = false) {
   context.mock.method(globalThis, "fetch", () => { throw new Error("No live provider access is permitted in this fixture"); });
   const database = new Database(legacySchema); context.after(() => database.sqlite.close());
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: secret, DB: database } as unknown as Env;
-  const cookie = `lancerlogin_session=${await createSessionCodec(secret).issue({ userId: "admin", role: "admin" })}`;
-  const call = (path: string, body?: unknown, token?: string, method?: string) => worker.fetch(new Request(`https://api.example.test${path}`, {
-    method: method ?? (body === undefined ? "GET" : "POST"),
-    headers: { ...(body === undefined ? {} : { "content-type": "application/json", origin: env.ALLOWED_ORIGIN }), ...(token ? { authorization: `Bearer ${token}` } : { cookie }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }), env);
+  let cookie = `lancerlogin_session=${await createSessionCodec(secret).issue({ userId: "admin", role: "admin" })}`;
+  const call = async (path: string, body?: unknown, token?: string, method?: string) => {
+    const result = await worker.fetch(new Request(`https://api.example.test${path}`, {
+      method: method ?? (body === undefined ? "GET" : "POST"),
+      headers: { ...(body === undefined ? {} : { "content-type": "application/json", origin: env.ALLOWED_ORIGIN }), ...(token ? { authorization: `Bearer ${token}` } : { cookie }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }), env);
+    // An installation restore ends every earlier session and gives the restoring Admin a new cookie, as a browser keeps it.
+    if (path === "/admin/data/restore") cookie = restoredSessionCookie(result) ?? cookie;
+    return result;
+  };
   const code = async (name: string) => {
     const result = await call("/admin/pairing-codes", { kioskName: name }); assert.equal(result.status, 201);
     return (await result.json() as { code: string }).code;
@@ -719,6 +725,40 @@ test("Require PIN turns on only at a Pi kiosk whose reported release asks for PI
   for (const release of ["2.1.0-beta.3", "v2.1.0-beta.3", "2.1.0-beta.4", "2.1.0-beta.10", "2.1.0", "2.1.1", "2.2.0-beta.1", "3.0.0"]) {
     await reports(release); await saved(pi.kioskId, { requirePin: true }, true, release); await saved(pi.kioskId, { requirePin: false }, false, `${release} off`);
   }
+  // A Pi kiosk that states its release when it pairs has it from the start: Require PIN can be turned on before its first
+  // heartbeat. The release is trimmed and stored as a heartbeat stores it, and shown to the dashboard.
+  const pairStating = async (name: string, releaseVersion: unknown) => {
+    const created = await call("/admin/pairing-codes", { kioskName: name }); assert.equal(created.status, 201);
+    const paired = await call("/kiosk/pair", { code: (await created.json() as { code: string }).code, kioskName: name, releaseVersion }); assert.equal(paired.status, 201, `${name}: ${await paired.clone().text()}`);
+    const kiosk = await paired.json() as { kioskId: string; kioskToken: string };
+    return { ...kiosk, release: database.sqlite.prepare("SELECT release_version AS release, last_seen_at AS lastSeenAt FROM kiosks WHERE id = ?").get(kiosk.kioskId) };
+  };
+  const current = await pairStating("Test Pi Kiosk Current", " 2.1.0-beta.10 ");
+  assert.deepEqual({ ...current.release }, { release: "2.1.0-beta.10", lastSeenAt: null });
+  assert.equal((await (await call("/admin/kiosks")).json() as { kiosks: { id: string; releaseVersion?: string | null }[] }).kiosks.find(kiosk => kiosk.id === current.kioskId)?.releaseVersion, "2.1.0-beta.10");
+  await saved(current.kioskId, { requirePin: true }, true, "stated when pairing, no heartbeat yet");
+  // The stated release is held to the same rule as a reported one: too old, or not an official release, is refused.
+  for (const [index, release] of ["2.1.0-beta.2", "development"].entries()) {
+    const old = await pairStating(`Test Pi Kiosk Stated ${index}`, release);
+    assert.equal(old.release?.release, release); await refused(old.kioskId, { requirePin: true }, `stated ${release}`);
+  }
+  // A kiosk that states none (every kiosk before 2.1.0-beta.10), or something a heartbeat would not take, pairs as
+  // before with no release, and is refused until its first heartbeat reports one.
+  for (const [index, release] of [undefined, null, "", "   ", 21, "2".repeat(41), { version: "2.1.0" }].entries()) {
+    const silent = await pairStating(`Test Pi Kiosk Silent ${index}`, release);
+    assert.equal(silent.release?.release, null, JSON.stringify(release)); await refused(silent.kioskId, { requirePin: true }, `stated ${JSON.stringify(release)}`);
+    if (index === 0) { assert.equal((await call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "2.1.0-beta.9" }, silent.kioskToken)).status, 200); await saved(silent.kioskId, { requirePin: true }, true, "after the first heartbeat"); }
+  }
+  // A later heartbeat still decides: the release the kiosk reports replaces the one it stated.
+  assert.equal((await call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "2.1.0-beta.2" }, current.kioskToken)).status, 200);
+  await saved(current.kioskId, { requirePin: false }, false, "turning it off"); await refused(current.kioskId, { requirePin: true }, "reported an older release since");
+  // A web kiosk pairs with its code alone; a release sent with it is not stored, and it is never blocked.
+  const webCode = await call("/admin/pairing-codes", { kioskName: "Test Web Kiosk Stated", kind: "web" }); assert.equal(webCode.status, 201, await webCode.clone().text());
+  const webPaired = await call("/kiosk/pair", { code: (await webCode.json() as { code: string }).code, releaseVersion: "1.0.0" }); assert.equal(webPaired.status, 201);
+  const webStated = await webPaired.json() as { kioskId: string };
+  assert.equal(database.sqlite.prepare("SELECT release_version AS release FROM kiosks WHERE id = ?").get(webStated.kioskId)?.release, null);
+  await saved(webStated.kioskId, { requirePin: true }, true, "a web kiosk");
+
   // A kiosk that already has Require PIN on is never forced off: other saves keep it, and it can still be turned off.
   await saved(pi.kioskId, { requirePin: true }, true, "on while current"); await reports("2.0.1");
   await saved(pi.kioskId, { memberLookup: "entry" }, true, "a save that leaves it out");
@@ -946,4 +986,109 @@ test("real SQLite installation backups carry member PINs, Require PIN and lockou
   // A schema 46 backup that names the new table is refused.
   const mislabeled = structuredClone(backup); mislabeled.schemaVersion = 46;
   assert.equal((await restore(mislabeled)).status, 400);
+});
+
+test("real SQLite waiting PIN request counts ride on the module refresh, and one route lists every kiosk's requests", async context => {
+  const { database, call } = await fixture(context);
+  database.sqlite.exec(`INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES ('operator','primary','operator','operator','2026-01-01');
+    INSERT INTO members(id,installation_id,external_id,first_name,last_name,email,created_at) VALUES ('test-b','primary','TEST-B','Test Student','B','test-student-b@example.test','2026-01-01'), ('test-c','primary','TEST-C','Test Student','C','test-student-c@example.test','2026-01-01');`);
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: secret, DB: database } as unknown as Env;
+  type Claims = { userId: string; role: string };
+  const as = async (claims: Claims | undefined, path: string, method = "GET") => worker.fetch(new Request(`https://api.example.test${path}`, { method, headers: { ...(claims ? { cookie: `lancerlogin_session=${await createSessionCodec(secret).issue(claims as { userId: string; role: "operator" })}` } : {}), ...(method === "GET" ? {} : { origin: env.ALLOWED_ORIGIN, "content-type": "application/json" }) }, ...(method === "GET" ? {} : { body: "{}" }) }), env);
+  const operator: Claims = { userId: "operator", role: "operator" };
+  // The counts and the list are read as the Admin: this fixture's Operator, inserted directly, has no Attendance workspace.
+  const admin: Claims = { userId: "admin", role: "admin" };
+  const json = async (result: Response) => await result.json() as any;
+  const pairWeb = async (name: string) => {
+    const { code } = await json(await call("/admin/pairing-codes", { kioskName: name, kind: "web" }));
+    const paired = await json(await call("/kiosk/pair", { code }));
+    assert.equal((await call(`/admin/kiosks/${paired.kioskId}/authentication-method`, { authenticationMethod: "member_id", requirePin: true }, undefined, "PATCH")).status, 200);
+    return paired as { kioskId: string; kioskToken: string };
+  };
+  // Named so the list's order by kiosk name differs from the order the kiosks were paired in.
+  const b = await pairWeb("Test Web Kiosk B"), a = await pairWeb("Test Web Kiosk A");
+  const ask = async (kiosk: { kioskToken: string }, memberId: string) => { const result = await call("/kiosk/pin-requests", { memberId }, kiosk.kioskToken); assert.equal(result.status, 201, await result.clone().text()); return (await json(result)).request.id as string; };
+  const counts = async (claims = admin) => (await json(await as(claims, "/platform/modules"))).pinRequests;
+  const listed = async () => (await json(await as(admin, "/admin/kiosks/pin-requests"))).requests as { id: string; kioskId: string; kioskName: string; member: { memberId: string }; createdAt: string; expiresAt: string }[];
+  const byKiosk = (entries: { kioskId: string; count: number }[]) => entries.sort((left, right) => left.kioskId < right.kioskId ? -1 : 1);
+
+  // Nothing waiting: the counts are there and empty, and the snapshot is otherwise unchanged.
+  assert.deepEqual(await counts(), { total: 0, kiosks: [] });
+  const snapshot = await json(await as(admin, "/platform/modules"));
+  assert.equal(typeof snapshot.revision, "number"); assert.ok(Array.isArray(snapshot.modules));
+  assert.deepEqual(await listed(), []);
+
+  // Only a signed-in Admin or Operator gets the counts or the list.
+  for (const path of ["/platform/modules", "/admin/kiosks/pin-requests"]) {
+    assert.equal((await as(undefined, path)).status, 401, `${path} needs a session`);
+    const other = await as({ userId: "operator", role: "member" }, path);
+    assert.ok([401, 403].includes(other.status), `${path} refuses a role that is neither Admin nor Operator (${other.status})`);
+    const refused = await json(other);
+    assert.equal("pinRequests" in refused, false); assert.equal("requests" in refused, false);
+  }
+  assert.ok((await as(admin, "/admin/kiosks/pin-requests", "POST")).status >= 400, "the list is read-only");
+  // An Operator without the Attendance workspace gets neither, as with every route under /admin/kiosks.
+  const noWorkspace = await as(operator, "/admin/kiosks/pin-requests");
+  assert.ok(noWorkspace.status >= 400, String(noWorkspace.status)); assert.equal("requests" in await json(noWorkspace), false);
+
+  // Two at kiosk A, one at kiosk B.
+  const first = await ask(a, "SYN-001");
+  context.mock.timers.tick(120_000);
+  const second = await ask(a, "TEST-B"), third = await ask(b, "TEST-C");
+  assert.deepEqual(await counts(), { total: 3, kiosks: byKiosk([{ kioskId: a.kioskId, count: 2 }, { kioskId: b.kioskId, count: 1 }]) });
+  const all = await listed();
+  assert.deepEqual(all.map(({ id, kioskName, member }) => [id, kioskName, member.memberId]), [[first, "Test Web Kiosk A", "SYN-001"], [second, "Test Web Kiosk A", "TEST-B"], [third, "Test Web Kiosk B", "TEST-C"]]);
+  assert.deepEqual(Object.keys(all[0]!).sort(), ["createdAt", "expiresAt", "id", "kioskId", "kioskName", "member"]);
+  // The dialog's rows are the ones each kiosk's Manage page lists.
+  for (const kiosk of [a, b]) assert.deepEqual((await json(await as(admin, `/admin/kiosks/${kiosk.kioskId}/pin-requests`))).requests.map((request: { id: string }) => request.id), all.filter((request) => request.kioskId === kiosk.kioskId).map((request) => request.id));
+
+  // Cost: one read of pin_setup_requests each, whatever is waiting, and no write. The count is answered from the index.
+  const prepared: string[] = []; const prepare = database.prepare.bind(database);
+  const recording = context.mock.method(database, "prepare", (sql: string) => { prepared.push(sql); return prepare(sql); });
+  await counts(); const countReads = prepared.filter((sql) => sql.includes("pin_setup_requests"));
+  assert.equal(countReads.length, 1); assert.match(countReads[0]!, /^SELECT /);
+  const plan = database.sqlite.prepare(`EXPLAIN QUERY PLAN ${countReads[0]}`).all(new Date().toISOString()).map((row) => String(row.detail)).join("\n");
+  assert.match(plan, /SEARCH r USING COVERING INDEX pin_setup_requests_kiosk \(installation_id=\? AND kiosk_id=\? AND status=\? AND expires_at>\?\)/, plan);
+  assert.doesNotMatch(plan, /SCAN r\b|pin_setup_requests_kiosk \(installation_id=\?\)/, plan);
+  prepared.length = 0; await listed();
+  assert.equal(prepared.filter((sql) => sql.includes("pin_setup_requests")).length, 1);
+  assert.equal(prepared.some((sql) => /^\s*(?:INSERT|UPDATE|DELETE)/i.test(sql)), false);
+  recording.mock.restore();
+
+  // An answered request leaves the counts and the list at once.
+  assert.equal((await as(operator, `/admin/pin-requests/${second}/approve`, "POST")).status, 200);
+  assert.deepEqual(await counts(), { total: 2, kiosks: byKiosk([{ kioskId: a.kioskId, count: 1 }, { kioskId: b.kioskId, count: 1 }]) });
+  assert.equal((await as(operator, `/admin/pin-requests/${third}/decline`, "POST")).status, 200);
+  assert.deepEqual(await counts(), { total: 1, kiosks: [{ kioskId: a.kioskId, count: 1 }] });
+  assert.deepEqual((await listed()).map((request) => request.id), [first]);
+
+  // A request stops counting the moment its 10 minutes run out: `first` was made 2 minutes before this one.
+  const fourth = await ask(b, "TEST-C");
+  context.mock.timers.tick(480_000 - 1);
+  assert.equal((await counts()).total, 2);
+  context.mock.timers.tick(1);
+  assert.deepEqual(await counts(), { total: 1, kiosks: [{ kioskId: b.kioskId, count: 1 }] });
+  assert.deepEqual((await listed()).map((request) => request.id), [fourth]);
+
+  // A retired kiosk's requests are not counted or listed: its Manage page is gone.
+  database.sqlite.prepare("UPDATE kiosks SET active = 0 WHERE id = ?").run(b.kioskId);
+  assert.deepEqual(await counts(), { total: 0, kiosks: [] });
+  assert.deepEqual(await listed(), []);
+
+  // The counts never make module access unavailable: without them the snapshot still arrives.
+  context.mock.method(database, "prepare", (sql: string) => { if (sql.includes("(SELECT COUNT(*) FROM pin_setup_requests r")) throw new Error("synthetic count failure"); return prepare(sql); });
+  const degraded = await as(admin, "/platform/modules");
+  assert.equal(degraded.status, 200); const body = await json(degraded);
+  assert.equal("pinRequests" in body, false); assert.ok(Array.isArray(body.modules));
+});
+
+test("the waiting PIN request counts are sent only with the Attendance workspace", async context => {
+  const { database, call } = await fixture(context);
+  const modules = async () => await (await call("/platform/modules")).json() as { modules: { id: string; workspaceReady: boolean }[]; pinRequests?: unknown };
+  assert.deepEqual((await modules()).pinRequests, { total: 0, kiosks: [] });
+  // Attendance setup undone: the snapshot reports no workspace, and carries no counts.
+  database.sqlite.exec("UPDATE platform_modules SET setup_complete = 0 WHERE module_id = 'attendance'");
+  const without = await modules();
+  assert.equal(without.modules.find((module) => module.id === "attendance")?.workspaceReady, false);
+  assert.equal("pinRequests" in without, false);
 });

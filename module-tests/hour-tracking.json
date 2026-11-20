@@ -69,6 +69,7 @@
       "tests-browser/settings-conformance.spec.ts",
       "tests-browser/dashboard-walkthrough.spec.ts",
       "tests-browser/outreach-activity-detail.spec.ts",
+      "tests-browser/outreach-event-form.spec.ts",
       "tests-browser/outreach-settings-integration.spec.ts",
       "tests-browser/outreach-feedback.spec.ts",
       "tests-browser/outreach-public-time-order.spec.ts",

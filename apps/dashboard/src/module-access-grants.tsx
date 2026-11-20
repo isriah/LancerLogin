@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { useModalFocus } from "./modal-focus";
+import { useFocusAfterRender, useModalFocus } from "./modal-focus";
 import { confirmIdentityWithPassword, IdentityConfirmation, request, RequestError, type PluginState } from "./plugin-management";
 
 type ProviderState = "missing" | "unsupported" | "disabled" | "setup-required" | "ready";
@@ -92,13 +92,13 @@ export function ModuleAccessGrants() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [review, setReview] = useState<Review>();
-  const noticeRef = useRef<HTMLParagraphElement>(null);
+  const noticeRef = useRef<HTMLParagraphElement>(null); const focusAfterRender = useFocusAfterRender();
   const id = useId();
   function apply(next: ModuleAccessState) { setState(next); setFreshUntil(next.reauthentication.freshUntil); }
   const load = () => request<ModuleAccessState>("/admin/modules/grants").then((next) => { apply(next); setError(""); }, (cause: Error) => setError(`Module access could not be loaded. ${cause.message}`));
   useEffect(() => { void load(); }, []);
   // The dialog returns focus to its button; after a change that button may be gone, so the result takes focus instead.
-  function done(message: string, next: ModuleAccessState) { setReview(undefined); setNotice(message); apply(next); window.requestAnimationFrame(() => noticeRef.current?.focus()); }
+  function done(message: string, next: ModuleAccessState) { setReview(undefined); setNotice(message); apply(next); focusAfterRender(() => noticeRef.current); }
   if (!state?.uses.length) return error ? <p className="ui-status" data-tone="error" role="alert">{error}</p> : null;
   return <section className="module-controls module-access" aria-labelledby={`${id}-title`}>
     <div className="panel-heading"><div><h2 id={`${id}-title`}>Module access</h2><p>Some modules ask to use another module's data. Signed-in people can always use what their own access allows. A grant lets a module do it on its own, for example from scheduled work, without anyone signed in. Grant only what you expect it to need.</p></div></div>

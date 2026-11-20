@@ -237,3 +237,12 @@ test("walkthrough example works with an empty label catalog and a reusable month
   assert.equal(definition.dataset, "attendance.members");
   assert.ok(definition.columns.some((column) => column.key === "attendance.policy.report-summary"));
 });
+
+test("an impossible fixed date is a validation error, not an exception", () => {
+  for (const [from, to] of [["2026-13-45", "2026-12-31"], ["2026-01-01", "2026-13-45"], ["2026-02-30", "2026-03-01"], ["2026-00-10", "2026-03-01"]]) {
+    const result = validateReportDefinition({ ...defaultReportDefinition(false), period: { type: "fixed", from, to } }, labels);
+    assert.equal(result.definition, undefined, `${from} to ${to}`);
+    assert.match(result.errors.join(" "), /period/i);
+  }
+  assert.deepEqual(validateReportDefinition({ ...defaultReportDefinition(false), period: { type: "fixed", from: "2026-02-28", to: "2026-03-01" } }, labels).definition?.period, { type: "fixed", from: "2026-02-28", to: "2026-03-01" });
+});

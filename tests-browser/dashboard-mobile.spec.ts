@@ -1,4 +1,5 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
+import { expectResponsiveFit } from "./api-fixtures";
 
 const mobileViewports = [
   { name: "compact phone", width: 375, height: 667 },
@@ -157,4 +158,72 @@ test("data deletion requires an exact typed confirmation", async ({ page }) => {
   }
   await dialog.getByLabel("Type DELETE ROSTER to confirm").fill("DELETE ROSTER");
   await expect(deletion).toBeEnabled();
+});
+
+/** Every visible button under `scope` is at least 44px tall and wide, and can be scrolled fully into the viewport. */
+async function expectReachableTapTargets(scope: Locator, viewport: { width: number; height: number }) {
+  const buttons = scope.getByRole("button");
+  await expect(buttons.first()).toBeVisible();
+  for (const button of await buttons.all()) {
+    if (!await button.isVisible()) continue;
+    await button.scrollIntoViewIfNeeded();
+    const label = await button.getAttribute("aria-label") ?? await button.textContent() ?? "button";
+    const bounds = (await button.boundingBox())!;
+    expect(bounds.height, label).toBeGreaterThanOrEqual(44);
+    expect(bounds.width, label).toBeGreaterThanOrEqual(44);
+    expect(bounds.x, label).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width, label).toBeLessThanOrEqual(viewport.width);
+    expect(bounds.y, label).toBeGreaterThanOrEqual(0);
+    expect(bounds.y + bounds.height, label).toBeLessThanOrEqual(viewport.height);
+  }
+}
+
+test("a draft report's filter chips fit a 375px phone with reachable 44px controls", async ({ page }) => {
+  const viewport = { width: 375, height: 667 };
+  await page.setViewportSize(viewport);
+  await page.goto("/reports/new");
+  await expect(page.getByText("DRAFT", { exact: true })).toBeVisible();
+  // A draft shows what already limits its rows: the roster chip, its x and Clear filters.
+  const chips = page.getByRole("group", { name: "Applied report filters" });
+  const edit = chips.getByRole("button", { name: "Edit filter: Roster: Active members", exact: true });
+  await expect(edit).toBeVisible();
+  await expect(chips.getByRole("button", { name: "Remove filter: Roster: Active members", exact: true })).toBeVisible();
+  await expect(chips.getByRole("button", { name: "Clear filters", exact: true })).toBeVisible();
+  await expect(chips.getByRole("button")).toHaveCount(3);
+  await expectReachableTapTargets(chips, viewport);
+  await expectResponsiveFit(page, { controls: ".report-filter-chips button", scrollers: ".table-scroll" });
+  // The chip opens its filter inside the screen, and its x removes it.
+  await edit.click();
+  const filter = page.getByRole("dialog");
+  await expect(filter).toBeVisible();
+  const bounds = (await filter.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width);
+  await expectReachableTapTargets(filter, viewport);
+  await page.keyboard.press("Escape");
+  await expect(filter).toHaveCount(0);
+  await chips.getByRole("button", { name: "Remove filter: Roster: Active members", exact: true }).click();
+  await expect(chips).toHaveCount(0);
+});
+
+test("the bulk roster sheet's Clear and Change links are 44px tap targets on a 375px phone", async ({ page }) => {
+  const viewport = { width: 375, height: 667 };
+  await page.setViewportSize(viewport);
+  await page.goto("/roster");
+  await page.getByRole("button", { name: "Bulk edit", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Select all shown members" }).check();
+  const sheet = page.getByRole("complementary", { name: "Bulk edit" });
+  await sheet.getByRole("button", { name: "Edit", exact: true }).click();
+  const clear = sheet.getByRole("button", { name: "Clear", exact: true }); const change = sheet.getByRole("button", { name: "Change effective date", exact: true });
+  await expect(clear).toBeVisible(); await expect(change).toBeVisible();
+  await expectReachableTapTargets(sheet, viewport);
+  await expectResponsiveFit(page, { controls: ".bulk-roster-sidebar button, .bulk-roster-sidebar select, .bulk-roster-sidebar input" });
+  // They still read as links: the accent color, underlined, with no button surface.
+  for (const link of [clear, change]) {
+    await expect(link).toHaveCSS("text-decoration-line", "underline");
+    await expect(link).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  }
+  await change.click();
+  await expect(sheet.getByLabel("Effective date", { exact: true })).toBeVisible();
+  await clear.click();
+  await expect(sheet).toContainText("Tick members in the list to edit them together.");
 });

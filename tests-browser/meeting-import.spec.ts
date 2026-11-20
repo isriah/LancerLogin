@@ -47,10 +47,11 @@ test("Import CSV sits just left of Add meeting in Table and Calendar views", asy
     await page.getByRole("radio", { name: view }).check();
     const importButton = page.getByRole("button", { name: "Import CSV", exact: true }); const add = page.getByRole("button", { name: "Add meeting", exact: true });
     await expect(importButton).toBeVisible();
-    const [importBox, addBox] = [await importButton.boundingBox(), await add.boundingBox()];
-    expect(importBox!.x + importBox!.width).toBeLessThanOrEqual(addBox!.x);
-    expect(Math.abs(importBox!.y + importBox!.height / 2 - addBox!.y - addBox!.height / 2)).toBeLessThan(2);
-    expect(importBox!.height).toBeGreaterThanOrEqual(44);
+    // Both boxes come from one reading of the page: the meeting list loading between two readings moves the second button.
+    const [importBox, addBox] = await importButton.evaluate((left, right) => [left, right!].map((button) => { const box = button.getBoundingClientRect(); return { x: box.x, y: box.y, width: box.width, height: box.height }; }), await add.elementHandle());
+    expect(importBox.x + importBox.width).toBeLessThanOrEqual(addBox.x);
+    expect(Math.abs(importBox.y + importBox.height / 2 - addBox.y - addBox.height / 2)).toBeLessThan(2);
+    expect(importBox.height).toBeGreaterThanOrEqual(44);
   }
   const dialog = await openImport(page);
   await dialog.getByRole("button", { name: "Close meeting import" }).click();
@@ -194,5 +195,39 @@ test("the meeting import preview fits a phone screen", async ({ page }) => {
   await expectResponsiveFit(page, responsiveFit);
   await dialog.getByRole("button", { name: "Preview meetings" }).click();
   await expect(dialog.getByRole("table", { name: "Processed meeting import" })).toBeVisible();
+  await expectResponsiveFit(page, responsiveFit);
+});
+
+test("the preview's Skip and Update controls are 44px tap targets on a 375px phone", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 667 });
+  await mockImport(page);
+  await page.goto("/dashboard");
+  await page.getByRole("radio", { name: "Table" }).check();
+  const dialog = await openImport(page);
+  await dialog.getByLabel("Meetings CSV or spreadsheet rows").fill(csv);
+  await dialog.getByRole("button", { name: "Preview meetings" }).click();
+  const table = dialog.getByRole("table", { name: "Processed meeting import" });
+  await expect(table).toBeVisible();
+  // "Matching rows": each choice's label is the tap target for its hidden radio button.
+  const choices = dialog.locator(".import-match-choice label");
+  await expect(choices).toHaveCount(2);
+  for (const choice of await choices.all()) {
+    const bounds = (await choice.boundingBox())!;
+    expect(bounds.height).toBeGreaterThanOrEqual(44); expect(bounds.width).toBeGreaterThanOrEqual(44);
+    expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(375);
+  }
+  await choices.filter({ hasText: "Update all" }).click();
+  await expect(dialog.getByRole("radio", { name: "Update all" })).toBeChecked();
+  // Per-row selects, in both tones, and every row the same height whether it holds a select or a badge.
+  const selects = table.getByRole("combobox");
+  await expect(selects).toHaveCount(2);
+  for (const select of await selects.all()) {
+    const bounds = (await select.boundingBox())!;
+    expect(bounds.height).toBeGreaterThanOrEqual(44); expect(bounds.width).toBeGreaterThanOrEqual(44);
+  }
+  await dialog.getByRole("combobox", { name: "Action for Test Strategy Meeting" }).selectOption("skip");
+  expect((await dialog.getByRole("combobox", { name: "Action for Test Strategy Meeting" }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  const rowHeights = await table.locator("tbody tr").evaluateAll((rows) => rows.map((row) => Math.round(row.getBoundingClientRect().height)));
+  expect(new Set(rowHeights).size).toBe(1);
   await expectResponsiveFit(page, responsiveFit);
 });

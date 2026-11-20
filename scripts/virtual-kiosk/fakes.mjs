@@ -7,6 +7,8 @@ export const updateExitCode = 76;
 // Nearby Wi-Fi networks every virtual kiosk can see. Synthetic; the passwords are shown in the control panel.
 export const virtualWifiNetworks = Object.freeze([
   Object.freeze({ ssid: "Virtual Lab", signal: 78, security: "WPA2", password: "virtual-lab-1" }),
+  // A password only a full keyboard can type: capitals, spaces, quotes, a backslash and other punctuation.
+  Object.freeze({ ssid: "Virtual Shop", signal: 64, security: "WPA2", password: "Shop 7 \"Q\"\\$z~!" }),
   Object.freeze({ ssid: "Virtual Guest", signal: 52, security: "--", password: "" }),
 ]);
 

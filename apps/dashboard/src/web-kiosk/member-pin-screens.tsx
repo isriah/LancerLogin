@@ -66,7 +66,7 @@ export function WaitingView({ flow, onCancel }: { flow: Step<"waiting">; onCance
     <div className="wk-ring wk-ring-processing" aria-hidden="true" />
     <h1 className="wk-title">You don't have a PIN yet</h1>
     <p className="wk-result-name">{memberName(flow.member)}</p>
-    <p className="wk-note wk-note-warning" role="status">Waiting for an Operator to approve on this kiosk's Manage page in the dashboard</p>
+    <p className="wk-note wk-note-warning" role="status">Waiting for an Operator or Admin to approve in the dashboard</p>
     <div className="wk-actions"><button type="button" className="wk-button" onClick={onCancel}>Cancel</button></div>
   </div>;
 }

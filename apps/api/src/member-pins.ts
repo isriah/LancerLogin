@@ -121,32 +121,20 @@ function auditStatement(db: D1Database, action: string, actorUserId: string | nu
 }
 
 /**
- * Adds wrong tries to a member's count. A lock that has run out starts a fresh count. With lockout on, reaching the
- * limit locks for the configured minutes (an active lock is never extended); with it off, tries are only counted.
- * The online throttle is not counted here: checkScanPin counts it when it claims the try, before the PIN is checked.
- *
- * Audits member_pin.locked when this call started the lock. The audit is written in the same batch, by a statement that
- * reads the row before the count changes it, so of several tries counted at the same moment only the one that started
- * the lock audits it. Queries: one batch.
+ * SQL for the lockout step of the claim in checkScanPin, which counts an online try toward the lockout before its PIN
+ * is checked. The lockout setting is read by the claim itself, as it is when the claim runs, so the claim costs no
+ * query more: `enabled`, `attempts` and `minutes` are its columns, with the defaults for an installation whose settings
+ * are not set up. `nextCount` is the count after this try: a lock that has run out starts a fresh count, as in
+ * recordReportedTries. `lockUntil` is NULL unless lockout is on and this try reaches the limit; then it is the
+ * configured minutes after the time in ?1, in the format of Date.toISOString(). The claim only runs on a row with no
+ * lock running, so it never extends one. ?3 is the cap on the count.
  */
-async function recordFailedTries(db: D1Database, rosterId: string, count: number, lockout: PinLockout, metadata: Record<string, unknown>, notBefore?: string) {
-  const now = new Date(); const nowText = now.toISOString(); const lockUntil = new Date(now.getTime() + lockout.minutes * 60_000).toISOString();
-  const nextCount = "MIN(CASE WHEN locked_until IS NOT NULL AND locked_until <= ?1 THEN ?2 ELSE failed_attempts + ?2 END, ?6)";
-  const lockStarts = `NOT (locked_until IS NOT NULL AND locked_until > ?1) AND ?3 = 1 AND ${nextCount} >= ?4`;
-  const member = "installation_id = 'primary' AND member_id = ?7 AND (?8 IS NULL OR set_at <= ?8)";
-  const values = [nowText, count, lockout.enabled ? 1 : 0, lockout.attempts, lockUntil, MAX_FAILED_ATTEMPTS, rosterId, notBefore ?? null];
-  const results = await db.batch([
-    db.prepare(`INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at)
-      SELECT ?9, 'primary', NULL, 'member_pin.locked', 'member', member_id, json_patch(?10, json_object('failedAttempts', ${nextCount}, 'lockedUntil', ?5, 'minutes', ?11)), ?1
-      FROM member_pins WHERE ${member} AND ${lockStarts}`).bind(...values, crypto.randomUUID(), JSON.stringify(metadata), lockout.minutes),
-    db.prepare(`UPDATE member_pins SET
-        locked_until = CASE WHEN locked_until IS NOT NULL AND locked_until > ?1 THEN locked_until WHEN ${lockStarts} THEN ?5 ELSE NULL END,
-        failed_attempts = ${nextCount}, updated_at = ?1
-      WHERE ${member}
-      RETURNING failed_attempts AS failedAttempts, locked_until AS lockedUntil, throttle_until AS throttleUntil`).bind(...values),
-  ]);
-  return (results[1]?.results?.[0] as { failedAttempts: number; lockedUntil: string | null; throttleUntil: string | null } | undefined) ?? null;
-}
+const lockoutClaimSql = (() => {
+  const setting = (column: string, fallback: number) => `COALESCE((SELECT ${column} FROM organization_settings WHERE installation_id = 'primary'), ${fallback})`;
+  const enabled = setting("pin_lockout_enabled", 0), attempts = setting("pin_lockout_attempts", defaultPinLockout.attempts), minutes = setting("pin_lockout_minutes", defaultPinLockout.minutes);
+  const nextCount = "MIN(CASE WHEN locked_until IS NOT NULL AND locked_until <= ?1 THEN 1 ELSE failed_attempts + 1 END, ?3)";
+  return { enabled, attempts, minutes, nextCount, lockUntil: `CASE WHEN ${enabled} = 1 AND ${nextCount} >= ${attempts} THEN strftime('%Y-%m-%dT%H:%M:%fZ', ?1, '+' || ${minutes} || ' minutes') ELSE NULL END` };
+})();
 
 type ReportedTries = { memberId: string; count: number; lastAt: string };
 /** How long a kiosk report id is remembered. A kiosk resends a report whose answer it lost as soon as it is next online. */
@@ -163,8 +151,9 @@ const reportedTriesSql = (parameter: number) => `SELECT p.member_id AS memberId,
   GROUP BY p.member_id`;
 
 /**
- * Adds a kiosk's report of wrong tries made offline to each member's count, by the rules of recordFailedTries. The
- * tries never count toward the online throttle.
+ * Adds a kiosk's report of wrong tries made offline to each member's count. A lock that has run out starts a fresh count.
+ * With lockout on, reaching the limit locks for the configured minutes (an active lock is never extended); with it off,
+ * tries are only counted. The tries never count toward the online throttle.
  *
  * Queries: the lockout read, then one batch, whatever the size of the report, so 200 entries fit the Workers Free
  * plan's 50 subrequests. The batch is one transaction: a report is applied whole or not at all, so a kiosk that got an
@@ -184,7 +173,7 @@ async function recordReportedTries(db: D1Database, kiosk: PinKiosk, failures: Re
   const lockout = await readPinLockout(db);
   const now = new Date(); const nowText = now.toISOString(); const lockUntil = new Date(now.getTime() + lockout.minutes * 60_000).toISOString();
   const report = JSON.stringify(failures.map((failure) => [failure.memberId, failure.count, new Date(failure.lastAt).toISOString()]));
-  // The same sums as recordFailedTries. `pins` names the member's row as it is before this report; `t` is reportedTriesSql.
+  // `pins` names the member's row as it is before this report; `t` is reportedTriesSql.
   const nextCount = (pins: string) => `MIN(CASE WHEN ${pins}.locked_until IS NOT NULL AND ${pins}.locked_until <= ?1 THEN t.tries ELSE ${pins}.failed_attempts + t.tries END, ?5)`;
   const lockStarts = (pins: string) => `NOT (${pins}.locked_until IS NOT NULL AND ${pins}.locked_until > ?1) AND ?2 = 1 AND ${nextCount(pins)} >= ?3`;
   const uuid = "lower(printf('%s-%s-%s-%s-%s', hex(randomblob(4)), hex(randomblob(2)), hex(randomblob(2)), hex(randomblob(2)), hex(randomblob(6))))";
@@ -241,18 +230,19 @@ async function scanPredatesRequirePin(db: D1Database, kioskId: string, occurredA
  * the member has been locked since: the device already accepted it. Offline checks are not throttled. A scan with
  * neither is refused with pin_required, unless it was made before Require PIN was turned on (scanPredatesRequirePin).
  *
- * The throttle holds for tries sent at the same time. Before the PIN is checked, one write claims the try: it counts
- * the try toward the throttle as if it were wrong, and sets the wait that follows it, but only on a row with no lock
- * and no wait running when the write runs. A try that cannot claim is refused without its PIN being checked, and says
- * nothing about the PIN. A correct PIN then clears the count; a wrong one leaves it. So of any number of tries sent at
- * once, no more are checked than would be one after another: the free tries, then one for each wait. (A try that was
- * claimed just before a lock started is still checked, so with lockout set below the free tries a burst can have up to
- * the free tries checked, never more.)
+ * The throttle and the lockout hold for tries sent at the same time. Before the PIN is checked, one write claims the
+ * try: it counts the try toward the throttle and toward the lockout as if it were wrong, sets the wait that follows it,
+ * and, with lockout on, starts the lock when the try reaches the configured number. It does so only on a row with no
+ * lock and no wait running when the write runs, and it reads the lockout setting itself. A try that cannot claim is
+ * refused without its PIN being checked, and says nothing about the PIN. A correct PIN then clears the counts, and a
+ * lock its own claim started; a wrong one leaves them. So of any number of tries sent at once, no more are checked
+ * than would be one after another: the free tries, then one for each wait, and with lockout on never more than the
+ * configured number before the lock.
  *
- * Queries: the claim, which also reads the member's PIN. Then, on a correct PIN, one write, which also rehashes a PIN
- * stored at another iteration count; on a wrong PIN, the lockout read and one batch that counts it and audits a lock
- * it started. A try that
- * could not claim makes one read, for its reason (no such member, no PIN, locked, waiting), and hashes nothing.
+ * Queries: the claim, which also reads the member's PIN and the lockout setting. Then, on a correct PIN, one write,
+ * which also rehashes a PIN stored at another iteration count; on a wrong PIN nothing, or one write that audits the
+ * lock when this try started it. A try that could not claim makes one read, for its reason (no such member, no PIN,
+ * locked, waiting), and hashes nothing.
  */
 export async function checkScanPin(db: D1Database, kiosk: PinKiosk, input: { memberId?: unknown; pin?: unknown; pinCheck?: unknown; occurredAt?: unknown }): Promise<void> {
   if (!kiosk.requirePin) return;
@@ -267,10 +257,12 @@ export async function checkScanPin(db: D1Database, kiosk: PinKiosk, input: { mem
   const nowMs = Date.now(); const now = new Date(nowMs).toISOString();
   const waits = PIN_THROTTLE_SECONDS.map((seconds) => new Date(nowMs + seconds * 1000).toISOString());
   // The claim. The member is found as memberPin finds them: active, by roster id or member ID, the roster id winning.
-  const claimed = await db.prepare(`UPDATE member_pins SET throttle_until = ${throttleUntilSql(4)}, throttle_failures = MIN(throttle_failures + 1, ?3)
+  const claimed = await db.prepare(`UPDATE member_pins SET throttle_until = ${throttleUntilSql(4)}, throttle_failures = MIN(throttle_failures + 1, ?3),
+      failed_attempts = ${lockoutClaimSql.nextCount}, locked_until = ${lockoutClaimSql.lockUntil}, updated_at = ?1
     WHERE installation_id = 'primary' AND member_id = (SELECT m.id FROM members m WHERE m.installation_id = 'primary' AND (m.id = ?2 OR m.external_id = ?2) AND m.active = 1 ORDER BY m.id = ?2 DESC LIMIT 1) AND ${takesOnlineTry(1)}
-    RETURNING member_id AS rosterId, pin_hash AS pinHash, pin_salt AS pinSalt, pin_iterations AS pinIterations, throttle_until AS throttleUntil`)
-    .bind(now, input.memberId, MAX_FAILED_ATTEMPTS, ...waits).first<{ rosterId: string; pinHash: string; pinSalt: string; pinIterations: number; throttleUntil: string | null }>();
+    RETURNING member_id AS rosterId, pin_hash AS pinHash, pin_salt AS pinSalt, pin_iterations AS pinIterations, throttle_until AS throttleUntil, failed_attempts AS failedAttempts, locked_until AS lockedUntil,
+      ${lockoutClaimSql.enabled} AS lockoutEnabled, ${lockoutClaimSql.attempts} AS lockoutAttempts, ${lockoutClaimSql.minutes} AS lockoutMinutes`)
+    .bind(now, input.memberId, MAX_FAILED_ATTEMPTS, ...waits).first<{ rosterId: string; pinHash: string; pinSalt: string; pinIterations: number; throttleUntil: string | null; failedAttempts: number; lockedUntil: string | null; lockoutEnabled: number; lockoutAttempts: number; lockoutMinutes: number }>();
   if (!claimed) {
     let member: PinRow;
     // A scan for someone who is not an active member fails in the attendance step with its usual reason.
@@ -293,14 +285,17 @@ export async function checkScanPin(db: D1Database, kiosk: PinKiosk, input: { mem
     } else await db.prepare(`UPDATE member_pins SET ${clear}`).bind(now, claimed.rosterId, claimed.pinHash).run();
     return;
   }
-  const lockout = await readPinLockout(db);
-  const counted = await recordFailedTries(db, claimed.rosterId, 1, lockout, { kioskId: kiosk.id, via: "kiosk" });
-  const lockedUntil = counted ? activeLock(counted, now) : null;
+  // The claim counted this try and, at the limit, started the lock: only the audit of a new lock is left to write. It is
+  // written while that lock still stands, so not after an Operator's unlock or a new PIN.
+  const lockout = normalizePinLockout({ enabled: claimed.lockoutEnabled, attempts: claimed.lockoutAttempts, minutes: claimed.lockoutMinutes });
+  const lockedUntil = activeLock(claimed, now);
+  if (lockedUntil) await db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', NULL, 'member_pin.locked', 'member', ?, ?, ? WHERE EXISTS (SELECT 1 FROM member_pins WHERE installation_id = 'primary' AND member_id = ? AND pin_hash = ? AND locked_until = ?)")
+    .bind(crypto.randomUUID(), claimed.rosterId, JSON.stringify({ kioskId: kiosk.id, via: "kiosk", failedAttempts: Number(claimed.failedAttempts), lockedUntil, minutes: lockout.minutes }), now, claimed.rosterId, claimed.pinHash, lockedUntil).run();
   const extra: Record<string, string | number> = {};
-  if (lockout.enabled) extra.attemptsLeft = lockedUntil ? 0 : Math.max(0, lockout.attempts - Number(counted?.failedAttempts ?? 0));
+  if (lockout.enabled) extra.attemptsLeft = lockedUntil ? 0 : Math.max(0, lockout.attempts - Number(claimed.failedAttempts));
   if (lockedUntil) extra.lockedUntil = lockedUntil;
   // The next try has to wait: say until when, so a kiosk can tell the member.
-  const retryAt = activeThrottle(counted ?? claimed, now);
+  const retryAt = activeThrottle(claimed, now);
   if (retryAt) extra.retryAt = retryAt;
   throw new HttpError(403, "Wrong PIN.", undefined, "pin_incorrect", extra); // Not 401: kiosks treat a 401 as a revoked credential.
 }
@@ -443,6 +438,37 @@ export async function dashboardKioskPinRequests(kioskId: string, context: { db: 
   if (!kiosk) throw new HttpError(404, "Active kiosk not found");
   const rows = (await db.prepare(`SELECT ${dashboardRequestColumns} FROM pin_setup_requests r JOIN members m ON m.installation_id = r.installation_id AND m.id = r.member_id WHERE r.installation_id = 'primary' AND r.kiosk_id = ? AND r.status = 'pending' AND r.expires_at > ? ORDER BY r.created_at, r.id LIMIT 100`).bind(kioskId, now).all<DashboardRequestRow>()).results ?? [];
   return respond({ requests: rows.map((row) => { const { id, member, createdAt, expiresAt } = dashboardRequestView(row, now); return { id, member, createdAt, expiresAt }; }) });
+}
+
+/** How many PIN requests are waiting at each kiosk, for the dashboard's top bar and Kiosks list. */
+export type PinRequestCounts = { total: number; kiosks: { kioskId: string; count: number }[] };
+
+/**
+ * The count of pending PIN requests that have not run out, per active kiosk: what GET /admin/kiosks/:id/pin-requests
+ * would list for each. It rides on the dashboard's module refresh (GET /platform/modules), so it adds no request.
+ *
+ * Queries: one read. It walks the kiosks and, for each active one, seeks its pending unexpired rows in the
+ * pin_setup_requests_kiosk index (installation_id, kiosk_id, status, expires_at), without touching the table. Written
+ * as a subquery per kiosk so the rows read are the kiosks plus the waiting requests, never the answered or expired ones
+ * kept for 30 days.
+ */
+export async function pinRequestCounts(db: D1Database): Promise<PinRequestCounts> {
+  const now = new Date().toISOString();
+  const rows = (await db.prepare("SELECT k.id AS kioskId, (SELECT COUNT(*) FROM pin_setup_requests r WHERE r.installation_id = k.installation_id AND r.kiosk_id = k.id AND r.status = 'pending' AND r.expires_at > ?) AS count FROM kiosks k WHERE k.installation_id = 'primary' AND k.active = 1 ORDER BY k.id").bind(now).all<{ kioskId: string; count: number }>()).results ?? [];
+  const kiosks = rows.map((row) => ({ kioskId: row.kioskId, count: Number(row.count) })).filter((row) => row.count > 0);
+  return { total: kiosks.reduce((sum, row) => sum + row.count, 0), kiosks };
+}
+
+/**
+ * GET /admin/kiosks/pin-requests: every active kiosk's pending requests that have not run out, by kiosk name and then oldest
+ * first, each with its kiosk. The top bar's PIN requests dialog reads it while it is open. Being under /admin/kiosks, it needs
+ * the Attendance workspace, as each kiosk's own list does. Queries: one read, kiosks first (CROSS JOIN keeps that order) so
+ * each kiosk's waiting rows are sought in the index, as in pinRequestCounts.
+ */
+export async function dashboardPinRequests(context: { db: D1Database; respond: Json }): Promise<Response> {
+  const { db, respond } = context; const now = new Date().toISOString();
+  const rows = (await db.prepare(`SELECT ${dashboardRequestColumns}, k.name AS kioskName FROM kiosks k CROSS JOIN pin_setup_requests r ON r.installation_id = k.installation_id AND r.kiosk_id = k.id AND r.status = 'pending' AND r.expires_at > ? JOIN members m ON m.installation_id = r.installation_id AND m.id = r.member_id WHERE k.installation_id = 'primary' AND k.active = 1 ORDER BY k.name COLLATE NOCASE, r.kiosk_id, r.created_at, r.id LIMIT 200`).bind(now).all<DashboardRequestRow & { kioskName: string }>()).results ?? [];
+  return respond({ requests: rows.map((row) => { const { id, kioskId, member, createdAt, expiresAt } = dashboardRequestView(row, now); return { id, kioskId, kioskName: row.kioskName, member, createdAt, expiresAt }; }) });
 }
 
 /** POST /admin/pin-requests/:id/approve or /decline. Only a pending request that has not run out can be decided. */

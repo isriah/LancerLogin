@@ -156,9 +156,21 @@ async function pinRoute(request, path) {
   const memberPin = /^\/admin\/members\/([^/]+)\/pin(\/unlock)?$/.exec(path);
   const lockout = path === "/admin/settings/pin-lockout";
   // Stands in for a kiosk asking for approval, so browser tests can add a request while the page polls.
+  // rosterId and externalId stand in for a third synthetic member, beyond the two on the preview roster.
   const simulated = path === "/preview/pin-requests" && request.method === "POST";
-  if (!kioskRequests && !answer && !memberPin && !lockout && !simulated) return undefined;
+  // Every kiosk's waiting requests for the top bar's dialog, and their counts, which ride on the module refresh.
+  const allRequests = path === "/admin/kiosks/pin-requests" && request.method === "GET";
+  const moduleRefresh = path === "/platform/modules" && request.method === "GET";
+  if (!kioskRequests && !answer && !memberPin && !lockout && !simulated && !allRequests && !moduleRefresh) return undefined;
   const state = kioskScenario(request);
+  if (allRequests || moduleRefresh) {
+    for (const item of state.pinRequests) if (item.status === "pending" && Date.parse(item.expiresAt) <= Date.now()) item.status = "expired";
+    const kiosks = new Map(state.kiosks.filter((kiosk) => kiosk.active === 1).map((kiosk) => [kiosk.id, kiosk.name]));
+    const waiting = state.pinRequests.filter((item) => item.status === "pending" && kiosks.has(item.kioskId));
+    if (allRequests) return [200, { requests: waiting.map(({ id, kioskId, member, createdAt, expiresAt }) => ({ id, kioskId, kioskName: kiosks.get(kioskId), member, createdAt, expiresAt })).sort((left, right) => left.kioskName.localeCompare(right.kioskName) || left.createdAt.localeCompare(right.createdAt)) }];
+    const counts = [...kiosks.keys()].map((kioskId) => ({ kioskId, count: waiting.filter((item) => item.kioskId === kioskId).length })).filter((item) => item.count > 0);
+    return [200, { ...defaultModuleSnapshot, pinRequests: { total: waiting.length, kiosks: counts } }];
+  }
   if (kioskRequests && request.method === "GET") {
     const kioskId = decodeURIComponent(kioskRequests[1]);
     for (const item of state.pinRequests) if (item.status === "pending" && Date.parse(item.expiresAt) <= Date.now()) item.status = "expired";
@@ -169,7 +181,7 @@ async function pinRoute(request, path) {
     const member = members.find((item) => item.id === body.memberId);
     if (!member) return [404, { error: "Member not found" }];
     const createdAt = new Date(Date.now() - Number(body.minutesAgo ?? 0) * 60_000).toISOString();
-    const item = { id: `pin-request-${state.pinRequests.length + 1}`, kioskId: String(body.kioskId), status: "pending", member: { rosterId: member.id, memberId: member.memberId, firstName: body.firstName ?? member.firstName, lastName: body.lastName ?? member.lastName }, createdAt, expiresAt: new Date(Date.parse(createdAt) + 10 * 60_000).toISOString() };
+    const item = { id: `pin-request-${state.pinRequests.length + 1}`, kioskId: String(body.kioskId), status: "pending", member: { rosterId: body.rosterId ?? member.id, memberId: body.externalId ?? member.memberId, firstName: body.firstName ?? member.firstName, lastName: body.lastName ?? member.lastName }, createdAt, expiresAt: new Date(Date.parse(createdAt) + 10 * 60_000).toISOString() };
     state.pinRequests.push(item); return [201, { request: requestView(item) }];
   }
   if (answer && request.method === "POST") {

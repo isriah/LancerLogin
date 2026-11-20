@@ -4,6 +4,7 @@ import { api } from "./dashboard-api";
 import { readModuleSnapshot } from "./module-client";
 import { useDashboardLoadingOverlay } from "./loading-overlay";
 import { InfoHeading } from "./info-tip";
+import { useFocusAfterRender } from "./modal-focus";
 import { minimumPasswordLength, newPasswordCredential } from "./password-hashing";
 
 // Keeps password managers from filling the signed-in Admin's own sign-in details into fields for another account.
@@ -38,6 +39,7 @@ export function UserSettings({ members }: { members: RosterMember[] }) {
   const [editing, setEditing] = useState<string>(); const [draft, setDraft] = useState<Draft>(); const [saving, setSaving] = useState(false); const [saved, setSaved] = useState(""); const [panelError, setPanelError] = useState(""); const [confirmingActive, setConfirmingActive] = useState(false); const [inactiveOpen, setInactiveOpen] = useState(false);
   const editingRef = useRef<string>(undefined); editingRef.current = editing;
   const grantButton = useRef<HTMLButtonElement>(null); const statusLine = useRef<HTMLParagraphElement>(null); const savedTimer = useRef<number>(undefined);
+  const focusAfterRender = useFocusAfterRender();
   useDashboardLoadingOverlay(loading, "Loading dashboard access…");
 
   async function loadGrants(user: User) {
@@ -54,8 +56,8 @@ export function UserSettings({ members }: { members: RosterMember[] }) {
     return result.users;
   }
   useEffect(() => { void load().catch((caught: Error) => { setLoading(false); setError(caught.message); }); return () => window.clearTimeout(savedTimer.current); }, []);
-  function announce(message: string) { setNotice(message); window.requestAnimationFrame(() => statusLine.current?.focus()); }
-  function showError(message: string) { setError(message); window.requestAnimationFrame(() => document.getElementById("dashboard-access-error")?.focus()); }
+  function announce(message: string) { setNotice(message); focusAfterRender(() => statusLine.current); }
+  function showError(message: string) { setError(message); focusAfterRender("dashboard-access-error"); }
 
   function toggleCreate() {
     setError("");
@@ -98,7 +100,7 @@ export function UserSettings({ members }: { members: RosterMember[] }) {
       setSaved("Saved");
       window.clearTimeout(savedTimer.current); savedTimer.current = window.setTimeout(() => setSaved(""), 4_000);
     } catch (caught) {
-      setPanelError((caught as Error).message); window.requestAnimationFrame(() => document.getElementById(`access-edit-error-${user.id}`)?.focus());
+      setPanelError((caught as Error).message); focusAfterRender(`access-edit-error-${user.id}`);
       // A role or roster change may have saved before a later step failed; show what the server now holds.
       void load().catch(() => undefined);
     } finally { setSaving(false); }
@@ -106,7 +108,7 @@ export function UserSettings({ members }: { members: RosterMember[] }) {
   async function changeActive(user: User) {
     setSaving(true); setPanelError("");
     try { await api(`/admin/users/${encodeURIComponent(user.id)}`, { method: "PATCH", body: JSON.stringify({ active: !user.active }) }); closeEditor(false); await load(); announce(user.active ? `${accountName(user)} was deactivated and signed out.` : `${accountName(user)} was reactivated.`); }
-    catch (caught) { setPanelError((caught as Error).message); window.requestAnimationFrame(() => document.getElementById(`access-edit-error-${user.id}`)?.focus()); }
+    catch (caught) { setPanelError((caught as Error).message); focusAfterRender(`access-edit-error-${user.id}`); }
     finally { setSaving(false); }
   }
 

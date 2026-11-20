@@ -36,6 +36,38 @@
 .kiosk-pin-number input:disabled { opacity: .6; cursor: not-allowed; }
 .kiosk-pin-number .inline-field-error { margin: 0; }
 .kiosk-pin-lockout-form > button { justify-self: start; }
+/* Waiting PIN requests: the count on a kiosk's row of the Kiosks list, and the top bar's count and its dialog. */
+.app a.kiosk-pin-request-count { position: relative; flex: none; text-decoration: none; }
+.app a.kiosk-pin-request-count:hover { filter: brightness(1.08); }
+.app a.kiosk-pin-request-count:focus-visible { outline: 3px solid var(--ui-focus); outline-offset: 2px; }
+/* The pill keeps its size; the link's touch target is the standard control height. */
+.app a.kiosk-pin-request-count::after { content: ""; position: absolute; inset: calc((2rem - var(--control-min-block-size)) / 2) 0; }
+/* A kiosk's row is as wide as its tile, which depends on how many kiosks share the list and not only on the screen. In
+   a tile too narrow for the name, both pills and the rename button, the count takes its own line under the name. */
+.kiosk-device-option { container: kiosk-device-option / inline-size; }
+@container kiosk-device-option (max-width: 22rem) {
+  .kiosk-device-row:has(.kiosk-pin-request-count) { flex-wrap: wrap; }
+  .app .kiosk-device-row:has(.kiosk-pin-request-count) .kiosk-device-select { flex-basis: calc(100% - var(--control-min-block-size) - var(--space-1)); }
+  .app a.kiosk-pin-request-count { order: 3; margin: 0 var(--space-2) var(--space-2); }
+}
+.pin-request-kiosk { display: grid; gap: var(--space-2); margin-top: var(--space-4); }
+.pin-request-kiosk:first-of-type { margin-top: 0; }
+.pin-request-kiosk h3 { margin: 0; overflow-wrap: anywhere; }
+.pin-requests-dialog .kiosk-pin-hint { margin-top: var(--space-3); }
+/* The top bar's count. Where the bar is too short for its label beside the organization name (a phone, a tablet, a
+   narrow window), it is the count alone, in the warning tone of the row counts; its name and tooltip still say what
+   it counts. */
+@media (max-width: 1000px) {
+  .dashboard-toolbar .contest-indicator.pin-request-indicator { justify-content: center; gap: 0; min-width: var(--control-min-block-size); padding: var(--space-2); font-size: 0; }
+  .dashboard-toolbar .contest-indicator.pin-request-indicator > span { color: var(--ui-warning); background: var(--ui-warning-surface); border-color: color-mix(in srgb,var(--ui-warning) 38%,var(--ui-border)); font-size: var(--text-small); }
+}
+/* A phone showing the Update, Reviews and PIN request buttons together has no room left for the organization name, so
+   the buttons take a line of their own, where the count has its label again. */
+@media (max-width: 760px) {
+  .dashboard-toolbar:has(.pin-request-indicator):has(.update-indicator):has(.contest-indicator:not(.pin-request-indicator)) .toolbar-end { grid-column: 1 / -1; grid-row: 2; justify-content: end; }
+  .dashboard-toolbar:has(.update-indicator):has(.contest-indicator:not(.pin-request-indicator)) .contest-indicator.pin-request-indicator { gap: var(--space-2); padding: var(--space-2) var(--space-3); font-size: var(--text-small); }
+  .dashboard-toolbar:has(.update-indicator):has(.contest-indicator:not(.pin-request-indicator)) .contest-indicator.pin-request-indicator > span { color: var(--ui-text); background: var(--ui-surface); border-color: var(--ui-border); }
+}
 @media (max-width: 560px) {
   .kiosk-pin-lockout-fields { grid-template-columns: 1fr; }
   .kiosk-pin-request { align-items: stretch; flex-direction: column; }

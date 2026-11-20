@@ -5,6 +5,7 @@ import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
+import { PIN_FREE_TRIES } from "../apps/api/src/member-pins.ts";
 import type { D1Database, D1Statement } from "../apps/api/src/d1-usage.ts";
 import { TestD1Database } from "./fixtures/d1-database.ts";
 
@@ -250,21 +251,41 @@ test("PIN tries sent at the same time pass the throttle and the lock no more oft
   assert.equal(first.filter(result => result.status === 429 && result.code === "pin_throttled").length, 15);
   assert.deepEqual(pin(1), { failed: 5, lockedUntil: null, throttle: 5, throttleUntil: new Date(Date.now() + 30_000).toISOString() });
 
-  // After the wait, one try of a burst is checked. The correct PIN is among the tries, and is no likelier to be the one.
+  // After the wait, one try of a burst is checked.
   context.mock.timers.tick(30_000);
-  const second = await burst(1, [...wrongPins(9, 100), "2468"]);
-  assert.equal(answered(second).length, 1, "one try per wait");
+  const second = await burst(1, wrongPins(10, 100));
+  assert.equal(second.filter(result => result.status === 403 && result.code === "pin_incorrect").length, 1, "one try per wait");
   assert.equal(second.filter(result => result.code === "pin_throttled").length, 9);
-  // First in the burst, the correct PIN is the try that is checked: it passes the PIN step, and the count starts over.
+  assert.deepEqual(pin(1), { failed: 6, lockedUntil: null, throttle: 6, throttleUntil: new Date(Date.now() + 60_000).toISOString() });
+
+  // The correct PIN in a burst with nine wrong ones, after the next wait. The try that reaches the database first is the
+  // one checked, and which that is is not promised: each request authenticates on its own before it claims. So this
+  // goes by what was checked, not by the order the tries were sent in.
   context.mock.timers.tick(60_000);
   const third = await burst(1, ["2468", ...wrongPins(9, 200)]);
-  assert.equal(third[0]!.code === undefined || !String(third[0]!.code).startsWith("pin_"), true, JSON.stringify(third[0]));
-  assert.ok(answered(third).length <= 1 + 5, "the tries behind it are the free tries of a new count, no more");
+  const correct = third[0]!, wrongChecked = third.slice(1).filter(result => result.code === "pin_incorrect").length;
+  assert.equal(third.slice(1).every(result => result.code === "pin_incorrect" || result.code === "pin_throttled"), true, JSON.stringify(third));
+  if (correct.code === "pin_throttled") {
+    // A wrong PIN was the one try of this wait. The correct PIN was refused unchecked, and the next wait is the longest.
+    assert.equal(correct.status, 429);
+    assert.equal(wrongChecked, 1, "one try per wait");
+    assert.deepEqual(pin(1), { failed: 7, lockedUntil: null, throttle: 7, throttleUntil: new Date(Date.now() + 300_000).toISOString() });
+    // After it, the correct PIN alone is the try that is checked: it is accepted, and the count starts over.
+    context.mock.timers.tick(300_000);
+    const alone = await scan(1, "2468"); assert.equal(alone.status, 202, await alone.clone().text());
+    assert.deepEqual(pin(1), { failed: 0, lockedUntil: null, throttle: 0, throttleUntil: null });
+  } else {
+    // The correct PIN was the one try of this wait: it is accepted, and the count starts over. The wrong PINs checked
+    // are the free tries of that new count, no more, and are all that is counted.
+    assert.equal(correct.status, 202, JSON.stringify(third));
+    assert.ok(wrongChecked <= PIN_FREE_TRIES, `${wrongChecked} wrong PINs checked behind the correct one`);
+    assert.deepEqual(pin(1), { failed: wrongChecked, lockedUntil: null, throttle: wrongChecked, throttleUntil: wrongChecked === PIN_FREE_TRIES ? new Date(Date.now() + 30_000).toISOString() : null });
+  }
 
-  // With lockout on at three tries, a burst cannot be checked more often than the free tries, and locks the PIN.
+  // With lockout on at three tries, three tries of a burst are checked, and the PIN is locked.
   assert.equal((await call("/admin/settings/pin-lockout", { enabled: true, attempts: 3, minutes: 10 }, undefined, "PUT")).status, 200);
   const locking = await burst(2, wrongPins(20, 300));
-  assert.ok(answered(locking).length <= 5, `${answered(locking).length} tries checked`);
+  assert.equal(answered(locking).length, 3, `${answered(locking).length} tries checked`);
   assert.equal(answered(locking).every(result => result.code === "pin_incorrect"), true);
   assert.equal(pin(2).lockedUntil, new Date(Date.now() + 600_000).toISOString());
   assert.equal((await scan(2, "2468")).status, 423, "locked, whatever the PIN");
@@ -277,6 +298,86 @@ test("PIN tries sent at the same time pass the throttle and the lock no more oft
   assert.equal(plain.result.status, 202);
   assert.equal(good.subrequests - plain.subrequests, 2, "the PIN step of a correct PIN is two D1 subrequests");
   assert.ok(good.subrequests < FREE_PLAN_SUBREQUESTS);
+});
+
+test("with lockout on, PIN tries sent at the same time are checked no more often than the configured number before the lock", async context => {
+  const { sqlite, call, pair, requirePin, counted } = await fixture(context);
+  const kiosk = await pair("Test Kiosk A");
+  await requirePin(kiosk.kioskId, true);
+  for (let member = 1; member <= 12; member += 1) assert.equal((await call("/kiosk/pins", { memberId: `TEST-${member}`, pin: "2468" }, kiosk.kioskToken)).status, 201);
+  let event = 0;
+  const scan = (member: number, pin: string) => call("/kiosk/attendance", { eventId: `test-lock-burst-${++event}`, memberId: `TEST-${member}`, occurredAt: new Date().toISOString(), pairingId: kiosk.pairingId, pin }, kiosk.kioskToken);
+  const burst = async (member: number, pins: string[]) => { const results = await Promise.all(pins.map(pin => scan(member, pin))); return Promise.all(results.map(async result => ({ status: result.status, ...(await result.json() as { code?: string; attemptsLeft?: number; lockedUntil?: string }) }))); };
+  const pin = (member: number) => ({ ...sqlite.prepare("SELECT failed_attempts AS failed, locked_until AS lockedUntil, throttle_failures AS throttle, throttle_until AS throttleUntil FROM member_pins WHERE member_id = ?").get(`test-member-${member}`) });
+  const lockAudits = (member: number) => sqlite.prepare("SELECT metadata_json AS metadata, actor_user_id AS actor FROM audit_log WHERE action = 'member_pin.locked' AND target_id = ?").all(`test-member-${member}`).map(row => ({ actor: row.actor, metadata: JSON.parse(String(row.metadata)) }));
+  const wrongPins = (count: number, from: number) => Array.from({ length: count }, (_, index) => String(1000 + from + index));
+  const lockout = async (enabled: boolean, attempts: number) => assert.equal((await call("/admin/settings/pin-lockout", { enabled, attempts, minutes: 10 }, undefined, "PUT")).status, 200);
+  const count = (results: { code?: string }[], code: string) => results.filter(result => result.code === code).length;
+
+  // Lockout at 3, 4 and 5 wrong tries: of twenty wrong PINs sent at once, exactly that many are checked. The claim of
+  // the last one starts the lock, so every other try is refused as locked, without its PIN being compared.
+  for (const [member, attempts] of [[1, 3], [2, 4], [3, 5]] as const) {
+    await lockout(true, attempts);
+    const results = await burst(member, wrongPins(20, member * 100));
+    const lockedUntil = new Date(Date.now() + 600_000).toISOString();
+    assert.equal(count(results, "pin_incorrect"), attempts, `lockout ${attempts}: ${JSON.stringify(results.map(result => result.code))}`);
+    assert.equal(results.filter(result => result.status === 423 && result.code === "pin_locked").length, 20 - attempts, `lockout ${attempts}`);
+    // Each checked try says how many are left; the one that reached the limit says the PIN is locked.
+    assert.deepEqual(results.filter(result => result.code === "pin_incorrect").map(result => result.attemptsLeft).sort(), Array.from({ length: attempts }, (_, index) => index));
+    assert.deepEqual(results.filter(result => result.code === "pin_incorrect" && result.lockedUntil !== undefined).map(result => [result.attemptsLeft, result.lockedUntil]), [[0, lockedUntil]]);
+    assert.deepEqual({ failed: pin(member).failed, lockedUntil: pin(member).lockedUntil }, { failed: attempts, lockedUntil });
+    assert.deepEqual(lockAudits(member), [{ actor: null, metadata: { kioskId: kiosk.kioskId, via: "kiosk", failedAttempts: attempts, lockedUntil, minutes: 10 } }]);
+    assert.equal((await scan(member, "2468")).status, 423, "locked, whatever the PIN");
+  }
+
+  // Lockout above the free tries: the throttle holds the burst at its five free tries, and nothing is locked yet.
+  await lockout(true, 8);
+  const throttledFirst = await burst(4, wrongPins(20, 400));
+  assert.equal(count(throttledFirst, "pin_incorrect"), 5); assert.equal(count(throttledFirst, "pin_throttled"), 15);
+  assert.deepEqual(pin(4), { failed: 5, lockedUntil: null, throttle: 5, throttleUntil: new Date(Date.now() + 30_000).toISOString() });
+  assert.deepEqual(lockAudits(4), []);
+
+  // Lockout off: the five free tries, then the throttle. Tries are counted and never lock.
+  await lockout(false, 3);
+  const unlocked = await burst(5, wrongPins(20, 500));
+  assert.equal(count(unlocked, "pin_incorrect"), 5); assert.equal(count(unlocked, "pin_throttled"), 15); assert.equal(count(unlocked, "pin_locked"), 0);
+  assert.equal(unlocked.some(result => result.attemptsLeft !== undefined || result.lockedUntil !== undefined), false);
+  assert.deepEqual(pin(5), { failed: 5, lockedUntil: null, throttle: 5, throttleUntil: new Date(Date.now() + 30_000).toISOString() });
+  assert.deepEqual(lockAudits(5), []);
+
+  // Tries made offline count toward the same number: two reported, then a burst, and one online try is checked.
+  await lockout(true, 3);
+  assert.deepEqual(await (await call("/kiosk/pin-failures", { failures: [{ memberId: "TEST-6", count: 2, lastAt: new Date().toISOString() }] }, kiosk.kioskToken)).json(), { recorded: 2 });
+  const afterOffline = await burst(6, wrongPins(20, 600));
+  assert.equal(count(afterOffline, "pin_incorrect"), 1); assert.equal(count(afterOffline, "pin_locked"), 19);
+  assert.equal(lockAudits(6).length, 1);
+
+  // A correct PIN on the try that reaches the limit is not a lock: the counts start over and nothing is audited.
+  assert.equal(count(await burst(7, wrongPins(2, 700)), "pin_incorrect"), 2);
+  const atLimit = await scan(7, "2468"); assert.equal(atLimit.status, 202, await atLimit.clone().text());
+  assert.deepEqual(pin(7), { failed: 0, lockedUntil: null, throttle: 0, throttleUntil: null });
+  assert.deepEqual(lockAudits(7), []);
+  // The correct PIN among wrong ones sent at once: never more than three tries checked.
+  const mixed = await burst(8, [...wrongPins(10, 800), "2468", ...wrongPins(9, 820)]);
+  assert.ok(mixed.filter(result => result.code !== "pin_locked" && result.code !== "pin_throttled").length <= 3, JSON.stringify(mixed.map(result => result.code)));
+
+  // A lock that has run out starts a fresh count: three more tries, not one.
+  context.mock.timers.tick(10 * 60_000 + 1000);
+  const again = await burst(6, wrongPins(20, 900));
+  assert.equal(count(again, "pin_incorrect"), 3); assert.equal(count(again, "pin_locked"), 17);
+  assert.equal(lockAudits(6).length, 2);
+
+  // What the PIN step costs, over a scan refused before it (a malformed PIN): a wrong PIN is the claim alone, the wrong
+  // PIN that starts a lock adds its audit, a correct PIN is the claim and clearing it (the test above), and a try
+  // refused as locked is the claim that changed nothing and the read for its reason.
+  const before = (await counted(() => scan(9, "12"))).subrequests;
+  const step = async (member: number, value: string, status: number) => { const made = await counted(() => scan(member, value)); assert.equal(made.result.status, status, await made.result.clone().text()); return made.subrequests - before; };
+  assert.equal(await step(9, "1111", 403), 1, "a wrong PIN");
+  assert.equal(await step(9, "1112", 403), 1, "a second wrong PIN");
+  assert.equal(await step(9, "1113", 403), 2, "the wrong PIN that locks");
+  assert.equal(await step(9, "2468", 423), 2, "a try while locked");
+  await lockout(false, 3);
+  assert.equal(await step(10, "1111", 403), 1, "a wrong PIN with lockout off");
 });
 
 test("a wrong-PIN report with a report id is counted once, however often the kiosk sends it", async context => {

@@ -7,9 +7,6 @@
 .settings-disclosure > summary::-webkit-details-marker { display: none; }
 .settings-disclosure > summary { list-style: none; }
 .settings-disclosure[open] > summary { margin-bottom: var(--space-4); }
-.settings-unit-input { display: flex; align-items: center; gap: var(--space-3); }
-.settings-unit-input > input { flex: 1; min-width: 0; }
-.settings-unit-input > span { font-family: var(--font-body); font-size: var(--text-small); color: var(--ui-text-muted); }
 .data-category-controls { display: grid; gap: var(--space-3); min-width: 0; }
 .grant-access { min-width: 0; }
 .module-setting-choice { position: relative; align-items: flex-start; padding-block: var(--space-3); border-bottom: 1px solid var(--ui-border); }

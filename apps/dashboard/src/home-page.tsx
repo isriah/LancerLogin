@@ -106,7 +106,7 @@ export function HomePage({ navigate, discordEnabled, onWalkthroughChange, debugM
       </> : step && <>
         <p className="walkthrough-progress" role="status">Step {walkthrough.stepIndex + 1} of {dashboardWalkthrough.length}</p>
         <h2 data-walkthrough-focus tabIndex={-1}>{step.title}</h2><p>{step.description}</p>
-        {step.id === "navigation" && <p>{document.querySelector(".contest-indicator") ? "The contest indicator opens attendance requests awaiting review. " : ""}{document.querySelector(".update-indicator") ? "Update available opens the Updates page for Administrators." : ""}</p>}
+        {step.id === "navigation" && <p>{document.querySelector(".contest-indicator:not(.pin-request-indicator)") ? "The contest indicator opens attendance requests awaiting review. " : ""}{document.querySelector(".pin-request-indicator") ? "The PIN requests count opens kiosk PIN requests waiting for approval. " : ""}{document.querySelector(".update-indicator") ? "Update available opens the Updates page for Administrators." : ""}</p>}
         {step.id === "selection" && meetings.length === 0 && <p>Selection checkboxes will appear when meetings exist.</p>}
         <div className="walkthrough-actions"><button className="ui-button" disabled={walkthrough.stepIndex === 0} onClick={() => walkthrough.move(walkthrough.stepIndex - 1)}>Back</button><button className="ui-button ui-button--primary" onClick={() => walkthrough.move(walkthrough.stepIndex + 1)}>Next</button><button className="ui-button" onClick={walkthrough.exit}>Exit</button><button className="ui-button" onClick={walkthrough.dismiss}>Don't show automatically again</button></div>
       </>}

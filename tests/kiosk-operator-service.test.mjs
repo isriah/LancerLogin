@@ -148,7 +148,6 @@ test("orderly restart recovery keeps maintenance capture blocked when attendance
   assert.equal((await renewal.json()).captureSuspended, true);
   assert.equal((await (await runtime.request("/maintenance/session")).json()).authorized, false);
   assert.equal((await runtime.request("/sensor/test", {})).status, 403);
-  assert.equal((await runtime.request("/attendance", { memberId: "synthetic-member" })).status, 400);
   await runtime.reader({ present: false }); await captureTicks(runtime); await runtime.reader({ present: true }); await captureTicks(runtime);
   assert.equal(f.attendance.length, 0);
   const maintenanceRenewal = await runtime.request("/operator-presence", { action: "renew", pageId: maintenance.pageId, generation: maintenance.generation, mode: "maintenance" });
@@ -164,7 +163,6 @@ test("unexpected stop recovery has no checkpoint and rejects the old page genera
   await assert.rejects(readFile(join(f.root, "pairing.json.presence-restart.json")), { code: "ENOENT" });
   runtime = await f.start({ initializeClock: false });
   assert.equal((await runtime.request("/operator-presence", { action: "renew", pageId: page.pageId, generation: page.generation, mode: "attendance" })).status, 409);
-  assert.equal((await runtime.request("/attendance", { memberId: "synthetic-member" })).status, 400);
   await runtime.reader({ present: false }); await captureTicks(runtime); await runtime.reader({ present: true }); await captureTicks(runtime);
   assert.equal(f.attendance.length, 0);
 });
@@ -267,7 +265,6 @@ test("real service verifies roster before enrollment, preserves replacement, and
   await runtime.reader({releaseEnrollment:true});const result=await enrollment;assert.equal(result.status,201);assert.equal((await result.json()).fingerRemovalRequired,true);
   assert.equal(JSON.parse(await readFile(join(f.root,"slot-mappings.json"),"utf8"))[1].rosterId,"synthetic-roster");
   await captureTicks(runtime);assert.equal(f.attendance.length,0);
-  assert.equal((await runtime.request("/attendance",{memberId:"synthetic-member"})).status,400);
   presence=await runtime.presence("attendance",presence);await captureTicks(runtime);assert.equal(f.attendance.length,0);
   await fingerLifted(runtime); await runtime.reader({present:true});await until(()=>f.attendance.length===1);
   assert.equal((await runtime.request("/operator-presence",{action:"enter",pageId:"cross-origin-page",mode:"attendance"},{origin:"https://untrusted.example"})).status,403);

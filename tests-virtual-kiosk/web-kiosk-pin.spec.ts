@@ -98,7 +98,7 @@ test("a web kiosk with Require PIN sets up a PIN with an Operator's approval, re
   await identify(page, "1007", "Test Student G");
   await expect(page.getByRole("heading", { name: "You don't have a PIN yet" })).toBeVisible();
   await page.getByRole("button", { name: "Ask for approval", exact: true }).click();
-  await expect(page.getByText("Waiting for an Operator to approve on this kiosk's Manage page in the dashboard")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Waiting for an Operator or Admin to approve in the dashboard")).toBeVisible({ timeout: 20_000 });
   let requestId = "";
   await expect.poll(async () => {
     const { requests } = await api.get(`/admin/kiosks/${kioskId}/pin-requests`);
@@ -222,4 +222,127 @@ test("a web kiosk with Require PIN sets up a PIN with an Operator's approval, re
   await page.reload();
   await expect(page.getByText("Online", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect.poll(async () => { const cached = await cachedMember(page, "1008"); return cached ? "pin" in cached || "pinLockedUntil" in cached : undefined; }, { timeout: 30_000 }).toBe(false);
+});
+
+/** The wrong PIN tries the kiosk keeps (IndexedDB) until the server has answered a report of them. */
+async function keptPinFailures(page: Page) {
+  return page.evaluate(async () => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open("lancerlogin-web-kiosk"); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    const failures = await new Promise<{ memberId: string; count: number; report?: { id: string; count: number } }[] | undefined>((resolve, reject) => { const request = database.transaction("state").objectStore("state").get("pinFailures"); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    database.close();
+    return (failures ?? []).map((item) => ({ memberId: item.memberId, count: item.count, ...(item.report ? { report: { id: item.report.id, count: item.report.count } } : {}) }));
+  });
+}
+
+test("a web kiosk resends a wrong-PIN report whose answer was lost under the same id, and the server counts each try once", async ({ page, context, request }) => {
+  const api = await adminApi(request);
+  const { dashboardUrl } = await status(request);
+  expect(dashboardUrl).toBeTruthy();
+  await page.setViewportSize({ width: 1024, height: 600 });
+  // H keeps the PIN an Operator set in the scenario above. H's count starts at zero, and lockout stays off, so every
+  // wrong try is only counted.
+  const rosterH = (await api.get("/admin/members")).members.find((item: { memberId: string }) => item.memberId === "1008").id as string;
+  expect((await api.get(`/admin/members/${rosterH}/pin`)).pin, "the scenario above leaves Test Student H with a PIN").toMatchObject({ set: true });
+  await putAsAdmin(request, "/admin/settings/pin-lockout", { enabled: false, attempts: 5, minutes: 15 });
+  await api.post(`/admin/members/${rosterH}/pin/unlock`, {});
+  const failedAttempts = async () => (await api.get(`/admin/members/${rosterH}/pin`)).pin.failedAttempts;
+  expect(await failedAttempts()).toBe(0);
+
+  // A second web kiosk with Require PIN: each scenario has its own browser storage, so the one above is gone.
+  const secondKiosk = "Test web kiosk F";
+  const created = await api.post("/admin/pairing-codes", { kioskName: secondKiosk, kind: "web" });
+  await page.goto(`${dashboardUrl}/kiosk#code=${created.code}`);
+  await expect(page.getByRole("heading", { name: "Pair this kiosk" })).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Pair", exact: true }).click();
+  await expect(page.getByText("Choose a settings PIN")).toBeVisible({ timeout: 20_000 });
+  await pressAll(page, settingsPin);
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await pressAll(page, settingsPin);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /Enter your\s*member ID/ })).toBeVisible({ timeout: 20_000 });
+  const kioskId = (await api.get("/admin/kiosks")).kiosks.find((item: { name: string; active: number }) => item.name === secondKiosk && item.active).id;
+  await api.patch(`/admin/kiosks/${kioskId}/authentication-method`, { authenticationMethod: "member_id", memberLookup: "entry", requirePin: true });
+
+  // The kiosk's reports of wrong tries, as the page sends them. While `unreachable` is set, as it is whenever the browser
+  // is offline, a report never reaches the server. The first report that does reach it is counted there, but its answer
+  // is dropped on the way back, and the network stays down from then until the scenario brings it back.
+  type Report = { reportId: string; failures: { memberId: string; count: number }[]; fate: "answer lost" | "never arrived" | "answered"; recorded?: number };
+  const sent: Report[] = [];
+  let unreachable = false;
+  await context.route("**/kiosk/pin-failures", async (route) => {
+    if (route.request().method() !== "POST") { await route.continue(); return; }
+    const body = route.request().postDataJSON() as { reportId: string; failures: { memberId: string; count: number }[] };
+    const entry: Report = { reportId: body.reportId, failures: body.failures.map((item) => ({ memberId: item.memberId, count: item.count })), fate: "answered" };
+    if (unreachable) { entry.fate = "never arrived"; sent.push(entry); await route.abort("connectionfailed"); return; }
+    const first = !sent.some((item) => item.fate !== "never arrived");
+    if (first) unreachable = true;
+    const response = await route.fetch();
+    if (first) { entry.fate = "answer lost"; sent.push(entry); await route.abort("connectionreset"); return; }
+    entry.recorded = (await response.json()).recorded; sent.push(entry);
+    await route.fulfill({ response });
+  });
+  const reachedServer = () => sent.filter((item) => item.fate !== "never arrived");
+  const goOffline = async () => { unreachable = true; await context.setOffline(true); };
+  const goOnline = async () => { unreachable = false; await context.setOffline(false); };
+  const wrongTry = async (pin: string) => {
+    await identify(page, "1008", "Test Student H");
+    await enterPin(page, pin);
+    await expect(page.getByRole("heading", { name: "Wrong PIN" })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  };
+
+  await page.reload();
+  await expect(page.getByText("Online", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect.poll(async () => Boolean((await cachedMember(page, "1008"))?.pin), { timeout: 30_000 }).toBe(true);
+
+  // Offline, H types two wrong PINs. The kiosk checks them against its cached hash and counts them itself.
+  await goOffline();
+  await wrongTry("1111");
+  await wrongTry("2222");
+  await expect.poll(async () => (await keptPinFailures(page)).map((item) => [item.memberId, item.count]), { timeout: 20_000 }).toEqual([["1008", 2]]);
+  expect(reachedServer()).toEqual([]);
+  expect(await failedAttempts()).toBe(0);
+
+  // Back online, the kiosk reports its tries. The server counts them, but the kiosk never gets the answer.
+  await goOnline();
+  await expect.poll(() => reachedServer().length, { timeout: 90_000 }).toBe(1);
+  await goOffline();
+  const first = reachedServer()[0];
+  expect(first.fate).toBe("answer lost");
+  expect(first.reportId).toMatch(/^[\w-]{1,128}$/);
+  expect(first.failures).toHaveLength(1);
+  // The report holds the tries made before the kiosk put it together. That is both of them, unless the kiosk's
+  // once-a-minute check-in fell between the two tries: then it holds the first, and the second waits for the next report.
+  const firstCount = first.failures[0].count;
+  expect(first.failures[0].memberId).toBe("1008");
+  expect([1, 2]).toContain(firstCount);
+  expect(await failedAttempts()).toBe(firstCount);
+  // The kiosk keeps the report, marked with its id, because nothing said the server has it.
+  await expect.poll(() => keptPinFailures(page), { timeout: 20_000 }).toEqual([{ memberId: "1008", count: 2, report: { id: first.reportId, count: firstCount } }]);
+
+  // A third wrong try while the report waits is kept for a later report; the waiting one stays as it was sent.
+  await wrongTry("3333");
+  await expect.poll(() => keptPinFailures(page), { timeout: 20_000 }).toEqual([{ memberId: "1008", count: 3, report: { id: first.reportId, count: firstCount } }]);
+  expect(reachedServer()).toHaveLength(1);
+  expect(await failedAttempts()).toBe(firstCount);
+
+  // Online for good: the kiosk sends the first report again, with the same id and the same tries, and the server answers
+  // with what it counted the first time instead of counting them again.
+  await goOnline();
+  await expect.poll(() => reachedServer().length, { timeout: 90_000 }).toBeGreaterThanOrEqual(2);
+  expect(reachedServer()[1]).toEqual({ reportId: first.reportId, failures: first.failures, fate: "answered", recorded: firstCount });
+  // The tries made since go in a new report, at the kiosk's next check-in.
+  await expect.poll(async () => (await keptPinFailures(page)).length, { timeout: 90_000 }).toBe(0);
+  const later = reachedServer().slice(2);
+  expect(later.length).toBeGreaterThanOrEqual(1);
+  for (const report of later) expect(report).toMatchObject({ fate: "answered", failures: [{ memberId: "1008" }] });
+  expect(new Set([first.reportId, ...later.map((report) => report.reportId)]).size, "every later report has an id of its own").toBe(later.length + 1);
+  expect(later.reduce((total, report) => total + report.failures[0].count, 0)).toBe(3 - firstCount);
+  expect(later.reduce((total, report) => total + (report.recorded ?? 0), 0)).toBe(3 - firstCount);
+  // Three tries were made and the server counted three, though it received the first report twice.
+  expect(await failedAttempts()).toBe(3);
+
+  // Leave the installation as the scenarios after this one expect: no wrong tries counted for H, Require PIN off here.
+  await api.post(`/admin/members/${rosterH}/pin/unlock`, {});
+  await api.patch(`/admin/kiosks/${kioskId}/authentication-method`, { authenticationMethod: "member_id", memberLookup: "entry", requirePin: false });
 });

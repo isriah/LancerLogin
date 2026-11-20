@@ -104,7 +104,7 @@ test("restore refuses a missing plugin before writes and accepts only an exact a
   assert.match(body.details.join(" "), /Retired Synthetic Plugin \(synthetic-retired\) is not installed.*synthetic-retired\.git.*2 records/);
   for (const excludeModules of [[], ["synthetic-notes"], ["synthetic-retired", "synthetic-notes"]]) assert.equal((await client.restore(backup, { excludeModules })).status, 409);
   for (const excludeModules of ["synthetic-retired", [7], ["synthetic-retired", "synthetic-retired"], ["Synthetic Retired"]]) assert.equal((await client.restore(backup, { excludeModules })).status, 400);
-  assert.equal(db.batches, 0); assert.equal(db.count("SELECT COUNT(*) AS n FROM synthetic_notes_entries WHERE id='note-later'"), 1);
+  assert.equal(db.writeBatches, 0); assert.equal(db.count("SELECT COUNT(*) AS n FROM synthetic_notes_entries WHERE id='note-later'"), 1);
 
   const catalog = () => db.rows("SELECT module_id, origin, source, source_commit, definition_sha256, installed FROM platform_module_catalog ORDER BY module_id");
   const recorded = catalog(); assert.ok(recorded.some((row: any) => row.module_id === "synthetic-notes" && row.origin === "external"));
@@ -134,7 +134,7 @@ test("restore refuses newer plugins and refuses an opt-out that would break an i
   }
   const newerContract = structuredClone(current); section(newerContract, "synthetic-addon").contractVersion = 2;
   assert.equal((await client.restore(newerContract)).status, 409);
-  assert.equal(db.batches, 0);
+  assert.equal(db.writeBatches, 0);
 
   const newerAddon = structuredClone(current); section(newerAddon, "synthetic-addon").backupVersion = 2;
   const refused = await client.restore(newerAddon); assert.equal(refused.status, 409);
@@ -182,7 +182,7 @@ test("the plugin section is validated strictly before any write", async (t) => {
   assert.equal((await client.call("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup: { ...meetings, externalModules: [] } })).status, 400);
   assert.equal((await client.call("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup: await client.backup("roster"), excludeModules: ["synthetic-notes"] })).status, 400);
   assert.equal((await client.restore(current, { excludeModules: ["synthetic-notes"] })).status, 400, "only unavailable modules can be excluded");
-  assert.equal(db.batches, 0);
+  assert.equal(db.writeBatches, 0);
 });
 
 test("older plugin backup versions normalize through the installed adapter", async (t) => {
@@ -201,7 +201,7 @@ test("schema 41 backups restore as before and leave installed plugins fresh and 
   const pluginState = structuredClone(legacy);
   for (const table of moduleKeyedTables) legacy.tables[table] = legacy.tables[table].filter((row: Record<string, unknown>) => !String(row.module_id).startsWith("synthetic-"));
   assert.equal((await client.restore(pluginState)).status, 400, "schema 41 never declared plugin module state");
-  assert.equal(db.batches, 0);
+  assert.equal(db.writeBatches, 0);
   const ignored = { ...structuredClone(legacy), externalModules: current.externalModules };
   for (const backup of [legacy, ignored]) {
     const restored = await client.restore(backup); assert.equal(restored.status, 200, await restored.clone().text());

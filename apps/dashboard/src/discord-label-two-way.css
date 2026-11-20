@@ -42,9 +42,13 @@
 .discord-unmatched { display: grid; gap: var(--space-3); min-width: 0; }
 .discord-unmatched > p { margin: 0; }
 .discord-unmatched-label { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--ui-border); border-radius: var(--radius-card); background: var(--ui-surface-subtle); }
-.discord-unmatched-label h3 { margin: 0; overflow-wrap: anywhere; }
+/* A label's heading inside the list is a body-size display heading; this outranks the page-wide card-heading size for h3. */
+.app .discord-unmatched .discord-unmatched-label h3 { margin: 0; font-size: var(--text-body); overflow-wrap: anywhere; }
 .discord-unmatched-label .compact-list { margin: 0; overflow-wrap: anywhere; }
 .discord-unmatched-label small,.discord-unmatched-checked { color: var(--ui-text-muted); }
+/* On the Labels page the list is a disclosure in the Discord roles card; its count pill sits beside the summary text. */
+.settings-disclosure > summary .status-pill { margin-left: var(--space-2); min-height: 0; vertical-align: middle; }
+.settings-disclosure .discord-unmatched { margin-top: var(--space-3); }
 
 /* The Labels page's per-label sync direction control. */
 .label-sync-direction { min-width: 12rem; }

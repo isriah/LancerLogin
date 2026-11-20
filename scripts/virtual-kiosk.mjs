@@ -45,6 +45,9 @@ export const testMembers = [
   { memberId: "1011", firstName: "Test Student", lastName: "K", email: "test.student.k@example.test" },
   { memberId: "1012", firstName: "Test Student", lastName: "L", email: "test.student.l@example.test" },
   { memberId: "1013", firstName: "Test Student", lastName: "M", email: "test.student.m@example.test" },
+  { memberId: "1014", firstName: "Test Student", lastName: "N", email: "test.student.n@example.test" },
+  { memberId: "1015", firstName: "Test Student", lastName: "O", email: "test.student.o@example.test" },
+  { memberId: "1016", firstName: "Test Student", lastName: "P", email: "test.student.p@example.test" },
 ];
 // The meeting the control panel's Meeting card moves. Test meeting B stays a week out, so two test meetings always exist.
 export const panelMeetingTitle = "Test meeting A";
@@ -268,16 +271,42 @@ export function pairingKey(apiUrl, code, kioskName) {
   return `LL1.${Buffer.from(JSON.stringify({ apiUrl, code, kioskName })).toString("base64url")}`;
 }
 
-/** One kiosk's way to the Worker. It drops every connection while online() is false: the Worker is set unreachable, or the kiosk has no network. */
-function startCloudLink({ port, target, online }) {
-  const link = {};
+/**
+ * One kiosk's way to the Worker. It drops every connection while online() is false: the Worker is set unreachable, or the
+ * kiosk has no network.
+ * It can also answer scan deliveries itself while everything else still reaches the Worker: with refuseScans above zero,
+ * that many POST /kiosk/attendance requests get a 404 the kiosk does not know, so the scan stays in the kiosk's queue
+ * though the server answers. link.scans lists the scan deliveries in the order they arrived, with who each was for
+ * (the member ID, or "code" for a Discord code, which is never kept) and the status the kiosk got back.
+ */
+export function startCloudLink({ port, target, online }) {
+  const link = { refuseScans: 0, scans: [] };
   const server = createServer((incoming, outgoing) => {
     if (!online()) { incoming.socket.destroy(); return; }
-    const upstream = httpRequest(new URL(incoming.url ?? "/", target), { method: incoming.method, headers: { ...incoming.headers, host: new URL(target).host } }, (reply) => {
-      outgoing.writeHead(reply.statusCode ?? 502, reply.headers); reply.pipe(outgoing);
+    const forward = (body) => {
+      const upstream = httpRequest(new URL(incoming.url ?? "/", target), { method: incoming.method, headers: { ...incoming.headers, host: new URL(target).host } }, (reply) => {
+        outgoing.writeHead(reply.statusCode ?? 502, reply.headers); reply.pipe(outgoing);
+        if (body !== undefined) noteScan(body, reply.statusCode ?? 502, true);
+      });
+      upstream.once("error", () => incoming.socket.destroy());
+      if (body === undefined) incoming.pipe(upstream); else upstream.end(body);
+    };
+    const noteScan = (body, status, forwarded) => {
+      let scan; try { scan = JSON.parse(body.toString("utf8")); } catch { scan = undefined; }
+      link.scans.push({ scan: typeof scan?.discordCode === "string" ? "code" : typeof scan?.memberId === "string" ? scan.memberId : null, status, forwarded });
+      if (link.scans.length > 200) link.scans.shift();
+    };
+    if (incoming.method !== "POST" || new URL(incoming.url ?? "/", target).pathname !== "/kiosk/attendance") { forward(); return; }
+    const chunks = [];
+    incoming.on("data", (chunk) => chunks.push(chunk));
+    incoming.once("error", () => outgoing.destroy());
+    incoming.once("end", () => {
+      const body = Buffer.concat(chunks);
+      if (link.refuseScans <= 0) { forward(body); return; }
+      link.refuseScans -= 1;
+      outgoing.writeHead(404, { "content-type": "application/json; charset=utf-8" }); outgoing.end(JSON.stringify({ error: "Not found" }));
+      noteScan(body, 404, false);
     });
-    upstream.once("error", () => incoming.socket.destroy());
-    incoming.pipe(upstream);
   });
   link.server = server;
   link.listening = listenOn(server, port, "The cloud link");
@@ -505,6 +534,20 @@ function startPanel({ port, kiosks, worker, api, urls }) {
         kiosk.note(`dashboard command ${input.command} queued`);
         return json(response, 202, await queueCommand(kiosk, input.command, api));
       }
+      // The kiosk's link to the Worker: how many scan deliveries it still refuses itself, and the deliveries it has seen.
+      const link = /^\/api\/kiosks\/(\d)\/link$/.exec(pathname);
+      if (link && (request.method === "GET" || request.method === "POST")) {
+        const kiosk = kiosks[Number(link[1])]; if (!kiosk?.link) return json(response, 404, { error: "No such virtual kiosk" });
+        if (request.method === "POST") {
+          const input = await readBody(request);
+          if (input.refuseScans !== undefined) {
+            if (!Number.isInteger(input.refuseScans) || input.refuseScans < 0 || input.refuseScans > 100) return json(response, 400, { error: "refuseScans must be a whole number from 0 to 100" });
+            kiosk.link.refuseScans = input.refuseScans; kiosk.note(input.refuseScans ? `its link refuses the next ${input.refuseScans} scan deliveries` : "its link passes scan deliveries again");
+          }
+          if (input.clearScans === true) kiosk.link.scans.length = 0;
+        }
+        return json(response, 200, { refuseScans: kiosk.link.refuseScans, scans: kiosk.link.scans });
+      }
       if (pathname === "/api/cloud" && request.method === "POST") { worker.online = Boolean((await readBody(request)).online); return json(response, 200, { cloudOnline: worker.online }); }
       const route = /^\/api\/kiosks\/(\d)\/(pair|unpair|restart|reboot)$/.exec(pathname);
       if (route && request.method === "POST") {
@@ -541,8 +584,12 @@ async function main() {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => { stopAll(); process.exit(130); });
 
   const runtime = await developmentRuntime({ stateDirectory: join(stateRoot, "preview"), apiPort: ports.api, dashboardPort: ports.dashboard });
+  // The Worker starts from an entry that answers GitHub's release feed itself, so kiosk updates don't depend on GitHub.
+  const workerConfig = JSON.parse(await readFile(runtime.configPath, "utf8"));
+  workerConfig.main = workerConfig.main.replace(/apps\/api\/src\/index\.ts$/, "scripts/virtual-kiosk/worker-entry.mjs");
+  await writeFile(runtime.configPath, `${JSON.stringify(workerConfig, null, 2)}\n`);
   const wrangler = join(coreRoot, "node_modules/wrangler/bin/wrangler.js");
-  const env = { ...process.env, WRANGLER_SEND_METRICS: "false" };
+  const env ={ ...process.env, WRANGLER_SEND_METRICS: "false" };
   const migrate = spawnSync(process.execPath, [wrangler, "d1", "migrations", "apply", "lancerlogin-plugin-dev", "--local", "--config", runtime.configPath, "--persist-to", runtime.persistDirectory], { stdio: "inherit", cwd: coreRoot, env: { ...env, CI: "true" } });
   if (migrate.status !== 0) fail("Applying Core migrations to the local database failed");
   children.push(spawn(process.execPath, [wrangler, "dev", "--local", "--config", runtime.configPath, "--persist-to", runtime.persistDirectory, "--port", String(ports.api), "--ip", "localhost", "--test-scheduled"], { stdio: "inherit", cwd: coreRoot, env }));
@@ -564,7 +611,8 @@ async function main() {
     await mkdir(directory, { recursive: true, mode: 0o700 }); await chmod(directory, 0o700);
     await mkdir(join(stateRoot, "readers"), { recursive: true });
     const kiosk = superviseKiosk({ index, port, screenPort: ports.screens[index], linkUrl: `http://127.0.0.1:${ports.links[index]}`, directory, readerPath: join(stateRoot, "readers", `kiosk-${index + 1}.json`), systemPath: join(stateRoot, "readers", `kiosk-${index + 1}.system.json`), log });
-    await startCloudLink({ port: ports.links[index], target: runtime.apiUrl, online: () => worker.online && networkOnline(kiosk.network) }).listening;
+    kiosk.link = startCloudLink({ port: ports.links[index], target: runtime.apiUrl, online: () => worker.online && networkOnline(kiosk.network) });
+    await kiosk.link.listening;
     await startScreenProxy({ port: ports.screens[index], kioskPort: port, panelOrigin: `http://127.0.0.1:${ports.panel}` });
     kiosksRef.push(kiosk); kiosk.start();
     await waitFor(`http://127.0.0.1:${port}/health`, { label: kiosk.name, timeoutMs: 30_000 });

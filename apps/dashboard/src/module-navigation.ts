@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ModuleSnapshotItem } from "../../../packages/shared/src/module-platform.ts";
 import { api, ApiError } from "./dashboard-api";
 import { readModuleSnapshot } from "./module-client";
+import { clearPinRequestCounts, readPinRequestCounts, setPinRequestCounts } from "./pin-request-counts";
 import { moduleFailureForStatus, moduleRefreshIntervalMs, nextModuleAccess, type ModuleAccessState, type ModuleNavigationResult } from "./module-access";
 
 export type { ModuleAccessFailure, ModuleNavigationResult } from "./module-access";
@@ -9,7 +10,14 @@ export type { ModuleAccessFailure, ModuleNavigationResult } from "./module-acces
 export async function loadModuleNavigation(): Promise<ModuleNavigationResult> {
   let value: unknown;
   try { value = await api<unknown>("/platform/modules"); }
-  catch (error) { return { error: true, reason: moduleFailureForStatus(error instanceof ApiError ? error.status : undefined), receivedAt: Date.now() }; }
+  catch (error) {
+    const reason = moduleFailureForStatus(error instanceof ApiError ? error.status : undefined);
+    if (reason === "signed-out") clearPinRequestCounts();
+    return { error: true, reason, receivedAt: Date.now() };
+  }
+  // The same answer carries the waiting PIN request counts for the top bar. An answer without them changes nothing.
+  const pinRequests = readPinRequestCounts((value as { pinRequests?: unknown } | null)?.pinRequests);
+  if (pinRequests) setPinRequestCounts(pinRequests);
   try { return { snapshot: readModuleSnapshot(value), receivedAt: Date.now() }; }
   catch { return { error: true, reason: "unverified", receivedAt: Date.now() }; }
 }

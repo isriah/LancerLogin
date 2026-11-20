@@ -782,7 +782,7 @@ async function handleRequest(request, response) {
     // A LAN pairing must show the code from the kiosk's own screen, so nobody
     // else on the network can point an unpaired kiosk at their own server.
     if (!localRequest(request)) { const check = setupCode.verify(input.setupCode); if (!check.ok) { response.statusCode = check.locked ? 429 : 403; response.end(JSON.stringify({ error: check.locked ? "Too many setup code attempts. Read the new code on the kiosk screen and try again in a minute." : "Enter the setup code shown on the kiosk screen" })); return; } }
-    const pairing = decodePairingKey(input.pairingKey); const config = await pairInstallation(pairing); await savePairing(config); setupCode.rotate();
+    const pairing = decodePairingKey(input.pairingKey); const config = await pairInstallation({ apiUrl: pairing.apiUrl, code: pairing.code, kioskName: pairing.kioskName, releaseVersion }); await savePairing(config); setupCode.rotate();
     // The new pairing replaces the old installation: delete archived state now.
     void unpairingStore.purgeArchives({ all: true }).catch(() => undefined);
     response.statusCode = 201; response.end(JSON.stringify({ paired: true, kioskName: config.kioskName })); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Pairing failed" })); } return; }
@@ -866,25 +866,6 @@ async function handleRequest(request, response) {
       const outcome = await recordPinAttendance(member.memberId, input.pin, inputGeneration);
       response.statusCode = outcome.status; response.end(JSON.stringify({ pinSet: true, ...outcome.body }));
     } catch (error) { sendRefusal(response, error, "The PIN could not be saved"); }
-    return;
-  }
-  if (pathname === "/attendance" && request.method === "POST") {
-    const inputGeneration = attendanceInputGeneration;
-    try {
-      const event = await body(request); const config = await loadPairing();
-      if (!config) throw new Error("Pair this kiosk before recording attendance");
-      if (!attendanceAllowed() || inputGeneration !== attendanceInputGeneration) throw new Error("Attendance mode changed. Return to attendance and scan again.");
-      const timing = await attendanceClock.capture();
-      if (!attendanceAllowed() || inputGeneration !== attendanceInputGeneration) throw new Error("Attendance mode changed. Return to attendance and scan again.");
-      const commit = queue.enqueue({ eventId: event.eventId || crypto.randomUUID(), memberId: event.memberId, meetingId: event.meetingId, ...timing, ...(config?.pairingId ? { pairingId: config.pairingId } : {}) });
-      directAttendanceCommits.add(commit);
-      let accepted; try { accepted = await commit; } finally { directAttendanceCommits.delete(commit); }
-      // Acknowledge durable local storage, not cloud delivery. An unavailable
-      // or slow cloud must not turn a saved scan into a failed-save response.
-      response.statusCode = accepted ? 202 : 200;
-      response.end(JSON.stringify({ accepted, queued: (await queue.pending()).length }));
-      if (config) void flushAttendance(config).catch(() => undefined);
-    } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Invalid attendance event" })); }
     return;
   }
   if (pathname === "/fingerprint-diagnostics" && request.method === "GET") {

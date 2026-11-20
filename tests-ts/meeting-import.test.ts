@@ -187,3 +187,66 @@ test("an update that moves a meeting into the past writes a skipped notice; atte
   assert.match(result.rows[1]!.error!, /completed meeting/);
   assert.deepEqual(f.db.rows("SELECT meeting_id, status FROM discord_attendance_notifications"), [{ meeting_id: "ending", status: "skipped" }]);
 });
+
+test("an update that leaves the times alone is not window-checked, as in the meeting editor; one that changes them is", async (t) => {
+  const f = fixture(); t.after(() => f.db.raw.close());
+  const date = usDate(iso(10, 0).slice(0, 10));
+  // Saved before the early arrival allowance existed: 35 minutes apart, so the 30-minute late and 15-minute early windows overlap.
+  f.meeting("first", "Test First Meeting", iso(10, 18), iso(10, 19));
+  f.meeting("second", "Test Second Meeting", iso(10, 19, 35), iso(10, 20, 30));
+  const notesOnly = [row(2, { title: "Test Second Meeting", date, startTime: "19:35", endTime: "20:30", notes: "Synthetic note" })];
+  const preview = await f.run({ dryRun: true, actions: { 2: "update" }, rows: notesOnly });
+  assert.deepEqual(preview.rows.map((item) => [item.action, item.changes, item.error]), [["update", ["notes"], undefined]]);
+  // The same edit through the meeting editor's route saves too.
+  const cookie = "lancerlogin_session=" + await createSessionCodec(sessionSecret).issue({ userId: "admin", role: "admin" });
+  const patch = (body: unknown) => worker.fetch(new Request("https://fixture.test/meetings/second", { method: "PATCH", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body) }), f.env as never);
+  assert.equal((await patch({ title: "Test Second Meeting", startsAt: iso(10, 19, 35), endsAt: iso(10, 20, 30), notes: "Synthetic editor note" })).status, 200);
+  const committed = await f.run({ dryRun: false, actions: { 2: "update" }, rows: notesOnly });
+  assert.deepEqual(committed.imported && [committed.imported.added, committed.imported.updated], [0, 1]);
+  assert.deepEqual(f.db.rows("SELECT notes FROM meetings WHERE id = 'second'"), [{ notes: "Synthetic note" }]);
+  // Changing the end time is a reschedule, which both routes check against the neighbour.
+  const moved = await f.run({ dryRun: true, actions: { 2: "update" }, rows: [row(2, { title: "Test Second Meeting", date, startTime: "19:35", endTime: "21:00" })] });
+  assert.deepEqual(moved.rows.map((item) => [item.action, item.error]), [["error", "Overlaps Test First Meeting (6:00–7:00 PM)"]]);
+  assert.equal((await patch({ title: "Test Second Meeting", startsAt: iso(10, 19, 35), endsAt: iso(10, 21) })).status, 409);
+  // A new meeting is still compared with a meeting whose update keeps its times.
+  const added = await f.run({ dryRun: true, actions: { 2: "update" }, rows: [...notesOnly.map((item) => ({ ...item, values: { ...item.values, notes: "Another synthetic note" } })), row(3, { title: "Test Late Add", date, startTime: "20:45", endTime: "21:30" })] });
+  assert.deepEqual(added.rows.map((item) => [item.action, item.error]), [["update", undefined], ["error", "Overlaps Test Second Meeting (7:35–8:30 PM)"]]);
+});
+
+test("a row is only refused for a window that will exist once the import is applied", async (t) => {
+  const f = fixture(); t.after(() => f.db.raw.close());
+  const date = usDate(iso(10, 0).slice(0, 10));
+  f.meeting("x", "Test X", iso(10, 9), iso(10, 10));
+  f.meeting("y", "Test Y", iso(10, 13), iso(10, 14));
+  // Row 2 would stretch X into Y, so it is refused and X keeps 9:00-10:00. Row 3 fits beside the X that will exist, and
+  // row 4 lengthens Y without touching anything that will exist. Before, rows 3 and 4 were refused for row 2's window.
+  const stretched = await f.run({ dryRun: true, actions: { 2: "update", 4: "update" }, rows: [
+    row(2, { title: "Test X", date, startTime: "09:00", endTime: "13:00" }),
+    row(3, { title: "Test Midday Add", date, startTime: "11:00", endTime: "12:00" }),
+    row(4, { title: "Test Y", date, startTime: "13:00", endTime: "15:00" }),
+  ] });
+  assert.deepEqual(stretched.rows.map((item) => [item.action, item.error]), [["error", "Overlaps Test Y (1:00–2:00 PM)"], ["add", undefined], ["update", undefined]]);
+  assert.deepEqual(stretched.summary, { add: 1, update: 1, skip: 0, error: 1, past: 0 });
+
+  // An update that shortens a meeting frees the time for a new meeting in the same file, whichever row comes first.
+  f.meeting("long", "Test Long Meeting", iso(12, 13), iso(12, 16));
+  const later = usDate(iso(12, 0).slice(0, 10));
+  const shorten = row(3, { title: "Test Long Meeting", date: later, startTime: "13:00", endTime: "14:00" });
+  const fill = row(2, { title: "Test Afternoon Add", date: later, startTime: "15:00", endTime: "15:30" });
+  const freed = await f.run({ dryRun: true, actions: { 3: "update" }, rows: [fill, shorten] });
+  assert.deepEqual(freed.rows.map((item) => [item.action, item.error]), [["add", undefined], ["update", undefined]]);
+  // Without the update the long meeting keeps its window, and the new meeting is refused for it.
+  const kept = await f.run({ dryRun: true, rows: [fill, shorten] });
+  assert.deepEqual(kept.rows.map((item) => [item.action, item.error]), [["error", "Overlaps Test Long Meeting (1:00–4:00 PM)"], ["skip", undefined]]);
+  // When the shortening update is itself refused (its meeting already overlaps a neighbour), the old window stays, so the
+  // new meeting is refused for the window that will exist, not accepted into it.
+  f.meeting("neighbour", "Test Neighbour", iso(12, 12), iso(12, 12, 50));
+  const refused = await f.run({ dryRun: true, actions: { 3: "update" }, rows: [fill, shorten] });
+  assert.deepEqual(refused.rows.map((item) => [item.action, item.error]), [["error", "Overlaps Test Long Meeting (1:00–4:00 PM)"], ["error", "Overlaps Test Neighbour (12:00–12:50 PM)"]]);
+  // A row placed where an accepted update moves its meeting is refused for the meeting's new times.
+  const into = await f.run({ dryRun: true, actions: { 2: "update" }, rows: [
+    row(2, { title: "Test Y", date, startTime: "13:00", endTime: "15:00" }),
+    row(3, { title: "Test Afternoon Add", date, startTime: "15:20", endTime: "16:00" }),
+  ] });
+  assert.deepEqual(into.rows.map((item) => [item.action, item.error]), [["update", undefined], ["error", "Overlaps Test Y (1:00–3:00 PM)"]]);
+});

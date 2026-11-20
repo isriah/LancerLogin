@@ -2,13 +2,14 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { adminApi, kiosk, kioskReady, panelPost, status } from "./virtual-kiosk";
+import { adminApi, kiosk, kioskReady, linkScans, panelPost, refuseScanDeliveries, status } from "./virtual-kiosk";
 
 // Discord code at the Pi kiosk, against the real kiosk service and local Worker: a wrong code is refused, a live code
 // records the scan for the member it belongs to, the same code does not work twice, and the backup method is offered
-// on the code screen only when the kiosk offers it at any time.
+// on the code screen only when the kiosk offers it at any time. Codes are paused while an earlier scan waits to sync.
 // The local stack has no Discord, so the test stands in for /code by writing the code's row to the local D1 database
 // the way issueDiscordKioskCode (apps/api/src/discord-kiosk-codes.ts) does. Test Student L (1012) is scanned only here.
+// Test Students N (1014), O (1015) and P (1016) are scanned only by the paused-codes scenario, once each.
 // This file sorts before pi-member-modes.spec.ts, and puts the kiosk back on fingerprints (Discord codes off) when done.
 test.describe.configure({ mode: "serial" });
 test.beforeEach(async ({ request }) => { await kioskReady(request); });
@@ -147,5 +148,72 @@ test("a Pi kiosk that cannot reach the server shows its backup method with a not
   } finally { await panelPost(request, "/api/cloud", { online: true }); }
   await expect(title(page)).toHaveText("Enter your Discord code", { timeout: 90_000 });
   await expect(page.locator("#identity-value")).toBeHidden();
+  expect((await kiosk(request)).pendingScans).toBe(0);
+});
+
+test("a Pi kiosk pauses Discord codes while an earlier scan waits to sync, and takes them again once the queue is empty", async ({ page, request }) => {
+  // Restarting the service starts from no retry delay, whatever the scenarios above left.
+  const api = await useDiscordCode(request, "always");
+  const meeting = (await api.get("/meetings")).meetings.find((item: { title: string }) => item.title === "Test meeting A");
+  const arrivals = async (memberId: string) => (await api.get(`/attendance?meetingId=${encodeURIComponent(meeting.id)}`)).attendance.filter((row: { externalId: string; checkedInAt?: string | null }) => row.externalId === memberId && row.checkedInAt).length;
+  const rosterId = (await api.get("/admin/members")).members.find((item: { memberId: string }) => item.memberId === "1016").id as string;
+  const backupScan = async (memberId: string, name: string) => {
+    const keypad = page.getByLabel("Member ID keypad");
+    await expect(keypad).toBeVisible();
+    for (const digit of memberId) await keypad.getByRole("button", { name: digit, exact: true }).click();
+    await page.getByRole("button", { name: "Submit member ID" }).click();
+    await expect(title(page)).toHaveText("Is this you?", { timeout: 20_000 });
+    await expect(page.locator("#member-flow-name")).toHaveText(name);
+    await page.getByRole("button", { name: "Confirm" }).click();
+  };
+  const deliveries = async () => (await linkScans(request)).map((item) => `${item.scan} ${!item.forwarded ? "refused by the link" : item.status < 300 ? "taken" : `answered ${item.status}`}`);
+  expect((await kiosk(request)).pendingScans).toBe(0);
+  await openCodeScreen(page, request);
+
+  // The server stays reachable but answers N's backup scan with a refusal the kiosk does not know, so the scan stays queued.
+  await refuseScanDeliveries(request, 1, { clearScans: true });
+  try {
+    await page.getByRole("button", { name: "No code? Use member ID", exact: true }).click();
+    await backupScan("1014", "Test Student N");
+    await expect(page.locator("#display-detail")).toHaveText("Saved for sync | Welcome", { timeout: 20_000 });
+    await expect.poll(deliveries, { timeout: 20_000 }).toEqual(["1014 refused by the link"]);
+    // The server did answer, so the kiosk is online and its start screen is still the code entry.
+    await expect(title(page)).toHaveText("Enter your Discord code", { timeout: 20_000 });
+    await expect(page.locator("#display-notice")).toBeHidden();
+    expect(await kiosk(request)).toMatchObject({ cloudOnline: true, pendingScans: 1 });
+
+    // A live code is not sent ahead of the waiting scan: the start screen becomes the backup method and says why.
+    await issueCode(request, rosterId, memberCode);
+    await enterCode(page, memberCode);
+    await expect(page.locator("#identity-value")).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator("#display-message")).toHaveText("Enter member ID");
+    await expect(page.locator("#display-notice")).toHaveText("Discord codes are paused while earlier scans sync. Sign in with your member ID instead.");
+    await expect(page.getByRole("button", { name: "Back to Discord code", exact: true })).toBeHidden();
+    expect(await kiosk(request)).toMatchObject({ cloudOnline: true, pendingScans: 1 });
+    expect(await deliveries(), "the code never left the kiosk").toEqual(["1014 refused by the link"]);
+    expect([await arrivals("1014"), await arrivals("1016")]).toEqual([0, 0]);
+
+    // O signs in with the backup method meanwhile; that scan joins the queue behind the one from N.
+    await backupScan("1015", "Test Student O");
+    await expect(page.locator("#display-detail")).toHaveText("Saved for sync | Welcome", { timeout: 20_000 });
+  } finally { await refuseScanDeliveries(request, 0); }
+
+  // The kiosk sends the queue again once its retry delay (30 seconds) has passed, at its next check-in with the server
+  // (every minute). Both scans reach the server, and the code entry returns with no note.
+  await expect.poll(async () => (await kiosk(request)).pendingScans, { timeout: 120_000 }).toBe(0);
+  await expect(title(page)).toHaveText("Enter your Discord code", { timeout: 30_000 });
+  await expect(page.locator("#identity-value")).toBeHidden();
+  await expect(page.locator("#display-notice")).toBeHidden();
+  expect([await arrivals("1014"), await arrivals("1015")]).toEqual([1, 1]);
+
+  // Codes are taken again. The first code may have run out its 2 minutes during the wait, so P gets a new one.
+  const laterCode = "408263";
+  await issueCode(request, rosterId, laterCode);
+  await enterCode(page, laterCode);
+  await expect(page.locator("#display-name")).toHaveText("Test Student P", { timeout: 20_000 });
+  await expect(page.locator("#display-message")).toHaveText("Welcome");
+  await expect.poll(() => arrivals("1016"), { timeout: 20_000 }).toBe(1);
+  // The server got the scans in the order they were made: the one from N, the one from O, then the code.
+  await expect.poll(deliveries, { timeout: 20_000 }).toEqual(["1014 refused by the link", "1014 taken", "1015 taken", "code taken"]);
   expect((await kiosk(request)).pendingScans).toBe(0);
 });

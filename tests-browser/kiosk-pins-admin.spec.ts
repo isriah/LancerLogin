@@ -87,15 +87,17 @@ test("a Pi kiosk from before member PINs cannot turn on Require PIN until it is 
   await page.getByLabel("Authentication method for selected kiosk").selectOption("member_id");
   const requirePin = page.getByRole("checkbox", { name: "Require PIN", exact: true });
   await expect(requirePin).toBeDisabled(); await expect(requirePin).not.toBeChecked();
-  await expect(requirePin).toHaveAccessibleDescription("Members enter a 4 to 6 digit PIN after confirming their name. Update this kiosk to turn on Require PIN.");
-  await expect(page.locator("#kiosk-require-pin-blocked")).toBeVisible();
-  // The help line is the same muted small text as the description above it: no new colour or component.
-  const style = (id: string) => page.locator(`#${id}`).evaluate((element) => { const computed = getComputedStyle(element); return [computed.color, computed.fontSize]; });
-  expect(await style("kiosk-require-pin-blocked")).toEqual(await style("kiosk-require-pin-detail"));
+  // The amber notice says what to do instead of pointing at the disabled checkbox, and is the checkbox's reason: there is
+  // no second help line saying the same.
+  const warning = page.locator(".kiosk-authentication-form .warning-callout");
+  await expect(warning).toHaveText("Without a PIN, anyone can sign in someone else. Update this kiosk to use Require PIN, or use a fingerprint kiosk where that matters.");
+  await expect(requirePin).toHaveAccessibleDescription("Members enter a 4 to 6 digit PIN after confirming their name. Without a PIN, anyone can sign in someone else. Update this kiosk to use Require PIN, or use a fingerprint kiosk where that matters.");
+  await expect(page.locator("#kiosk-require-pin-blocked")).toHaveCount(0);
+  await expect(page.getByText("Update this kiosk to turn on Require PIN.")).toHaveCount(0);
   // The same control is "Require PIN for the backup method" when Discord code is chosen.
   await page.getByLabel("Member lookup").selectOption("discord_code");
   const backupPin = page.getByRole("checkbox", { name: "Require PIN for the backup method", exact: true });
-  await expect(backupPin).toBeDisabled(); await expect(page.locator("#kiosk-require-pin-blocked")).toHaveText("Update this kiosk to turn on Require PIN.");
+  await expect(backupPin).toBeDisabled(); await expect(warning).toHaveText("Without a PIN, the backup method lets anyone sign in someone else while the kiosk is offline. Update this kiosk to use Require PIN for the backup method where that matters.");
   await page.getByLabel("Member lookup").selectOption("entry");
   // Every other choice still saves.
   await page.getByRole("button", { name: "Save method" }).click();

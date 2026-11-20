@@ -156,6 +156,11 @@
       "area": "Kiosks and fingerprints",
       "seconds": 1
     },
+    "kiosk-pin-request-indicator.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 30
+    },
     "kiosk-pins-admin.spec.ts": {
       "group": "core",
       "area": "Kiosks and fingerprints",
@@ -175,6 +180,11 @@
       "group": "core",
       "area": "Kiosks and fingerprints",
       "seconds": 64
+    },
+    "logo-fit.spec.ts": {
+      "group": "core",
+      "area": "Dashboard shell and UI foundations",
+      "seconds": 30
     },
     "meeting-calendar-day-open.spec.ts": {
       "group": "core",
@@ -205,6 +215,11 @@
       "group": "core",
       "area": "Meetings and attendance",
       "seconds": 15
+    },
+    "meeting-time-tab.spec.ts": {
+      "group": "core",
+      "area": "Meetings and attendance",
+      "seconds": 12
     },
     "meeting-weight-disclosure.spec.ts": {
       "group": "core",
@@ -260,6 +275,11 @@
       "group": "plugin",
       "area": "Outreach plugin",
       "seconds": 14
+    },
+    "outreach-event-form.spec.ts": {
+      "group": "plugin",
+      "area": "Outreach plugin",
+      "seconds": 10
     },
     "outreach-feedback.spec.ts": {
       "group": "plugin",
@@ -355,6 +375,11 @@
       "group": "core",
       "area": "Kiosks and fingerprints",
       "seconds": 20
+    },
+    "web-kiosk-layout.spec.ts": {
+      "group": "core",
+      "area": "Kiosks and fingerprints",
+      "seconds": 40
     },
     "web-updates.spec.ts": {
       "group": "core",

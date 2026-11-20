@@ -11,7 +11,7 @@ import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
 import { DISCORD_CODE_TTL_MS, hashDiscordKioskCode, normalizeDiscordKioskCode, pruneDiscordKioskCodes, randomDiscordKioskCode } from "../apps/api/src/discord-kiosk-codes.ts";
 import { Statement, applyCoreMigrations, readCoreMigrations } from "./fixtures/d1-database.ts";
-import { BackupDatabase } from "./fixtures/backup-database.ts";
+import { BackupDatabase, restoredSessionCookie } from "./fixtures/backup-database.ts";
 import { omitContestResubmissionFields } from "./fixtures/backup-versions.ts";
 
 const secret = "A".repeat(43);
@@ -48,12 +48,17 @@ async function fixture(context: TestContext) {
       ('test-b','primary','TEST-B','Test Student','B','test-student-b@example.test','${discordB}','2026-01-01');
     INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,created_by,created_at) VALUES ('test-meeting','primary','Test Meeting A','2026-09-30T11:00:00.000Z','2026-09-30T13:00:00.000Z','admin','2026-01-01');`);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: secret, INTEGRATION_KEY: secret, DB: database } as unknown as Env;
-  const cookie = `lancerlogin_session=${await createSessionCodec(secret).issue({ userId: "admin", role: "admin" })}`;
-  const call = (path: string, body?: unknown, token?: string, method?: string) => worker.fetch(new Request(`https://api.example.test${path}`, {
-    method: method ?? (body === undefined ? "GET" : "POST"),
-    headers: { ...(body === undefined ? {} : { "content-type": "application/json", origin: env.ALLOWED_ORIGIN }), ...(token ? { authorization: `Bearer ${token}` } : { cookie }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  }), env);
+  let cookie = `lancerlogin_session=${await createSessionCodec(secret).issue({ userId: "admin", role: "admin" })}`;
+  const call = async (path: string, body?: unknown, token?: string, method?: string) => {
+    const result = await worker.fetch(new Request(`https://api.example.test${path}`, {
+      method: method ?? (body === undefined ? "GET" : "POST"),
+      headers: { ...(body === undefined ? {} : { "content-type": "application/json", origin: env.ALLOWED_ORIGIN }), ...(token ? { authorization: `Bearer ${token}` } : { cookie }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }), env);
+    // An installation restore ends every earlier session and gives the restoring Admin a new cookie, as a browser keeps it.
+    if (path === "/admin/data/restore") cookie = restoredSessionCookie(result) ?? cookie;
+    return result;
+  };
   // A Worker isolate reconciles installed modules on its first request; serve one so query counts cover only the request under test.
   await call("/health");
   const pairWeb = async (name: string) => {
@@ -339,19 +344,40 @@ test("wrong codes sent at the same time pass the throttle no more often than one
   assert.equal(kioskRow(kiosk.kioskId).failures, 5);
   assert.equal(kioskRow(kiosk.kioskId).throttleUntil, new Date(Date.now() + 30_000).toISOString());
 
-  // After the wait, one try is looked up and the rest of a burst wait again, the member's good code among them.
+  // After the wait, one try is looked up and the rest of a burst wait again.
   context.mock.timers.tick(30_000);
-  const good = await newCode(discordA);
-  const second = await burst([...wrongCodes(9, 100), good]);
-  assert.equal(second.filter((result) => result.status !== 429).length, 1, "one try per wait");
+  const second = await burst(wrongCodes(10, 100));
+  assert.equal(second.filter((result) => result.status === 403 && result.code === "code_invalid").length, 1, "one try per wait");
+  assert.equal(second.filter((result) => result.status === 429 && result.code === "code_throttled").length, 9);
   assert.equal(kioskRow(kiosk.kioskId).failures, 6);
-  assert.equal(codeRow("test-a")!.usedAt, null, "a code refused for the wait is not used up"); assert.deepEqual(events(), []);
+  assert.equal(kioskRow(kiosk.kioskId).throttleUntil, new Date(Date.now() + 60_000).toISOString());
 
-  // A burst that starts with the good code records its scan once; the tries behind it start from a clean count.
+  // The member's good code in a burst with nine wrong ones, after the next wait. The try that reaches the database first
+  // is the one looked up, and which that is is not promised: each request authenticates on its own first. So this goes
+  // by what was looked up, not by the order the tries were sent in.
   context.mock.timers.tick(60_000);
+  const good = await newCode(discordA);
   const third = await burst([good, ...wrongCodes(9, 200)]);
-  assert.equal(third.filter((result) => result.status === 202).length, 1);
-  assert.equal(third.filter((result) => result.status === 403).length <= 5, true);
+  const wrongLookedUp = third.slice(1).filter((result) => result.status === 403 && result.code === "code_invalid").length;
+  assert.equal(third.slice(1).every((result) => result.status === 403 || result.status === 429), true, JSON.stringify(third));
+  if (third[0]!.status === 429) {
+    // A wrong code was the one try of this wait. The good code was never looked up, and is not used up.
+    assert.equal(third[0]!.code, "code_throttled");
+    assert.equal(wrongLookedUp, 1, "one try per wait");
+    assert.equal(kioskRow(kiosk.kioskId).failures, 7);
+    assert.equal(kioskRow(kiosk.kioskId).throttleUntil, new Date(Date.now() + 300_000).toISOString());
+    assert.equal(codeRow("test-a")!.usedAt, null, "a code refused for the wait is not used up"); assert.deepEqual(events(), []);
+    // After it, a good code alone is recorded, and the count starts over.
+    context.mock.timers.tick(300_000);
+    assert.equal((await scan(kiosk, { discordCode: await newCode(discordA) })).status, 202);
+    assert.deepEqual([kioskRow(kiosk.kioskId).failures, kioskRow(kiosk.kioskId).throttleUntil], [0, null]);
+  } else {
+    // The good code was looked up first: its scan is recorded once, and the tries behind it start from a clean count.
+    assert.equal(third[0]!.status, 202, JSON.stringify(third));
+    assert.equal(wrongLookedUp <= 5, true, `${wrongLookedUp} wrong codes looked up behind the good one`);
+    assert.equal(kioskRow(kiosk.kioskId).failures, wrongLookedUp);
+    assert.notEqual(codeRow("test-a")!.usedAt, null);
+  }
   assert.equal(events().length, 1);
 });
 

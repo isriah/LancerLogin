@@ -160,3 +160,35 @@ test("a dashboard review signalled by the heartbeat is polled on the next tick i
   clock += 60_000; await sync.tick({});
   assert.equal(batches.length, 2, "the refresh is one poll, not a poll every heartbeat");
 });
+
+test("scans rejected on the kiosk, which the server never recorded, reach the dashboard's Rejected scans list", async t => {
+  // Maintenance has no review page, so the dashboard is the only place these are seen. Two kinds exist only on the
+  // kiosk: a scan the Worker refused (here for want of a PIN) and one the kiosk itself set aside for an unverified clock.
+  const { validateScanReviewUpload } = await import("../apps/api/src/kiosk-scan-reviews.ts");
+  const directory = await mkdtemp(join(tmpdir(), "lancerlogin-review-upload-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const queue = createFileQueue(join(directory, "attendance-queue.json"));
+  await queue.enqueue({ eventId: "synthetic-no-pin", memberId: "1009", occurredAt: "2026-10-30T12:00:00.000Z", pairingId: "synthetic-pairing" });
+  await queue.enqueue({ eventId: "synthetic-no-clock", memberId: "1010", occurredAt: "2026-10-30T12:01:00.000Z", pairingId: "synthetic-pairing", clock: { version: 1, verified: false, bootId: "synthetic-boot", elapsedMs: 5 } });
+  await queue.enqueue({ eventId: "synthetic-fine", memberId: "1011", occurredAt: "2026-10-30T12:02:00.000Z", pairingId: "synthetic-pairing" });
+  const sentToWorker = [];
+  await queue.flush(async event => { sentToWorker.push(event.eventId); return event.eventId === "synthetic-no-pin" ? { accepted: false, rejected: true, status: 400, code: "pin_required", error: "This kiosk requires a PIN." } : { accepted: true }; },
+    { prepare: async event => event.clock?.verified === false ? { rejected: true, code: "clock_unverified" } : { event } });
+  assert.deepEqual(sentToWorker, ["synthetic-no-pin", "synthetic-fine"]);
+  const uploads = [];
+  const sync = createScanReviewSync({ queue, send: async (config, records) => {
+    // The body the kiosk posts to /kiosk/scan-reviews must pass the Worker's own validation.
+    const accepted = validateScanReviewUpload(JSON.parse(JSON.stringify({ records })));
+    uploads.push(...accepted.map(upload => upload.evidence));
+    return { reviews: records.map(record => ({ eventId: record.eventId, reviewStatus: "open" })) };
+  } });
+  await sync.tick({ apiUrl: "https://api.example.test", kioskToken: "synthetic" });
+  assert.deepEqual(uploads.map(record => [record.eventId, record.memberId, record.occurredAt, record.reasonCode, record.httpStatus]), [
+    ["synthetic-no-pin", "1009", "2026-10-30T12:00:00.000Z", "pin_required", 400],
+    ["synthetic-no-clock", "1010", "2026-10-30T12:01:00.000Z", "clock_unverified", null],
+  ]);
+  assert.equal(sync.hasFailures(), false);
+  // Still kept on the kiosk after the upload, and recorded as acknowledged so it is not resent every heartbeat.
+  assert.deepEqual((await queue.rejections()).map(record => record.eventId), ["synthetic-no-pin", "synthetic-no-clock"]);
+  assert.deepEqual([...await queue.cloudReviews()], [["synthetic-no-pin", "open"], ["synthetic-no-clock", "open"]]);
+});

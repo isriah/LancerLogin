@@ -12,13 +12,15 @@ async function parseResponse(response) {
   return body;
 }
 
-export async function pairInstallation({ apiUrl, code, kioskName, fetchImpl = fetch }) {
+// releaseVersion is this kiosk's release, stated when it pairs so the installation knows it before the first heartbeat
+// (Require PIN can be turned on only for a kiosk known to ask for PINs). A Worker from before this ignores the field.
+export async function pairInstallation({ apiUrl, code, kioskName, releaseVersion, fetchImpl = fetch }) {
   const endpoint = normalizeApiUrl(apiUrl);
   if (!String(code).trim() || !String(kioskName).trim()) throw new Error("Pairing code and kiosk name are required");
   const response = await fetchImpl(`${endpoint}/kiosk/pair`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code: String(code).trim().toUpperCase(), kioskName: String(kioskName).trim() }),
+    body: JSON.stringify({ code: String(code).trim().toUpperCase(), kioskName: String(kioskName).trim(), ...(typeof releaseVersion === "string" && releaseVersion.trim() ? { releaseVersion: releaseVersion.trim() } : {}) }),
   });
   const paired = await parseResponse(response);
   if (!paired.kioskId || !paired.kioskToken || !paired.pairingId) throw new Error("The pairing response did not include kiosk credentials");

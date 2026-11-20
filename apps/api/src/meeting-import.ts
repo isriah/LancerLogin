@@ -123,25 +123,52 @@ export async function runMeetingImport(body: unknown, deps: MeetingImportDeps) {
     if (plan.historicalChange && Date.parse(attendanceClosesAt(match.endsAt, settings?.lateScanMinutes ?? 30)) <= now) fail("Changes attendance or audience for a completed meeting. Edit it on its meeting page to review the impact");
   }
 
-  // Attendance windows (start less the early arrival allowance to end plus late scans) may not overlap; an earlier row wins
-  // over a later one. An update moves its meeting's window, so when an update fails here the old window returns and the rows
-  // are checked once more. Existing meetings are only compared with rows, never with each other.
-  const windowOf = (startsAt: string, endsAt: string) => [Date.parse(startsAt) - earlyScanMs, Date.parse(endsAt) + lateScanMs] as const;
+  // Attendance windows (start less the early arrival allowance to end plus late scans) may not overlap. As in the meeting
+  // editor, only a row that adds a meeting or changes a meeting's times is checked: an update that leaves the times alone
+  // keeps the window its meeting already has, even where that window overlaps a neighbour saved before the early arrival
+  // allowance existed. Existing meetings are only compared with rows, never with each other, and an earlier row wins over
+  // a later one.
+  //
+  // Every row is judged against the meetings and rows that will exist once the import is applied. A matched row keeps its
+  // meeting's start, so the old and new windows of an update share their opening and one contains the other. The smaller
+  // one is occupied whether or not the update is applied, so it always counts. An update that shortens its meeting only
+  // frees time when it is applied, and it can only be refused by meetings that are already there; those are settled first,
+  // each refusal returning the old window, until no further one is refused. Adds and updates that lengthen a meeting are
+  // then placed in row order, and refusing one of those changes nothing for any other row.
+  type Window = readonly [number, number];
+  const windowOf = (startsAt: string, endsAt: string): Window => [Date.parse(startsAt) - earlyScanMs, Date.parse(endsAt) + lateScanMs];
+  const hits = (left: Window, right: Window) => left[0] <= right[1] && right[0] <= left[1];
   // "Test Build Session (6:00–8:30 PM)", with the date when it is not the row's own.
   const describe = (title: string, startsAt: string, endsAt: string, rowDate: string) => { const start = clock.civil(Date.parse(startsAt)); const end = clock.civil(Date.parse(endsAt)); return `${title} (${start.date === rowDate ? "" : `${formatCsvDate(start.date)}, `}${formatCsvTimeRange(start.time, end.time)})`; };
+  type Occupied = { window: Window; title: string; startsAt: string; endsAt: string; plan?: Planned };
+  const refuse = (plan: Planned, other: Occupied) => { plan.result.action = "error"; plan.result.error = `Overlaps ${describe(other.title, other.startsAt, other.endsAt, plan.meeting!.date)}`; };
+  const rescheduled = (plan: Planned) => plan.result.action === "update" && (Date.parse(plan.match!.startsAt) !== Date.parse(plan.meeting!.startsAt) || Date.parse(plan.match!.endsAt) !== Date.parse(plan.meeting!.endsAt));
+  const moving = new Map(planned.filter(rescheduled).map((plan) => [plan.match!.id, plan]));
+  const stays = (meeting: Existing): Occupied => ({ window: windowOf(meeting.startsAt, meeting.endsAt), title: meeting.title, startsAt: meeting.startsAt, endsAt: meeting.endsAt });
+  const moves = (plan: Planned): Occupied => ({ window: windowOf(plan.meeting!.startsAt, plan.meeting!.endsAt), title: plan.meeting!.title, startsAt: plan.meeting!.startsAt, endsAt: plan.meeting!.endsAt, plan });
+  const shortens = (plan: Planned) => { const before = windowOf(plan.match!.startsAt, plan.match!.endsAt); const after = windowOf(plan.meeting!.startsAt, plan.meeting!.endsAt); return before[0] <= after[0] && after[1] <= before[1]; };
+  // What each existing meeting occupies: its new window while a shortening update stands, otherwise the window it has now.
+  const slots = existing.map((meeting) => { const plan = moving.get(meeting.id); return { id: meeting.id, item: plan && shortens(plan) ? moves(plan) : stays(meeting) }; });
+  const slotOf = new Map(slots.map((slot) => [slot.id, slot]));
+  const occupant = (window: Window, ownId?: string) => slots.find((slot) => slot.id !== ownId && hits(window, slot.item.window))?.item;
+  const shortening = slots.filter((slot) => slot.item.plan);
   for (let changed = true; changed;) {
     changed = false;
-    const moved = new Set(planned.filter((plan) => plan.result.action === "update").map((plan) => plan.match!.id));
-    const kept = existing.filter((meeting) => !moved.has(meeting.id)).map((meeting) => ({ window: windowOf(meeting.startsAt, meeting.endsAt), meeting }));
-    const accepted: { window: readonly [number, number]; plan: Planned }[] = [];
-    for (const plan of planned) {
-      if (plan.result.action !== "add" && plan.result.action !== "update") continue;
-      const window = windowOf(plan.meeting!.startsAt, plan.meeting!.endsAt); const hits = ([start, close]: readonly [number, number]) => window[0] <= close && start <= window[1];
-      const meeting = kept.find((item) => hits(item.window))?.meeting; const row = accepted.find((item) => hits(item.window))?.plan;
-      if (!meeting && !row) { accepted.push({ window, plan }); continue; }
-      if (plan.result.action === "update") changed = true;
-      plan.result.action = "error"; const date = plan.meeting!.date; plan.result.error = `Overlaps ${meeting ? describe(meeting.title, meeting.startsAt, meeting.endsAt, date) : describe(row!.meeting!.title, row!.meeting!.startsAt, row!.meeting!.endsAt, date)}`;
+    for (const slot of shortening) {
+      const plan = slot.item.plan; const other = plan && occupant(slot.item.window, slot.id);
+      if (!plan || !other) continue;
+      refuse(plan, other); slot.item = stays(plan.match!); changed = true;
     }
+  }
+  const accepted: Occupied[] = [];
+  for (const plan of planned) {
+    const lengthens = plan.result.action === "update" && moving.get(plan.match!.id) === plan && !shortens(plan);
+    if (plan.result.action !== "add" && !lengthens) continue;
+    const item = moves(plan);
+    const other = occupant(item.window, plan.match?.id) ?? accepted.find((candidate) => hits(item.window, candidate.window));
+    if (other) refuse(plan, other);
+    else if (lengthens) slotOf.get(plan.match!.id)!.item = item;
+    else accepted.push(item);
   }
 
   const results = planned.map((plan) => plan.result);

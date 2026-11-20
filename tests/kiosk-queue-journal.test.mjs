@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
@@ -57,9 +57,48 @@ test("a partial final journal line from a power loss is discarded and repaired b
   assert.deepEqual(ids(await restarted.pending()), ["kept-1", "kept-2"]);
   await restarted.enqueue(scan("after-repair"));
   assert.deepEqual(ids(await createFileQueue(f.path).pending()), ["kept-1", "kept-2", "after-repair"]);
-  // A corrupt record in the middle is not a torn tail; the queue fails closed.
-  await writeFile(f.journalPath, `not-json\n${await readFile(f.journalPath, "utf8")}`);
-  await assert.rejects(createFileQueue(f.path).pending());
+});
+
+test("an unreadable journal line is set aside for diagnosis instead of stopping the queue", async t => {
+  const f = await fixture(t);
+  const queue = createFileQueue(f.path);
+  for (const id of ["a", "b", "c"]) await queue.enqueue(scan(id));
+  const [first, second, third] = (await readFile(f.journalPath, "utf8")).split("\n");
+  // Damage in the middle of the journal, such as a bad block: the second scan's line no longer parses.
+  const broken = second.slice(0, 30);
+  await writeFile(f.journalPath, `${first}\n${broken}\n${third}\n`);
+  const messages = [];
+  const restarted = createFileQueue(f.path, { log: message => messages.push(message), now: () => Date.UTC(2026, 9, 2) });
+  assert.deepEqual(ids(await restarted.pending()), ["a", "c"], "readable scans are kept, in order");
+  assert.equal(await restarted.enqueue(scan("d", 3)), true, "the kiosk keeps recording");
+  assert.deepEqual(ids(await createFileQueue(f.path, { log: message => messages.push(message) }).pending()), ["a", "c", "d"]);
+  assert.equal(messages.length, 1, "the damage is reported once, not on every start");
+  assert.match(messages[0], /1 unreadable line\./);
+  const damaged = (await readFile(`${f.journalPath}.damaged`, "utf8")).split("\n").filter(Boolean).map(line => JSON.parse(line));
+  assert.deepEqual(damaged, [{ foundAt: "2026-10-02T00:00:00.000Z", line: broken }]);
+  // A line that parses but is not a journal record is not damage from a failed write; the queue still fails closed.
+  await writeFile(f.journalPath, `{"s":1,"t":"unknown"}\n${await readFile(f.journalPath, "utf8")}`);
+  await assert.rejects(createFileQueue(f.path).pending(), /invalid record/);
+});
+
+test("a scan an older release joined to a torn line is recovered, and nothing is dropped or reordered", async t => {
+  const f = await fixture(t);
+  const queue = createFileQueue(f.path);
+  await queue.enqueue(scan("kept-1")); await queue.enqueue(scan("kept-2"));
+  // Journal as an older release left it: a failed append wrote part of record 3, then the next scan was appended
+  // to the same line and acknowledged, and one more scan followed.
+  const torn = `{"s":3,"t":"e","event":{"eventId":"torn","memberId":"synthetic-to`;
+  const joined = JSON.stringify({ s: 4, t: "e", event: scan("joined", 4) }), later = JSON.stringify({ s: 5, t: "e", event: scan("later", 5) });
+  await writeFile(f.journalPath, `${await readFile(f.journalPath, "utf8")}${torn}${joined}\n${later}\n`);
+  const messages = [];
+  const restarted = createFileQueue(f.path, { log: message => messages.push(message) });
+  assert.deepEqual(await restarted.pending(), [scan("kept-1"), scan("kept-2"), scan("joined", 4), scan("later", 5)]);
+  assert.equal(messages.length, 1);
+  assert.equal(JSON.parse((await readFile(`${f.journalPath}.damaged`, "utf8")).trim()).line, torn + joined, "the whole damaged line is kept");
+  if (process.platform !== "win32") assert.equal((await stat(`${f.journalPath}.damaged`)).mode & 0o777, 0o600);
+  assert.equal(await restarted.enqueue(scan("after", 6)), true);
+  const delivered = await createFileQueue(f.path).flush(async () => ({ accepted: true }));
+  assert.deepEqual(delivered, ["kept-1", "kept-2", "joined", "later", "after"]);
 });
 
 test("a crash between the two compaction writes neither loses nor double counts any scan", async t => {
@@ -182,4 +221,51 @@ test("review sync persists cloud acknowledgements and resends only what changed"
   await sync.tick({});
   assert.deepEqual(sent[3], ["v3"]);
   assert.deepEqual(Object.fromEntries(await createFileQueue(f.path).cloudReviews()), { v0: "reviewed", v1: "reviewed", v2: "reviewed", v3: "open" });
+});
+
+// An append that fails part-way (a full disk, an I/O error) leaves the start of a record with no newline.
+function tearingOpen({ failures = 1, keep = 0.5 } = {}) {
+  let remaining = failures;
+  const openFile = async (target, flags, mode) => {
+    const file = await open(target, flags, mode);
+    if (flags !== "a" || remaining <= 0) return file;
+    return { writeFile: async text => { remaining -= 1; await file.writeFile(text.slice(0, Math.floor(text.length * keep))); throw Object.assign(new Error("Synthetic write failure"), { code: "ENOSPC" }); },
+      sync: () => file.sync(), close: () => file.close() };
+  };
+  return openFile;
+}
+
+test("a failed partial append never joins the next scan to a torn line", async t => {
+  const f = await fixture(t);
+  await createFileQueue(f.path).enqueue(scan("before"));
+  const tearing = createFileQueue(f.path, { openFile: tearingOpen() });
+  await assert.rejects(tearing.enqueue(scan("torn", 1)), /Synthetic write failure/);
+  assert.equal(await tearing.enqueue(scan("after", 2)), true, "the next scan is still saved in the same run");
+  assert.deepEqual(ids(await tearing.pending()), ["before", "after"]);
+  for (const line of (await readFile(f.journalPath, "utf8")).split("\n").filter(Boolean)) JSON.parse(line);
+  const restarted = createFileQueue(f.path);
+  assert.deepEqual(ids(await restarted.pending()), ["before", "after"], "the next start reads every saved scan, in order");
+  assert.equal(await restarted.enqueue(scan("later", 3)), true);
+  assert.deepEqual(ids(await createFileQueue(f.path).pending()), ["before", "after", "later"]);
+});
+
+test("repeated failed appends, the first journal write and batched acknowledgements all recover in the same run", async t => {
+  const f = await fixture(t);
+  // The very first append fails twice, once with nothing written and once with almost everything written.
+  const queue = createFileQueue(f.path, { openFile: tearingOpen({ failures: 2, keep: 0.99 }), ackBatch: 2 });
+  await assert.rejects(queue.enqueue(scan("lost-1")));
+  await assert.rejects(queue.enqueue(scan("lost-2")));
+  for (const id of ["one", "two", "three"]) assert.equal(await queue.enqueue(scan(id)), true);
+  assert.deepEqual(ids(await createFileQueue(f.path).pending()), ["one", "two", "three"]);
+  // A failed acknowledgement write resends those scans later; it never corrupts the journal.
+  const failing = createFileQueue(f.path, { openFile: tearingOpen(), ackBatch: 2 });
+  await assert.rejects(failing.flush(async () => ({ accepted: true })), /Synthetic write failure/);
+  assert.equal(await failing.enqueue(scan("four", 4)), true);
+  const restarted = createFileQueue(f.path);
+  const pending = ids(await restarted.pending());
+  assert.deepEqual(pending.slice(-1), ["four"]);
+  assert.deepEqual(await restarted.flush(async () => ({ duplicate: true })), pending);
+  const totals = await createFileQueue(f.path).diagnostics();
+  assert.deepEqual([totals.pending, totals.saved], [0, 4], "every acknowledged scan is counted once");
+  await assert.rejects(stat(`${f.journalPath}.damaged`), { code: "ENOENT" });
 });

@@ -295,8 +295,14 @@ function proposedSelection(current: SelectionDocument, change: ChangeInput, inst
   catch (error) { if (error instanceof SelectionError) fail(409, "invalid_request", error.message); throw error; }
 }
 
+/**
+ * Why a plugin's metadata is incompatible with this installation. Each is the stable `code` of the refusal when a change
+ * that would newly pin that commit is committed; `multiple_modules` is refused at review too.
+ */
+export type PluginIncompatibility = "module_package_invalid" | "module_metadata_missing" | "multiple_modules" | "module_id_mismatch" | "module_upgrade_requirements_invalid" | "module_contract_unsupported" | "module_core_range_invalid" | "module_core_unsupported";
 export type PluginMetadata = {
-  state: "compatible" | "incompatible" | "unknown"; reason?: string;
+  /** `code` is set exactly when the state is incompatible; `reason` is the plain sentence the dashboard shows. */
+  state: "compatible" | "incompatible" | "unknown"; reason?: string; code?: PluginIncompatibility;
   version?: string; contract?: number; core?: string; tablePrefix?: string; migrations?: string[]; adoptedCoreMigrations?: number;
   /** The plugin's earlier migrations an installation must already have applied before upgrading to this commit. */
   upgradeRequiresMigrations?: string[];
@@ -321,23 +327,23 @@ export async function readPluginMetadata(source: string, commit: string, moduleI
     : response?.status === 403 ? "GitHub refused to let the module repository be inspected. Composition checks it before the change is applied."
     : "GitHub could not be reached to inspect the module repository. Composition checks it before the change is applied." };
   let pkg: { version?: unknown; lancerlogin?: { moduleId?: unknown; contract?: unknown; core?: unknown; tablePrefix?: unknown; migrations?: unknown; adoptedCoreMigrations?: unknown; upgradeRequiresMigrations?: unknown } };
-  try { pkg = JSON.parse((await response.text()).slice(0, 65_536)); } catch { return { state: "incompatible", reason: "The module repository's package.json is not valid JSON." }; }
+  try { pkg = JSON.parse((await response.text()).slice(0, 65_536)); } catch { return { state: "incompatible", code: "module_package_invalid", reason: "The module repository's package.json is not valid JSON." }; }
   const field = pkg?.lancerlogin;
-  if (!field || typeof field !== "object") return { state: "incompatible", reason: "The module repository's package.json has no lancerlogin field." };
+  if (!field || typeof field !== "object") return { state: "incompatible", code: "module_metadata_missing", reason: "The module repository's package.json has no lancerlogin field." };
   const declared = declaredModuleIds(field);
-  if (declared) return { state: "incompatible", reason: multipleModulesMessage(declared), multipleModules: declared };
+  if (declared) return { state: "incompatible", code: "multiple_modules", reason: multipleModulesMessage(declared), multipleModules: declared };
   const metadata: PluginMetadata = { state: "compatible", version: typeof pkg.version === "string" ? pkg.version.slice(0, 40) : undefined, contract: typeof field.contract === "number" ? field.contract : undefined, core: typeof field.core === "string" ? field.core.slice(0, 200) : undefined, tablePrefix: typeof field.tablePrefix === "string" ? field.tablePrefix.slice(0, 40) : undefined, adoptedCoreMigrations: Array.isArray(field.adoptedCoreMigrations) ? field.adoptedCoreMigrations.length : undefined };
-  if (field.moduleId !== moduleId) return { ...metadata, state: "incompatible", reason: `The repository declares module ID ${JSON.stringify(field.moduleId)}, not ${moduleId}.` };
+  if (field.moduleId !== moduleId) return { ...metadata, state: "incompatible", code: "module_id_mismatch", reason: `The repository declares module ID ${JSON.stringify(field.moduleId)}, not ${moduleId}.` };
   const required = field.upgradeRequiresMigrations;
   if (required !== undefined) {
-    if (!Array.isArray(required) || !required.length || required.length > 50 || required.some((name) => typeof name !== "string" || !/^\d{4}_[a-z0-9][a-z0-9_]*\.sql$/.test(name))) return { ...metadata, state: "incompatible", reason: "The module's upgradeRequiresMigrations is not a list of its own migration file names." };
+    if (!Array.isArray(required) || !required.length || required.length > 50 || required.some((name) => typeof name !== "string" || !/^\d{4}_[a-z0-9][a-z0-9_]*\.sql$/.test(name))) return { ...metadata, state: "incompatible", code: "module_upgrade_requirements_invalid", reason: "The module's upgradeRequiresMigrations is not a list of its own migration file names." };
     metadata.upgradeRequiresMigrations = required as string[];
   }
-  if (typeof field.contract !== "number" || !supportedModuleContractVersions.includes(field.contract)) return { ...metadata, state: "incompatible", reason: `The module needs module contract ${String(field.contract)}; this LancerLogin supports ${supportedModuleContractVersions.join(", ")}.` };
+  if (typeof field.contract !== "number" || !supportedModuleContractVersions.includes(field.contract)) return { ...metadata, state: "incompatible", code: "module_contract_unsupported", reason: `The module needs module contract ${String(field.contract)}; this LancerLogin supports ${supportedModuleContractVersions.join(", ")}.` };
   if (!coreVersion || !parseReleaseVersion(coreVersion)) { metadata.state = "unknown"; metadata.reason = "This installation is not running an official release, so its Core range cannot be checked."; }
   else {
-    try { if (!satisfiesCoreRange(coreVersion, field.core)) return { ...metadata, state: "incompatible", reason: `The module supports LancerLogin ${String(field.core)}; this installation runs ${coreVersion}.` }; }
-    catch (error) { if (error instanceof SelectionError) return { ...metadata, state: "incompatible", reason: error.message }; throw error; }
+    try { if (!satisfiesCoreRange(coreVersion, field.core)) return { ...metadata, state: "incompatible", code: "module_core_unsupported", reason: `The module supports LancerLogin ${String(field.core)}; this installation runs ${coreVersion}.` }; }
+    catch (error) { if (error instanceof SelectionError) return { ...metadata, state: "incompatible", code: "module_core_range_invalid", reason: error.message }; throw error; }
   }
   if (typeof field.migrations === "string" && /^\.\/[A-Za-z0-9_./-]{1,100}$/.test(field.migrations) && !field.migrations.split("/").includes("..")) {
     const listing = await get(field.migrations.slice(2).replace(/\/$/, ""), "application/vnd.github+json");
@@ -350,6 +356,15 @@ export async function readPluginMetadata(source: string, commit: string, moduleI
 /** A plugin supplies exactly one module: a repository that declares several is refused outright. */
 function refuseMultipleModules(metadata: PluginMetadata | undefined): void {
   if (metadata?.multipleModules) fail(422, "multiple_modules", metadata.reason ?? multipleModulesMessage(metadata.multipleModules));
+}
+
+/**
+ * The Worker, not the dashboard, decides that an incompatible commit cannot be pinned: the refusal carries the reason the
+ * review showed and the stable code of that reason. Metadata that could not be read or checked here (state unknown) is
+ * not refused; composition checks it before the change is applied.
+ */
+function refuseIncompatible(metadata: PluginMetadata): void {
+  if (metadata.state === "incompatible") fail(409, metadata.code ?? "module_incompatible", metadata.reason ?? "The module is incompatible with this installation.");
 }
 
 /**
@@ -404,6 +419,12 @@ export async function commitPluginChange(env: PluginSelectionEnv, principal: Pri
   if (change.action !== "remove") {
     const metadata = await readPluginMetadata(change.source!, change.commit!, change.id, env.RELEASE_VERSION, lookupToken(env));
     refuseMultipleModules(metadata);
+    // Only a change that newly pins a commit is refused for incompatibility. Keeping the commit the selection already
+    // pins, or pinning the commit this build already runs (a release track change), stays possible, so an Admin can
+    // still manage a module that a later LancerLogin no longer supports. Removal never reads the metadata.
+    const running = installed[change.id];
+    const alreadyPinned = previous?.source === change.source && previous?.commit === change.commit || running?.source === change.source && running?.commit === change.commit;
+    if (!alreadyPinned) refuseIncompatible(metadata);
     await refuseSkippedUpgrade(db, change.id, metadata);
   }
   const short = (sha?: string) => sha ? sha.slice(0, 12) : "";

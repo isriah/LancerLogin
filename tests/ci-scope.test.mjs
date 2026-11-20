@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { changedFiles, classifyChange, docsSiteTest, scopeOutputs, selectDocsTests } from "../scripts/ci-scope.mjs";
@@ -127,4 +127,93 @@ test("Verify keeps its required jobs and runs only documentation checks for a do
   // Complete verification (dispatch) never consults the documentation scope.
   assert.match(verify, /docs=false\n\s+if \[\[ "\$full" != "true" \]\]; then/);
   assert.match(verify, /"\$GITHUB_EVENT_NAME" == "workflow_dispatch" \]\]; then\n\s+full=true/);
+});
+
+// The private workflow that runs the virtual kiosk scenarios on pull requests that touch kiosk-facing code
+// (.github/workflows/virtual-kiosk-pr.yml). It is excluded from public exports, so this checks it only where it exists.
+const virtualKioskWorkflow = ".github/workflows/virtual-kiosk-pr.yml";
+const virtualKioskPaths = [
+  "apps/kiosk/**",
+  "apps/dashboard/src/web-kiosk/**",
+  "apps/dashboard/src/kiosks-page.tsx",
+  "apps/api/src/index.ts",
+  "apps/api/src/attendance-lifecycle.ts",
+  "apps/api/src/discord-kiosk-codes.ts",
+  "apps/api/src/fingerprint-*.ts",
+  "apps/api/src/kiosk-*.ts",
+  "apps/api/src/member-pins.ts",
+  "apps/api/src/pairing-service.mjs",
+  "apps/api/src/scan-*.ts",
+  "packages/shared/src/member-lookup.mjs",
+  "packages/shared/src/pairing-code.mjs",
+  "packages/shared/src/password-key.mjs",
+  "packages/shared/src/release-policy.mjs",
+  "scripts/virtual-kiosk.mjs",
+  "scripts/virtual-kiosk/**",
+  "tests-virtual-kiosk/**",
+  "playwright.virtual-kiosk.config.ts",
+  "package-lock.json",
+  virtualKioskWorkflow,
+];
+// GitHub's path filter for the patterns used here: * stays inside one folder, ** crosses folders.
+const pathFilter = (pattern) => new RegExp(`^${pattern.split("**").map((part) => part.split("*").map((text) => text.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*")).join(".*")}$`);
+const startsVirtualKiosk = (files, patterns = virtualKioskPaths) => files.some((file) => patterns.some((pattern) => pathFilter(pattern).test(file)));
+
+test("the virtual kiosk scenarios run on private pull requests that touch kiosk-facing paths, and only those", { skip: !existsSync(virtualKioskWorkflow) && "public export" }, () => {
+  const workflow = readFileSync(virtualKioskWorkflow, "utf8").replace(/\r\n/g, "\n");
+  // Pull requests filtered by path, plus a manual run. No pushes, so a merge does not run it again.
+  const triggers = workflow.match(/\non:\n([\s\S]*?)\npermissions:\n/)?.[1];
+  assert.ok(triggers);
+  assert.deepEqual(triggers.split("\n").filter((line) => /^  \S/.test(line)), ["  pull_request:", "  workflow_dispatch:"]);
+  const paths = triggers.match(/^  pull_request:\n    paths:\n((?:      - .+\n?)+)/m)?.[1].trim().split("\n").map((line) => line.replace(/^\s*- /, ""));
+  assert.deepEqual(paths, virtualKioskPaths);
+  assert.doesNotMatch(triggers, /paths-ignore|branches/);
+
+  // Every pattern still names something in the repository, so a renamed file cannot quietly leave the filter.
+  const tracked = execFileSync("git", ["ls-files"], { encoding: "utf8" }).split("\n").filter(Boolean);
+  for (const pattern of paths) assert.ok(tracked.some((file) => pathFilter(pattern).test(file)), `${pattern} matches no tracked file`);
+  // Every file the harness and the scenarios import from the applications is in the filter.
+  const sources = tracked.filter((file) => /^(?:scripts\/virtual-kiosk(?:\.mjs|\/.+\.mjs)|tests-virtual-kiosk\/.+\.ts)$/.test(file));
+  assert.ok(sources.length > 5);
+  for (const source of sources) {
+    for (const [, specifier] of readFileSync(source, "utf8").matchAll(/from "((?:\.\.\/)+(?:apps|packages)\/[^"]+)"/g)) {
+      const imported = join(dirname(source), specifier).replaceAll("\\", "/");
+      assert.ok(startsVirtualKiosk([imported], paths), `${source} imports ${imported}, which is not in the path filter`);
+    }
+  }
+
+  for (const files of [
+    ["apps/kiosk/src/service.mjs"], ["apps/kiosk/systemd/lancerlogin-kiosk.service"], ["apps/dashboard/src/web-kiosk/member-pin.ts"], ["apps/dashboard/src/kiosks-page.tsx"],
+    ["apps/api/src/index.ts"], ["apps/api/src/member-pins.ts"], ["apps/api/src/discord-kiosk-codes.ts"], ["apps/api/src/scan-refusal.ts"], ["apps/api/src/kiosk-poll.ts"],
+    ["scripts/virtual-kiosk.mjs"], ["scripts/virtual-kiosk/fakes.mjs"], ["tests-virtual-kiosk/pi-discord-code.spec.ts"], ["playwright.virtual-kiosk.config.ts"],
+    ["docs/EXAMPLE-GUIDE.md", "apps/kiosk/package.json"], [virtualKioskWorkflow],
+  ]) assert.equal(startsVirtualKiosk(files, paths), true, files.join());
+  for (const files of [
+    ["apps/dashboard/src/reports-page.tsx"], ["apps/dashboard/src/styles.css"], ["apps/api/src/report-builder.ts"], ["apps/api/src/web-updates.ts"], ["apps/api/src/kiosk/nested.ts"],
+    ["docs/EXAMPLE-GUIDE.md"], ["private/WORKFLOW.md"], ["tests/kiosk-discord-code.test.mjs"], ["tests-browser/kiosk-pins-admin.spec.ts"], ["scripts/check-quick.mjs"],
+    [".github/workflows/quick-check.yml"], [".github/workflows/ci.yml"], ["playwright.config.ts"], ["package.json"],
+  ]) assert.equal(startsVirtualKiosk(files, paths), false, files.join());
+
+  // One private-only job, cancelled when the pull request is pushed again.
+  const jobs = workflow.split(/^jobs:\n/m)[1];
+  assert.deepEqual(jobs.match(/^  [a-z-]+:$/gm), ["  virtual-kiosk-pr:"]);
+  assert.match(jobs, /^    if: github\.event\.repository\.private && github\.repository == '[\w.-]+\/[\w.-]+'$/m);
+  assert.match(workflow, /concurrency:\n  group: virtual-kiosk-pr-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}\n  cancel-in-progress: true\n/);
+  assert.match(workflow, /^permissions:\n  contents: read$/m);
+  assert.doesNotMatch(workflow, /secrets\./);
+
+  // It runs the scenarios the way Verify's release gate does: the same steps and the same time limits.
+  const ci = readFileSync(".github/workflows/ci.yml", "utf8").replace(/\r\n/g, "\n");
+  const gate = ci.match(/\n  virtual-kiosk-browser:\n([\s\S]*?)\n  [a-z-]+:\n/)?.[1];
+  assert.ok(gate);
+  const fromRunner = (job) => job.slice(job.indexOf("    runs-on:"));
+  assert.match(fromRunner(gate), /timeout-minutes: 40\n    steps:\n[\s\S]*timeout-minutes: 25\n        run: npm run test:kiosk-virtual\n/);
+  assert.equal(fromRunner(jobs).trimEnd(), fromRunner(gate).trimEnd());
+});
+
+test("Quick check and Verify do not run the virtual kiosk scenarios on pull requests themselves", () => {
+  // Verify runs them only when dispatched, as one of the jobs of the release gate.
+  const ci = readFileSync(".github/workflows/ci.yml", "utf8").replace(/\r\n/g, "\n");
+  assert.match(ci, /\n  virtual-kiosk-browser:\n(?:    #.*\n)*    name: Virtual kiosk browser\n    if: github\.event_name == 'workflow_dispatch' && /);
+  if (existsSync(".github/workflows/quick-check.yml")) assert.doesNotMatch(readFileSync(".github/workflows/quick-check.yml", "utf8"), /kiosk-virtual|playwright/);
 });

@@ -95,12 +95,22 @@ export function createSessionCodec(secret: string, now = () => Date.now()) {
   const keyBytes = decodeBase64Url(secret);
   if (keyBytes.length < 32) throw new Error("SESSION_KEY must contain at least 32 random bytes");
   const importKey = () => crypto.subtle.importKey("raw", asArrayBuffer(keyBytes), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  const sign = async (principal: SessionPrincipal): Promise<string> => {
+    const payload = encodeBase64Url(encoder.encode(JSON.stringify(principal)));
+    const signature = new Uint8Array(await crypto.subtle.sign("HMAC", await importKey(), encoder.encode(payload)));
+    return `${payload}.${encodeBase64Url(signature)}`;
+  };
   return {
     async issue(principal: Omit<SessionPrincipal, "expiresAt" | "authenticatedAt">, ttlMs = 8 * 60 * 60_000): Promise<string> {
       const issuedAt = now();
-      const payload = encodeBase64Url(encoder.encode(JSON.stringify({ ...principal, expiresAt: issuedAt + ttlMs, authenticatedAt: issuedAt })));
-      const signature = new Uint8Array(await crypto.subtle.sign("HMAC", await importKey(), encoder.encode(payload)));
-      return `${payload}.${encodeBase64Url(signature)}`;
+      return sign({ ...principal, expiresAt: issuedAt + ttlMs, authenticatedAt: issuedAt });
+    },
+    /**
+     * The same session under another role or epoch: its expiry and sign-in time are kept, so reissuing never extends a
+     * session or counts as proving identity again. Used when the server itself moves a signed-in user's epoch.
+     */
+    async reissue(principal: SessionPrincipal): Promise<string> {
+      return sign({ userId: principal.userId, role: principal.role, expiresAt: principal.expiresAt, ...(principal.authenticatedAt === undefined ? {} : { authenticatedAt: principal.authenticatedAt }), ...(principal.epoch === undefined ? {} : { epoch: principal.epoch }) });
     },
     async verify(token: string): Promise<SessionPrincipal | undefined> {
       const [payload, signature] = token.split(".");

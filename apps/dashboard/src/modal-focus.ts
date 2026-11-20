@@ -36,6 +36,19 @@ export function useModalFocus(dialog: RefObject<HTMLElement | null>, active: boo
   }, [active, dialog]);
 }
 
+/**
+ * Moves focus to a message that the same state update is about to render, such as the error from a failed save.
+ * Call the returned function next to the state change, with the message’s id or a function that returns its element.
+ * Focus moves once React has rendered that update. A requestAnimationFrame callback can run first when the update
+ * follows an await, find no element, and leave focus where it was.
+ */
+export function useFocusAfterRender() {
+  const [request, setRequest] = useState<{ find: () => HTMLElement | null }>();
+  // An effect, not a layout effect: a dialog closed by the same update returns focus in its effect cleanup, which runs first.
+  useEffect(() => { request?.find()?.focus(); }, [request]);
+  return useRef((target: string | (() => HTMLElement | null)) => setRequest({ find: typeof target === "string" ? () => document.getElementById(target) : target })).current;
+}
+
 /** Focuses an error message after React commits it. A requestAnimationFrame callback can run before the message renders. */
 export function useErrorFocus(id: string) {
   const [request, setRequest] = useState(0);

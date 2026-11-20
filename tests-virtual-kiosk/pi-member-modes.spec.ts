@@ -120,6 +120,7 @@ test("Require PIN: a member without a PIN asks for approval, an Operator approve
   await expect(title(page)).toHaveText("You don't have a PIN yet", { timeout: 20_000 });
   await page.getByRole("button", { name: "Ask for approval" }).click();
   await expect(title(page)).toHaveText("Waiting for approval", { timeout: 20_000 });
+  await expect(page.locator("#member-flow-detail")).toHaveText("Ask an Operator or Admin to approve it in the dashboard.");
   await expect(page.locator("#member-flow-note")).toContainText("maintenance screen");
 
   // The request appears on Manage kiosk; the Operator approves it there.

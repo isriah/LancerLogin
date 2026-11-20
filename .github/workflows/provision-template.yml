@@ -13,12 +13,13 @@ on:
           - resume
           - upgrade
       release:
-        description: Choose the release to install
+        description: Choose the release to install (latest beta is for upgrade only, on the Beta update track)
         required: true
         default: latest stable
         type: choice
         options:
           - latest stable
+          - latest beta
       installation_slug:
         description: Lowercase installation slug, for example example-club
         required: true
@@ -77,6 +78,15 @@ jobs:
             echo "::error title=operation_invalid::Choose create, resume, or upgrade as the operation, then run this workflow again."
             exit 1
           fi
+          if [ "$RELEASE_SELECTION" != "latest stable" ] && [ "$RELEASE_SELECTION" != "latest beta" ]; then
+            echo "::error title=release_selection_invalid::Choose latest stable or latest beta as the release, then run this workflow again."
+            exit 1
+          fi
+          # A new installation always starts on the Stable update track, so only an existing one can take a beta.
+          if [ "$RELEASE_SELECTION" = "latest beta" ] && [ "$INPUT_OPERATION" != "upgrade" ]; then
+            echo "::error title=beta_requires_upgrade::The release latest beta is available only with the operation upgrade, and $INPUT_OPERATION always installs the latest stable release. Run this workflow again with the release latest stable. To move an existing installation to a beta, choose the Beta track in Settings > Updates > Update track first, then run the operation upgrade with the release latest beta."
+            exit 1
+          fi
           if ! printf '%s' "$INSTALLATION_SLUG" | grep -Eq '^[a-z][a-z0-9-]{2,40}$'; then
             echo "::error title=installation_slug_invalid::The installation slug must start with a lowercase letter and contain 3-41 lowercase letters, digits, or hyphens, for example example-club: run this workflow again with a valid slug."
             exit 1
@@ -102,6 +112,10 @@ jobs:
             echo "::error title=setup_code_too_short::LANCERLOGIN_SETUP_CODE must be at least 16 characters: replace the production environment secret with a longer value, or remove it when no first Admin is still to be created."
             exit 1
           fi
+      - name: Set up Node.js for release resolution, which runs before any release is checked out
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.22.1
       - name: Resolve the public release
         id: release
         shell: bash
@@ -109,22 +123,103 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$RELEASE_SELECTION" != "latest stable" ]; then
-            echo "::error title=release_selection_invalid::Choose latest stable as the release, then run this workflow again."
+          # Written here, not in a script, because it runs before any release is checked out and this workflow can install
+          # a release older than it. It mirrors packages/shared/src/release-policy.mjs: version order, and which releases
+          # the Beta track accepts (the same rule the dashboard updater applies).
+          cat > "$RUNNER_TEMP/release-policy.cjs" <<'EOF'
+          "use strict";
+          const fs = require("node:fs");
+          const pattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?$/;
+          // [major, minor, patch, 0 for a beta or 1 for a stable release, beta number]: a stable X.Y.Z follows every X.Y.Z-beta.N.
+          function parse(value) {
+            if (typeof value !== "string" || value.length > 80) return undefined;
+            const match = pattern.exec(value.replace(/^v/, ""));
+            if (!match || !match.slice(1).every((part) => part === undefined || Number.isSafeInteger(Number(part)))) return undefined;
+            return [BigInt(match[1]), BigInt(match[2]), BigInt(match[3]), match[4] === undefined ? 1n : 0n, BigInt(match[4] ?? 0)];
+          }
+          function compare(left, right) {
+            const a = parse(left); const b = parse(right);
+            if (!a || !b) return undefined;
+            for (let index = 0; index < a.length; index++) if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
+            return 0;
+          }
+          // A complete official release: published, a canonical v tag whose prerelease flag matches it, every kiosk asset,
+          // and for a beta an immutable release.
+          function official(release) {
+            if (!release || typeof release !== "object" || release.draft !== false || !Array.isArray(release.assets)) return false;
+            const tag = release.tag_name;
+            const version = typeof tag === "string" && tag.startsWith("v") ? parse(tag) : undefined;
+            if (!version) return false;
+            if (version[3] === 0n ? release.prerelease !== true || release.immutable !== true : release.prerelease !== false) return false;
+            const names = new Set(release.assets.map((asset) => asset?.name));
+            const archives = ["arm64", "armv7"].map((arch) => `lancerlogin-kiosk-${tag.slice(1)}-linux-${arch}.tar.gz`);
+            return ["install-lancerlogin.sh", ...archives].every((name) => names.has(name) && names.has(`${name}.sha256`));
+          }
+          // The highest version wins, never the most recent publication. A full last page cannot prove a newest release.
+          function newest(pages) {
+            if (!Array.isArray(pages) || pages.length === 0 || pages.some((page) => !Array.isArray(page)) || pages[pages.length - 1].length >= 100) return undefined;
+            return pages.flat().filter(official).map((release) => release.tag_name).sort((a, b) => compare(b, a))[0];
+          }
+          // The release a Worker reports on /health, when it is an official version.
+          function installed(health) {
+            const version = health && typeof health === "object" ? health.releaseVersion : undefined;
+            return typeof version === "string" && !version.startsWith("v") && parse(version) ? version : undefined;
+          }
+          // The same release as Cloudflare's Worker settings record it: the one plain-text RELEASE_VERSION variable.
+          function configured(settings) {
+            const bindings = settings && settings.success === true && Array.isArray(settings.result?.bindings) ? settings.result.bindings.filter((binding) => binding?.name === "RELEASE_VERSION") : [];
+            return bindings.length === 1 && bindings[0].type === "plain_text" ? installed({ releaseVersion: bindings[0].text }) : undefined;
+          }
+          module.exports = { parse, compare, official, newest, installed, configured };
+          if (require.main === module) {
+            const [mode, first, second] = process.argv.slice(2);
+            let result;
+            try {
+              if (mode === "newest") result = newest(fs.readdirSync(first).filter((name) => /^page-[1-5]\.json$/.test(name)).sort().map((name) => JSON.parse(fs.readFileSync(`${first}/${name}`, "utf8"))));
+              else if (mode === "compare") result = compare(first, second);
+              else if (mode === "installed") result = installed(JSON.parse(fs.readFileSync(first, "utf8")));
+              else if (mode === "configured") result = configured(JSON.parse(fs.readFileSync(first, "utf8")));
+            } catch { result = undefined; }
+            if (result === undefined) process.exit(1);
+            process.stdout.write(String(result));
+          }
+          EOF
+          if [ "$RELEASE_SELECTION" = "latest beta" ]; then
+            # What the Beta track offers: the highest complete official release, beta or stable. When the newest release
+            # is a stable one, that is the release installed.
+            pages="$RUNNER_TEMP/release-pages"
+            rm -rf "$pages"
+            mkdir -p "$pages"
+            for page in 1 2 3 4 5; do
+              if ! gh api "repos/isriah/LancerLogin/releases?per_page=100&page=$page" > "$pages/page-$page.json"; then
+                echo "::error title=release_invalid::GitHub did not list the LancerLogin releases: run this workflow again later."
+                exit 1
+              fi
+              if [ "$(node -e 'const page = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.stdout.write(Array.isArray(page) && page.length >= 100 ? "full" : "last")' "$pages/page-$page.json")" = "last" ]; then break; fi
+            done
+            if ! tag=$(node "$RUNNER_TEMP/release-policy.cjs" newest "$pages"); then
+              echo "::error title=release_invalid::A complete official LancerLogin release could not be confirmed for the Beta track: run this workflow again later."
+              exit 1
+            fi
+          elif [ "$RELEASE_SELECTION" = "latest stable" ]; then
+            tag=$(gh api repos/isriah/LancerLogin/releases/latest --jq .tag_name)
+            if ! printf '%s' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+              echo "::error title=release_invalid::The latest stable release is not a valid LancerLogin version: run this workflow again later."
+              exit 1
+            fi
+            gh api "repos/isriah/LancerLogin/releases/tags/$tag" --jq 'select(.draft == false and .prerelease == false) | .tag_name' | grep -Fx "$tag"
+          else
+            echo "::error title=release_selection_invalid::Choose latest stable or latest beta as the release, then run this workflow again."
             exit 1
           fi
-          tag=$(gh api repos/isriah/LancerLogin/releases/latest --jq .tag_name)
-          if ! printf '%s' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
-            echo "::error title=release_invalid::The latest stable release is not a valid LancerLogin version: run this workflow again later."
-            exit 1
-          fi
-          gh api "repos/isriah/LancerLogin/releases/tags/$tag" --jq 'select(.draft == false and .prerelease == false) | .tag_name' | grep -Fx "$tag"
           sha=$(gh api "repos/isriah/LancerLogin/commits/$tag" --jq .sha)
           printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'
+          case "$tag" in *-beta.*) kind="a beta release" ;; *) kind="a stable release" ;; esac
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
-          echo "Using LancerLogin $tag."
+          echo "RELEASE_KIND=$kind" >> "$GITHUB_ENV"
+          echo "Using LancerLogin $tag, $kind."
       - name: Check out the selected public release
         uses: actions/checkout@v7
         with:
@@ -154,8 +249,11 @@ jobs:
           # Optional: separate Contents-write token for dashboard plugin management. See docs/MODULE-PLUGINS.md for its scope.
           LANCERLOGIN_MODULE_SELECTION_TOKEN: ${{ secrets.LANCERLOGIN_MODULE_SELECTION_TOKEN }}
         run: |
-          # Dashboard updates are optional. Without the dispatch token the installation is created without them, and the run
-          # summary explains how to set them up later with Refresh web update credential.
+          # Dashboard updates are optional, and so are both tokens. A token GitHub rejects, or one this release does not
+          # accept, never stops resume or upgrade: the run warns and continues as if the token were not set, and nothing
+          # is uploaded, so the Worker keeps the credential it already has and Settings > Updates > Setup status reports
+          # that one as expired or rejected. Only create stops, before anything exists, so a mistyped token is noticed
+          # at once. Written here, not in a script, because this workflow can install a release older than this rule.
           if [ -z "$LANCERLOGIN_WEB_UPDATE_TOKEN" ]; then
             echo "state=missing" >> "$GITHUB_OUTPUT"
             if [ -n "$LANCERLOGIN_MODULE_SELECTION_TOKEN" ]; then
@@ -164,42 +262,117 @@ jobs:
             echo "::warning title=dispatch_credential_not_configured::LANCERLOGIN_WEB_UPDATE_TOKEN is not set, so dashboard updates are not set up yet. The installation continues without them; the run summary lists the steps to set them up."
             exit 0
           fi
+          selection_token=$LANCERLOGIN_MODULE_SELECTION_TOKEN
+          selection_state=missing
+          if [ -n "$selection_token" ]; then selection_state=configured; fi
+          delete_instead="To keep updating with this workflow instead, delete the secret LANCERLOGIN_WEB_UPDATE_TOKEN, which also stops this warning."
+          off_until_fixed="One-click updates from the dashboard are off until that is fixed and Refresh web update credential has run. $delete_instead"
+          kept="It was not installed, and the dashboard keeps the token it already has. Run Refresh web update credential later to install it."
+          create_fix="fix it, or delete the secret LANCERLOGIN_WEB_UPDATE_TOKEN to install without one-click updates, then run create again."
+          create_later="run create again later, or delete the secret LANCERLOGIN_WEB_UPDATE_TOKEN first to install without one-click updates."
+          # skip_token <code> <what is wrong> <what that means and the fix, for resume and upgrade> <the fix, for create>
+          skip_token() {
+            if [ "$INPUT_OPERATION" = "create" ]; then
+              echo "::error title=$1::$2 Create stopped before any change. The token is optional: $4"
+              exit 1
+            fi
+            echo "::warning title=$1::$2 The token is optional, so this $INPUT_OPERATION continues as if it were not set. $3"
+            {
+              echo "state=skipped"
+              echo "reason=$1"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          # skip_selection <code> <what is wrong>: the dashboard update token is still checked and installed.
+          skip_selection() {
+            if [ "$INPUT_OPERATION" = "create" ]; then
+              echo "::error title=$1::$2 Create stopped before any change. The token is optional: fix it, or delete the secret LANCERLOGIN_MODULE_SELECTION_TOKEN to install without dashboard plugin management, then run create again."
+              exit 1
+            fi
+            echo "::warning title=$1::$2 The token is optional, so this $INPUT_OPERATION continues as if it were not set, and the dashboard keeps the plugin management token it already has. To fix it, replace the secret LANCERLOGIN_MODULE_SELECTION_TOKEN with a token that has Contents: Read and write on only this repository, then run Refresh web update credential. To stop this warning instead, delete the secret."
+            selection_token=""
+            selection_state=skipped
+            module_selection_expires_at=""
+          }
           # GitHub reports an expiring token's expiry in a response header, so no expiry is entered by hand. Releases before
           # v2.0.0-beta.17 read it from WEB_UPDATE_TOKEN_EXPIRES_AT and MODULE_SELECTION_TOKEN_EXPIRES_AT, so it is passed on.
+          # Sets expiry, and problem to rejected, unavailable or unreadable when the token cannot be used as it is.
           read_expiry() {
-            local headers="$RUNNER_TEMP/github-token-headers.txt" status value
+            local headers="$RUNNER_TEMP/github-token-headers.txt" value
             expiry=""
-            status=$(curl --silent --show-error --proto '=https' --tlsv1.2 --output /dev/null --dump-header "$headers" --write-out '%{http_code}' \
+            problem=""
+            http_status=$(curl --silent --show-error --proto '=https' --tlsv1.2 --output /dev/null --dump-header "$headers" --write-out '%{http_code}' \
               --header "Authorization: Bearer $1" --header "Accept: application/vnd.github+json" --header "X-GitHub-Api-Version: 2026-03-10" \
-              "https://api.github.com/repos/$LANCERLOGIN_UPDATE_REPOSITORY")
-            value=$(grep -i '^github-authentication-token-expiration:' "$headers" | tail -n 1 | cut -d: -f2- | tr -d '\r' | sed 's/^ *//' || true)
+              "https://api.github.com/repos/$LANCERLOGIN_UPDATE_REPOSITORY") || http_status=000
+            value=$(grep -i '^github-authentication-token-expiration:' "$headers" 2>/dev/null | tail -n 1 | cut -d: -f2- | tr -d '\r' | sed 's/^ *//' || true)
             rm -f "$headers"
-            if [ "$status" = "401" ]; then
-              echo "::error title=$2::$3"
-              exit 1
-            fi
-            if [ -n "$value" ] && ! expiry=$(date -u -d "$value" +%Y-%m-%dT%H:%M:%S.000Z); then
-              echo "::error title=token_expiration_unreadable::GitHub reported a token expiry in an unexpected format: run this workflow again later."
-              exit 1
-            fi
+            case "$http_status" in
+              401) problem=rejected ;;
+              000|5??) problem=unavailable ;;
+              *)
+                if [ -n "$value" ] && ! expiry=$(date -u -d "$value" +%Y-%m-%dT%H:%M:%S.000Z); then
+                  expiry=""
+                  problem=unreadable
+                fi ;;
+            esac
           }
-          read_expiry "$LANCERLOGIN_WEB_UPDATE_TOKEN" dispatch_credential_rejected "The GitHub token for dashboard updates has expired or been revoked: create a new fine-grained token, replace LANCERLOGIN_WEB_UPDATE_TOKEN, then run Refresh web update credential."
+          read_expiry "$LANCERLOGIN_WEB_UPDATE_TOKEN"
+          case "$problem" in
+            rejected) skip_token dispatch_credential_rejected "GitHub rejected LANCERLOGIN_WEB_UPDATE_TOKEN, the token for one-click dashboard updates: it has expired or been revoked." "One-click updates from the dashboard are off until you replace it: create a new fine-grained token, store it as LANCERLOGIN_WEB_UPDATE_TOKEN, then run Refresh web update credential. $delete_instead" "replace the secret LANCERLOGIN_WEB_UPDATE_TOKEN with a new fine-grained token, or delete the secret to install without one-click updates, then run create again." ;;
+            unavailable) skip_token dispatch_credential_check_unavailable "GitHub did not answer the check of LANCERLOGIN_WEB_UPDATE_TOKEN (HTTP $http_status), so the token could not be verified." "$kept" "$create_later" ;;
+            unreadable) skip_token token_expiration_unreadable "GitHub reported the expiry of LANCERLOGIN_WEB_UPDATE_TOKEN in an unexpected format." "$kept" "$create_later" ;;
+          esac
           web_update_expires_at=$expiry
           module_selection_expires_at=""
-          if [ -n "$LANCERLOGIN_MODULE_SELECTION_TOKEN" ]; then
-            read_expiry "$LANCERLOGIN_MODULE_SELECTION_TOKEN" selection_credential_rejected "The GitHub token for plugin management has expired or been revoked: create a new fine-grained token, replace LANCERLOGIN_MODULE_SELECTION_TOKEN, then run Refresh web update credential."
+          if [ -n "$selection_token" ]; then
+            read_expiry "$selection_token"
             module_selection_expires_at=$expiry
+            case "$problem" in
+              rejected) skip_selection selection_credential_rejected "GitHub rejected LANCERLOGIN_MODULE_SELECTION_TOKEN, the token for dashboard plugin management: it has expired or been revoked." ;;
+              unavailable) skip_selection selection_credential_check_unavailable "GitHub did not answer the check of LANCERLOGIN_MODULE_SELECTION_TOKEN (HTTP $http_status), so the token could not be verified." ;;
+              unreadable) skip_selection token_expiration_unreadable "GitHub reported the expiry of LANCERLOGIN_MODULE_SELECTION_TOKEN in an unexpected format." ;;
+            esac
           fi
           # Those earlier releases also refuse a token without an expiry.
-          if ! grep -qi 'github-authentication-token-expiration' scripts/refresh-web-update-credential.mjs \
-            && { [ -z "$web_update_expires_at" ] || { [ -n "$LANCERLOGIN_MODULE_SELECTION_TOKEN" ] && [ -z "$module_selection_expires_at" ]; }; }; then
-            echo "::error title=dispatch_credential_expiry_required::LancerLogin $RELEASE_TAG accepts only GitHub tokens that have an expiration date: create fine-grained tokens with an expiration, replace LANCERLOGIN_WEB_UPDATE_TOKEN (and LANCERLOGIN_MODULE_SELECTION_TOKEN when it is set), then run this workflow again."
-            exit 1
+          if ! grep -qi 'github-authentication-token-expiration' scripts/refresh-web-update-credential.mjs; then
+            if [ -z "$web_update_expires_at" ]; then
+              skip_token dispatch_credential_expiry_required "LancerLogin $RELEASE_TAG accepts only GitHub tokens that have an expiration date, and LANCERLOGIN_WEB_UPDATE_TOKEN has none." "One-click updates from the dashboard are off until you replace it with a fine-grained token that has an expiration and run Refresh web update credential. $delete_instead" "replace the secret LANCERLOGIN_WEB_UPDATE_TOKEN with a fine-grained token that has an expiration, or delete the secret to install without one-click updates, then run create again."
+            fi
+            if [ -n "$selection_token" ] && [ -z "$module_selection_expires_at" ]; then
+              skip_selection selection_credential_expiry_required "LancerLogin $RELEASE_TAG accepts only GitHub tokens that have an expiration date, and LANCERLOGIN_MODULE_SELECTION_TOKEN has none."
+            fi
           fi
-          WEB_UPDATE_TOKEN_EXPIRES_AT=$web_update_expires_at MODULE_SELECTION_TOKEN_EXPIRES_AT=$module_selection_expires_at \
-            node scripts/refresh-web-update-credential.mjs --verify-only
+          # The selected release's own check: repository access, the update workflow and, when set, the plugin token.
+          # Sets code and detail from its error annotation, which this step replaces with one that says whether the run continues.
+          verify_release() {
+            local log="$RUNNER_TEMP/update-credential-check.txt" result=0
+            WEB_UPDATE_TOKEN_EXPIRES_AT=$web_update_expires_at MODULE_SELECTION_TOKEN_EXPIRES_AT=$module_selection_expires_at LANCERLOGIN_MODULE_SELECTION_TOKEN=$selection_token \
+              node scripts/refresh-web-update-credential.mjs --verify-only > "$log" 2>&1 || result=$?
+            code=$(sed -n 's/^::error title=\([a-z_]*\)::.*/\1/p' "$log" | head -n 1)
+            detail=$(sed -n 's/^::error title=[a-z_]*:://p' "$log" | head -n 1)
+            grep -v '^::error ' "$log" || true
+            rm -f "$log"
+            return "$result"
+          }
+          verified=true
+          verify_release || verified=false
+          if [ "$verified" = "false" ] && [ "${code#selection_credential_}" != "$code" ]; then
+            skip_selection "$code" "${detail:-LancerLogin $RELEASE_TAG did not accept LANCERLOGIN_MODULE_SELECTION_TOKEN.}"
+            verified=true
+            verify_release || verified=false
+          fi
+          if [ "$verified" = "false" ]; then
+            # Not about the optional tokens: these stop every operation.
+            case "$code" in
+              private_installation_required|installation_slug_required|private_repository_required)
+                echo "::error title=$code::$detail"
+                exit 1 ;;
+            esac
+            skip_token "${code:-dispatch_credential_check_failed}" "${detail:-LancerLogin $RELEASE_TAG did not accept LANCERLOGIN_WEB_UPDATE_TOKEN.}" "$off_until_fixed" "$create_fix"
+          fi
           {
             echo "state=configured"
+            echo "selection=$selection_state"
             echo "web_update_expires_at=$web_update_expires_at"
             echo "module_selection_expires_at=$module_selection_expires_at"
           } >> "$GITHUB_OUTPUT"
@@ -260,6 +433,8 @@ jobs:
             echo "::error title=workers_subdomain_required::This Cloudflare account has no workers.dev subdomain yet, so the Worker API would have no address: in the Cloudflare dashboard open Workers & Pages, set the account's workers.dev subdomain, then run this workflow again."
             exit 1
           fi
+          # Kept for the installed-release check, which reads the Worker's /health at its workers.dev address.
+          node -e 'process.stdout.write(String(require("./.provision/workers-subdomain.json").result.subdomain))' > .provision/workers-subdomain.txt
           rm -f .provision/preflight.json .provision/workers-subdomain.json
           echo "The token can read Workers, D1 and Pages, and the account has a workers.dev subdomain."
       - name: Discover D1 resources in that account
@@ -333,6 +508,75 @@ jobs:
               echo "::error title=installation_not_found::Resume stopped because nothing exists in this Cloudflare account for the slug $INSTALLATION_SLUG. Check the slug, or run this workflow with the operation create."
               exit 1
             fi
+          fi
+      - name: Check the update track and refuse a downgrade before any cloud mutation
+        if: steps.resources.outputs.worker == 'exists'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Read-only. The Admin's update track is stored in D1 by Settings > Updates. An installation whose release
+          # predates update tracks has no such table and is on Stable.
+          if [ "$RELEASE_SELECTION" = "latest beta" ]; then
+            database="${DATABASE_NAME:-$INSTALLATION_SLUG-data}"
+            track=stable
+            npx wrangler d1 execute "$database" --remote --json --config .provision/wrangler.json \
+              --command "SELECT COUNT(*) AS tables FROM sqlite_master WHERE type = 'table' AND name = 'installation_update_settings'" > .provision/track-table.json
+            if node -e 'process.exit(require("./.provision/track-table.json")[0]?.results?.[0]?.tables === 1 ? 0 : 1)'; then
+              npx wrangler d1 execute "$database" --remote --json --config .provision/wrangler.json \
+                --command "SELECT update_channel FROM installation_update_settings WHERE installation_id = 'primary'" > .provision/track.json
+              track=$(node -e 'process.stdout.write(require("./.provision/track.json")[0]?.results?.[0]?.update_channel === "beta" ? "beta" : "stable")')
+            fi
+            if [ "$track" != "beta" ]; then
+              echo "::error title=beta_track_required::This installation is on the Stable update track, so the release latest beta is refused and nothing was changed. In the dashboard, open Settings > Updates > Update track, choose Beta and save it, then run this workflow again. To stay on Stable, run it with the release latest stable."
+              exit 1
+            fi
+            echo "Update track: Beta."
+          fi
+          # The Worker reports the release it runs on its public /health. An older release is never deployed over a newer
+          # one: database migrations are forward-only, and Cloudflare blocks some Worker rollbacks.
+          subdomain=$(cat .provision/workers-subdomain.txt)
+          if ! printf '%s' "$subdomain" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'; then subdomain=""; fi
+          api_origin="https://$INSTALLATION_SLUG-api.$subdomain.workers.dev"
+          installed=""
+          if [ -n "$subdomain" ] && curl --silent --show-error --fail --proto '=https' --tlsv1.2 --max-time 20 --retry 2 --output .provision/installed-health.json "$api_origin/health"; then
+            installed=$(node "$RUNNER_TEMP/release-policy.cjs" installed .provision/installed-health.json || true)
+          fi
+          source="$api_origin/health"
+          if [ -z "$installed" ]; then
+            # A Worker that cannot answer still has its configuration: every deployment sets the release as the plain-text
+            # variable RELEASE_VERSION, which Cloudflare returns with the Worker's settings.
+            status=$(curl --silent --show-error --proto '=https' --tlsv1.2 --max-time 20 --output .provision/worker-settings.json --write-out '%{http_code}' \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$INSTALLATION_SLUG-api/settings") || status="${status:-000}"
+            if [ "$status" = "200" ]; then
+              installed=$(node "$RUNNER_TEMP/release-policy.cjs" configured .provision/worker-settings.json || true)
+              source="the Worker's RELEASE_VERSION setting, because $api_origin/health did not answer with a release"
+            fi
+          fi
+          if [ -z "$installed" ]; then
+            if [ "$RELEASE_SELECTION" = "latest beta" ]; then
+              echo "::error title=installed_release_unreadable::Upgrade stopped before any change because the release this installation runs could not be read from $api_origin/health or from the Worker's settings, so the run cannot tell whether $RELEASE_TAG would be a downgrade. Check that the Worker $INSTALLATION_SLUG-api answers at that address, then run this workflow again. To repair an installation whose Worker does not answer, run it with the release latest stable."
+              exit 1
+            fi
+            echo "::warning title=installed_release_unreadable::The release the Worker $INSTALLATION_SLUG-api runs could not be read from $api_origin/health or from the Worker's settings, so this run could not confirm that $RELEASE_TAG is not a downgrade. It continues, because $INPUT_OPERATION with the release latest stable is also how an installation whose Worker does not answer is repaired. If this installation runs a beta newer than $RELEASE_TAG, cancel this run now."
+            exit 0
+          fi
+          echo "Installed release v$installed, read from $source."
+          order=$(node "$RUNNER_TEMP/release-policy.cjs" compare "$RELEASE_TAG" "v$installed")
+          if [ "$order" = "-1" ]; then
+            case "$installed" in
+              *-beta.*) advice="Wait for a stable release newer than v$installed, or to install a newer beta choose the release latest beta with the operation upgrade." ;;
+              *) advice="Wait for a newer release." ;;
+            esac
+            echo "::error title=release_downgrade_refused::This installation already runs LancerLogin v$installed, which is newer than $RELEASE_TAG, the release that $RELEASE_SELECTION selects. Nothing was changed, because LancerLogin is never downgraded. $advice"
+            exit 1
+          fi
+          if [ "$order" = "0" ]; then
+            echo "::notice title=release_already_installed::This installation already runs LancerLogin $RELEASE_TAG, the release that $RELEASE_SELECTION selects. No newer release is available, so this run redeploys the same release."
+          else
+            echo "This run installs $RELEASE_TAG."
           fi
       - name: Check whether the first Admin exists and the setup code is needed
         id: admin
@@ -546,7 +790,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           LANCERLOGIN_WEB_UPDATE_TOKEN: ${{ secrets.LANCERLOGIN_WEB_UPDATE_TOKEN }}
-          LANCERLOGIN_MODULE_SELECTION_TOKEN: ${{ secrets.LANCERLOGIN_MODULE_SELECTION_TOKEN }}
+          # Empty when the check above skipped the optional plugin token, so only the dashboard update token is installed.
+          LANCERLOGIN_MODULE_SELECTION_TOKEN: ${{ steps.update-credential.outputs.selection != 'skipped' && secrets.LANCERLOGIN_MODULE_SELECTION_TOKEN || '' }}
           # Read from GitHub's response headers above, for releases before v2.0.0-beta.17. Later releases read them again.
           WEB_UPDATE_TOKEN_EXPIRES_AT: ${{ steps.update-credential.outputs.web_update_expires_at }}
           MODULE_SELECTION_TOKEN_EXPIRES_AT: ${{ steps.update-credential.outputs.module_selection_expires_at }}
@@ -596,6 +841,7 @@ jobs:
           DASHBOARD_URL: https://${{ inputs.installation_slug }}-dashboard.pages.dev
           ADMIN_STATE: ${{ steps.admin.outputs.admin }}
           UPDATE_CREDENTIAL_STATE: ${{ steps.update-credential.outputs.state }}
+          UPDATE_CREDENTIAL_REASON: ${{ steps.update-credential.outputs.reason }}
           PAGES_BINDING_STATE: ${{ steps.pages-binding.outputs.state }}
           PAGES_BINDING_STATUS: ${{ steps.pages-binding.outputs.status }}
         run: |
@@ -604,7 +850,7 @@ jobs:
           {
             echo "## LancerLogin $INPUT_OPERATION complete"
             echo ""
-            echo "- Release: $RELEASE_TAG"
+            echo "- Release: $RELEASE_TAG ($RELEASE_KIND)"
             echo "- Dashboard: $DASHBOARD_URL"
             echo "- Worker API: $API_URL"
             echo ""
@@ -633,9 +879,15 @@ jobs:
             echo "| \`LANCERLOGIN_API_URL\` | \`$API_URL\` |"
             if [ "$UPDATE_CREDENTIAL_STATE" != "configured" ]; then
               echo ""
-              echo "### Dashboard updates are not set up yet"
-              echo ""
-              echo "\`LANCERLOGIN_WEB_UPDATE_TOKEN\` is not set, so the dashboard cannot start updates. LancerLogin works without it. To set up dashboard updates:"
+              if [ "$UPDATE_CREDENTIAL_STATE" = "skipped" ]; then
+                echo "### Dashboard update token not installed"
+                echo ""
+                echo "\`LANCERLOGIN_WEB_UPDATE_TOKEN\` is set but could not be used (\`$UPDATE_CREDENTIAL_REASON\`); the warning on this run gives the cause. The token is optional, so this $INPUT_OPERATION continued as if it were not set and did not install it. The dashboard keeps the token it already has, and **Settings > Updates > Setup status** shows whether that one has expired or been rejected; one-click updates stay off until a working token is installed. This workflow's \`upgrade\` operation keeps updating LancerLogin without a token; to use it instead, delete the secret, which also stops the warning. To turn one-click updates back on:"
+              else
+                echo "### Dashboard updates are not set up yet"
+                echo ""
+                echo "\`LANCERLOGIN_WEB_UPDATE_TOKEN\` is not set, so the dashboard cannot start updates. LancerLogin works without it. To set up dashboard updates:"
+              fi
               echo ""
               echo "1. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with access to only the repository \`$GITHUB_REPOSITORY\` and the repository permission **Actions: Read and write**. LancerLogin reads its expiration date from GitHub."
               echo "2. Store it as the environment secret \`LANCERLOGIN_WEB_UPDATE_TOKEN\` in the \`production\` environment in [Settings > Environments]($ENVIRONMENTS_URL)."

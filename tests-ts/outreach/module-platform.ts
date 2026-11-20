@@ -15,8 +15,10 @@ test("bundled registration assigns Outreach entry points without an Attendance d
   assert.equal(bundledModuleRegistry.routeOwner("/admin/hours/entries")?.route.access, "workspace");
   assert.equal(bundledModuleRegistry.routeOwner("/module-setup/hour-tracking/catalog")?.route.access, "setup");
   assert.deepEqual(outreach?.setup.steps.map((step) => [step.id, step.required]), [["rules", true], ["catalog", true]]);
-  assert.equal(bundledModuleRegistry.discordCommandOwner("outreach-submit")?.id, "hour-tracking");
-  assert.equal(bundledModuleRegistry.discordCommandOwner("outreach-correction")?.id, "hour-tracking");
+  // Outreach owns every command its manifest declares (newer plugin versions add more), including at least these two.
+  const outreachCommands = outreach?.discordCommands.map((command) => command.name) ?? [];
+  assert.ok(outreachCommands.includes("outreach-submit") && outreachCommands.includes("outreach-correction"));
+  for (const name of outreachCommands) assert.equal(bundledModuleRegistry.discordCommandOwner(name)?.id, "hour-tracking");
   const memberDuration = outreach?.reportDatasets?.find((dataset) => dataset.id === "outreach.members")?.fields.find((field) => field.id === "outreach.member.minutes");
   assert.deepEqual(memberDuration?.durationUnits, ["minutes", "hours"]);
   assert.equal(memberDuration?.defaultDurationUnit, "hours");

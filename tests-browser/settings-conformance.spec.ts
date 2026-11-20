@@ -96,6 +96,60 @@ for (const viewport of dashboardConformanceReferences.viewports) {
   });
 }
 
+test("unsaved Discord settings survive the reloads that run while a Discord verification waits", async ({ page }) => {
+  await useSettingsContext(page);
+  let statusLoads = 0; let managedElsewhere = false;
+  await page.route("**/admin/integrations", (route) => { statusLoads += 1; return route.fulfill({ json: { integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: false, state: "verification_required" }] } }); });
+  await page.route("**/admin/integrations/discord/channel-manager", (route) => route.fulfill({ json: { enabled: managedElsewhere, contestWindowHours: 36 } }));
+  await page.route("**/admin/integrations/discord/anomaly-reports", (route) => route.fulfill({ json: { enabled: false, channelId: "323456789012345678" } }));
+  await page.route("**/admin/integrations/discord/verify/start", (route) => route.fulfill({ json: { ok: true } }));
+  await page.goto("/settings/integrations");
+  const card = page.locator(".integration-card").filter({ hasText: "Discord bot" });
+  const manager = card.locator(".discord-channel-manager"); const anomalyReports = card.locator(".discord-anomaly-reports");
+  const managed = manager.getByRole("switch", { name: "Manage the configured attendance channel" });
+  await expect(manager.getByLabel("Contest window (hours)")).toHaveValue("36");
+  await expect(managed).not.toBeChecked();
+  await manager.getByLabel("Contest window (hours)").fill("48");
+  await manager.getByRole("checkbox", { name: "Block re-contests after rejection" }).check();
+  await anomalyReports.getByLabel("Private report channel ID").fill("423456789012345678");
+  // Another Admin turns the channel manager on while this one is typing.
+  managedElsewhere = true;
+  await card.getByRole("button", { name: "Send Discord verification" }).click();
+  await expect(card.getByText("The guild commands are ready and a verification message was sent.")).toBeVisible();
+  // The wait reloads every 2 seconds. A field nobody touched here follows the server; the edited ones stay as typed.
+  const loadsBefore = statusLoads;
+  await expect.poll(() => statusLoads).toBeGreaterThan(loadsBefore);
+  await expect(managed).toBeChecked();
+  await expect(manager.getByLabel("Contest window (hours)")).toHaveValue("48");
+  await expect(manager.getByRole("checkbox", { name: "Block re-contests after rejection" })).toBeChecked();
+  await expect(anomalyReports.getByLabel("Private report channel ID")).toHaveValue("423456789012345678");
+});
+
+test("one integration finishing a request leaves another integration's controls disabled until its own request ends", async ({ page }) => {
+  await useSettingsContext(page);
+  let releaseCode = () => {};
+  const codeHeld = new Promise<void>((resolve) => { releaseCode = resolve; });
+  await page.route("**/admin/integrations/resend/verify/start", async (route) => { await codeHeld; return route.fulfill({ json: { ok: true } }); });
+  await page.route("**/admin/integrations/google", (route) => route.fulfill({ json: { ok: true } }));
+  await page.goto("/settings/integrations");
+  const resend = page.locator(".integration-card").filter({ hasText: "Resend email" });
+  const google = page.locator(".integration-card").filter({ hasText: "Google OAuth" });
+  const sendCode = resend.getByRole("button", { name: "Send verification code" });
+  await resend.getByLabel("Address to receive the test code").fill("admin@example.test");
+  await sendCode.click();
+  await expect(sendCode).toBeDisabled();
+  // Google's own request starts and finishes while Resend's is still in flight.
+  await google.getByRole("switch", { name: "Enable Google OAuth" }).click();
+  await expect(google.getByText("Google OAuth disabled.")).toBeVisible();
+  await expect(google.getByRole("switch", { name: "Enable Google OAuth" })).toBeEnabled();
+  await expect(sendCode).toBeDisabled();
+  await expect(resend.getByRole("button", { name: "Verify code" })).toBeDisabled();
+  await expect(resend.getByRole("switch", { name: "Enable Resend email" })).toBeDisabled();
+  releaseCode();
+  await expect(resend.getByText("Verification email sent.")).toBeVisible();
+  await expect(sendCode).toBeEnabled();
+});
+
 test("a reporting start date in the future warns that baseline reports stay empty until then", async ({ page }) => {
   // Regression: an adopter saved 2026-12-31 as the baseline, so new reports opened with an inverted, empty range.
   await page.clock.setFixedTime(new Date("2026-11-03T15:00:00Z"));

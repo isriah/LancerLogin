@@ -7,6 +7,30 @@ import { encryptIntegration } from "../../apps/api/src/integration-crypto.ts";
 import { defaultReportDefinition } from "../../apps/api/src/report-builder.ts";
 import { FakeDatabase, request, seedInstallationBackupFoundation, sessionCookie, sessionSecret, setupCodeHash } from "../fixtures/worker-fake-database.ts";
 import { passwordCredential } from "../fixtures/passwords.ts";
+import { bundledModuleRegistry } from "../../packages/shared/src/module-platform.ts";
+
+// Core owns exactly these four guild commands. Enabled modules add their own, so the managed list is derived from the
+// registry rather than pinned here: a plugin that adds a command must not break these tests.
+const coreDiscordCommands = [
+  { name: "pair", type: 1, description: "Link your Discord account to your LancerLogin member ID", options: [{ name: "member-id", description: "Your LancerLogin member ID", type: 3, required: true }] },
+  { name: "attendance-report", type: 1, description: "Privately view your current LancerLogin attendance report" },
+  { name: "code", type: 1, description: "Get a one-time code to sign in at a kiosk" },
+  { name: "label", type: 1, description: "Associate a Discord role with a matching LancerLogin label", options: [{ name: "role", description: "Discord role to associate", type: 8, required: true }] },
+];
+// Each module command exactly as its manifest declares it, in the JSON form Discord receives.
+const moduleDiscordCommands = bundledModuleRegistry.modules.flatMap((module) => module.discordCommands).map((command) => JSON.parse(JSON.stringify(command)) as { name: string });
+const managedDiscordCommandNames = [...coreDiscordCommands, ...moduleDiscordCommands].map((command) => command.name);
+const managedDiscordCommandCount = managedDiscordCommandNames.length;
+
+function assertManagedDiscordCommandBodies(bodies: unknown[]) {
+  // Core's four commands come first, exactly.
+  assert.deepEqual(bodies.slice(0, coreDiscordCommands.length), coreDiscordCommands);
+  // Then every module command, once each, with its declared body.
+  assert.deepEqual(bodies.slice(coreDiscordCommands.length), moduleDiscordCommands);
+  assert.equal(new Set(bodies.map((body) => (body as { name: string }).name)).size, bodies.length);
+  // The composed Outreach plugin contributes at least its submission and correction commands.
+  for (const name of ["outreach-submit", "outreach-correction"]) assert.equal(bundledModuleRegistry.discordCommandOwner(name)?.id, "hour-tracking");
+}
 
 function seedPolicy(database: FakeDatabase, options: {
   members?: Record<string, unknown>[]; meetings?: Record<string, unknown>[]; labels?: Record<string, unknown>[];
@@ -235,7 +259,7 @@ test("existing Outreach member reports without a unit normalize to hours in the 
   assert.equal(body.reports[0]?.definition.columns.find((column) => column.key === "outreach.member.minutes")?.unit, "hours");
 });
 
-test("Discord verification reconciles the six managed guild commands before its signed user click", async () => {
+test("Discord verification reconciles Core's and every module's managed guild commands before its signed user click", async () => {
   const database = new FakeDatabase(); const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const publicKeyHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
   const encrypted = await encryptIntegration({ botToken: "discord-secret", applicationId: "103456789012345678", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: publicKeyHex }, sessionSecret);
@@ -254,10 +278,10 @@ test("Discord verification reconciles the six managed guild commands before its 
   };
   try {
     const started = await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env);
-    assert.equal(started.status, 202); assert.match(outbound[0].input, /users\/@me$/); assert.match(outbound[1].input, /oauth2\/applications\/@me$/); assert.match(outbound[2].input, /guilds\/123456789012345678$/); assert.match(outbound[3].input, /channels\/223456789012345678$/); assert.match(outbound[4].input, /applications\/103456789012345678\/guilds\/123456789012345678\/commands$/); assert.equal(outbound[4].init?.method, "GET"); assert.deepEqual(outbound.slice(5, 11).map((call) => call.init?.method), ["POST", "POST", "POST", "POST", "POST", "POST"]); assert.match(outbound[12].input, /channels\/223456789012345678\/messages$/);
+    assert.equal(started.status, 202); assert.match(outbound[0].input, /users\/@me$/); assert.match(outbound[1].input, /oauth2\/applications\/@me$/); assert.match(outbound[2].input, /guilds\/123456789012345678$/); assert.match(outbound[3].input, /channels\/223456789012345678$/); assert.match(outbound[4].input, /applications\/103456789012345678\/guilds\/123456789012345678\/commands$/); assert.equal(outbound[4].init?.method, "GET"); const posts = outbound.slice(5, 5 + managedDiscordCommandCount); assert.deepEqual(posts.map((call) => call.init?.method), managedDiscordCommandNames.map(() => "POST")); assert.match(outbound[5 + managedDiscordCommandCount].input, /commands$/); assert.equal(outbound[5 + managedDiscordCommandCount].init?.method, "GET"); assert.match(outbound[6 + managedDiscordCommandCount].input, /channels\/223456789012345678\/messages$/);
     assert.equal(outbound.every(({ input }) => input.startsWith("https://discord.com/api/v10/")), true); assert.equal(outbound.some(({ input }) => /\/applications\/103456789012345678\/commands$/.test(input)), false);
-    assert.deepEqual(outbound.slice(5, 11).map((call) => JSON.parse(String(call.init?.body))), [{ name: "pair", type: 1, description: "Link your Discord account to your LancerLogin member ID", options: [{ name: "member-id", description: "Your LancerLogin member ID", type: 3, required: true }] }, { name: "attendance-report", type: 1, description: "Privately view your current LancerLogin attendance report" }, { name: "code", type: 1, description: "Get a one-time code to sign in at a kiosk" }, { name: "label", type: 1, description: "Associate a Discord role with a matching LancerLogin label", options: [{ name: "role", description: "Discord role to associate", type: 8, required: true }] }, { name: "outreach-submit", type: 1, description: "Record completed Outreach participation for your linked member", options: [{ name: "activity", description: "Dated Outreach activity reference or exact title", type: 3, required: true }, { name: "start", description: "Local start time in HH:MM format", type: 3, required: true }, { name: "end", description: "Local end time in HH:MM format", type: 3, required: true }, { name: "notes", description: "Private task notes for Staff", type: 3 }] }, { name: "outreach-correction", type: 1, description: "Ask Staff to review linked Outreach participation", options: [{ name: "message", description: "What Staff should review", type: 3, required: true }, { name: "receipt", description: "Participation receipt reference", type: 3 }, { name: "date", description: "Service date in YYYY-MM-DD format", type: 3 }] }]);
-    const payload = JSON.parse(String(outbound[12].init?.body)); const customId = payload.components[0].components[0].custom_id as string; const token = customId.slice("lancerlogin-verify:".length);
+    assertManagedDiscordCommandBodies(posts.map((call) => JSON.parse(String(call.init?.body))));
+    const payload = JSON.parse(String(outbound[6 + managedDiscordCommandCount].init?.body)); const customId = payload.components[0].components[0].custom_id as string; const token = customId.slice("lancerlogin-verify:".length);
     const challengeWrite = database.calls.find((call) => call.sql.includes("INSERT INTO integration_verification_challenges")); assert.ok(challengeWrite); assert.equal(challengeWrite.values[0], createHash("sha256").update(token).digest("base64url")); assert.equal(challengeWrite.values.includes(token), false);
     database.rows.set("FROM integration_verification_challenges", { challengeHash: challengeWrite.values[0], target: "123456789012345678", externalId: "verification-message-1", expiresAt: new Date(Date.now() + 60_000).toISOString() });
     const body = JSON.stringify({ type: 3, guild_id: "123456789012345678", data: { custom_id: customId }, member: { user: { id: "323456789012345678" } }, message: { id: "verification-message-1" } }); const timestamp = String(Math.floor(Date.now() / 1000)); const signature = sign(null, Buffer.from(timestamp + body), privateKey).toString("hex");
@@ -277,7 +301,7 @@ test("Discord command setup is repeat-safe across reruns and credential rotation
     assert.equal((await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env)).status, 202);
     const rotated = { ...config, botToken: "rotated-discord-secret" }; database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...await encryptIntegration(rotated, sessionSecret), verifiedAt: null });
     assert.equal((await worker.fetch(request("/admin/integrations/discord/verify/start", {}, { method: "POST", cookie: await sessionCookie("admin") }), env)).status, 202);
-    assert.equal(commandBodies.length, 6); assert.deepEqual(commandBodies.map((item) => (item as { name: string }).name), ["pair", "attendance-report", "code", "label", "outreach-submit", "outreach-correction"]); assert.ok(authorizations.includes("Bot rotated-discord-secret"));
+    assert.equal(commandBodies.length, managedDiscordCommandCount); assertManagedDiscordCommandBodies(commandBodies); assert.ok(authorizations.includes("Bot rotated-discord-secret"));
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -300,10 +324,11 @@ test("configured Discord integrations reconcile commands without resetting legac
       assert.equal((await worker.fetch(request("/admin/integrations/discord/commands/reconcile", {}, { method: "POST", cookie: await sessionCookie("operator") }), env)).status, 403);
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const result = await worker.fetch(request("/admin/integrations/discord/commands/reconcile", {}, { method: "POST", cookie: await sessionCookie("admin") }), env);
-        assert.equal(result.status, 200); assert.deepEqual(await result.json(), { provider: "discord", reconciled: true, commands: ["pair", "attendance-report", "code", "label", "outreach-submit", "outreach-correction"] });
+        assert.equal(result.status, 200); assert.deepEqual(await result.json(), { provider: "discord", reconciled: true, commands: managedDiscordCommandNames });
       }
-      assert.equal(outbound.filter(({ input }) => input.endsWith("/commands")).length, 10);
-      assert.equal(outbound.filter(({ input, init }) => input.endsWith("/commands") && init?.method === "POST").length, 6);
+      // Each attempt lists the commands before and after; only the first attempt creates them.
+      assert.equal(outbound.filter(({ input }) => input.endsWith("/commands")).length, managedDiscordCommandCount + 4);
+      assert.equal(outbound.filter(({ input, init }) => input.endsWith("/commands") && init?.method === "POST").length, managedDiscordCommandCount);
       assert.equal(guildCommands[0].name, "unrelated");
       assert.ok(outbound.filter(({ input }) => input.endsWith("/commands")).every(({ input }) => input.endsWith(`/applications/${applicationId}/guilds/${guildId}/commands`)));
       assert.equal(database.batches.length, 2);
@@ -331,12 +356,12 @@ test("verified Discord commands register automatically once for each command def
   };
   try {
     await worker.scheduled({ cron: "*/5 * * * *" }, env);
-    assert.equal(outbound.filter((url) => url.endsWith("/commands")).length, 8);
+    assert.equal(outbound.filter((url) => url.endsWith("/commands")).length, managedDiscordCommandCount + 2);
     const saved = database.batches.flat().find((item) => item.sql.includes("'managed-commands'"));
     assert.ok(saved);
     database.rows.set("SELECT content_hash AS fingerprint FROM integration_state", { fingerprint: saved.values[1] });
     await worker.scheduled({ cron: "*/5 * * * *" }, env);
-    assert.equal(outbound.filter((url) => url.endsWith("/commands")).length, 8);
+    assert.equal(outbound.filter((url) => url.endsWith("/commands")).length, managedDiscordCommandCount + 2);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -369,11 +394,11 @@ test("opening Integrations runs the guarded Discord command reconcile only while
     assert.equal(first.status, 200);
     const body = await first.json() as { commandStatus: string; commandsUpdatedAt?: string };
     assert.equal(body.commandStatus, "ready"); assert.ok(body.commandsUpdatedAt);
-    assert.equal(outbound.filter((url) => url.endsWith("/commands")).length, 8);
+    assert.equal(outbound.filter((url) => url.endsWith("/commands")).length, managedDiscordCommandCount + 2);
     assert.equal(pending.database.calls.filter((call) => call.sql.includes("discord.commands_auto_reconciled")).length, 1);
     // Ready commands are not reconciled again when the page is opened later.
     assert.deepEqual(await (await check(pending.env)).json(), body);
-    assert.equal(outbound.filter((url) => url.endsWith("/commands")).length, 8);
+    assert.equal(outbound.filter((url) => url.endsWith("/commands")).length, managedDiscordCommandCount + 2);
 
     const overlapping = await setup(true); outbound.length = 0;
     assert.deepEqual(await (await check(overlapping.env)).json(), { commandStatus: "pending" });
@@ -417,7 +442,8 @@ test("installation restore validates ownership before writes and replaces transi
   const google = batch.find((item) => item.sql.startsWith("INSERT INTO google_calendar_operations")); assert.equal(google?.values[6], "failed"); assert.equal(google?.values[8], null);
   const discord = batch.find((item) => item.sql.startsWith("INSERT INTO discord_calendar_operations")); assert.equal(discord?.values[5], "failed"); assert.equal(discord?.values[9], null); assert.equal(discord?.values[10], null);
   const publication = batch.find((item) => item.sql.startsWith("INSERT INTO hours_publication_operations")); assert.equal(publication?.values[4], "failed"); assert.equal(publication?.values[9], null);
-  const completedPublication = batch.find((item) => item.sql.startsWith("INSERT INTO hours_publication_operations") && item.values[1] === "activity-complete"); assert.equal(completedPublication?.values[4], "succeeded"); assert.equal(completedPublication?.values[7], "message-1");
+  // Both publication rows travel in one multi-row INSERT of 15 columns each; the completed one is the second row.
+  const completedPublication = publication?.values.slice(15) ?? []; assert.equal(completedPublication.length, 15); assert.equal(completedPublication[1], "activity-complete"); assert.equal(completedPublication[4], "succeeded"); assert.equal(completedPublication[7], "message-1");
   assert.ok(batch.some((item) => item.sql.includes("ON CONFLICT(installation_id,module_id) DO UPDATE SET generation")));
   assert.ok(batch.some((item) => item.sql.includes("SELECT 'primary',?,?,generation") && item.sql.includes("FROM platform_module_epochs")));
 });

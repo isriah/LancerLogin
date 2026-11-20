@@ -18,7 +18,6 @@
 .kiosk-debug-panels .panel-heading h3 { margin: 0; }
 .app .kiosk-device-row button.kiosk-edit-button { display: inline-flex; justify-content: center; align-items: center; padding: 0; min-height: var(--control-min-block-size); }
 .app .kiosk-device-row button.kiosk-edit-button svg { display: block; margin: 0; flex: none; }
-.fingerprint-sharing-page > .settings-card { padding: var(--space-4); }
 @media (max-width: 760px) {
   .kiosk-diagnostics dt, .kiosk-diagnostics dd { font-size: var(--text-small); }
   .kiosk-diagnostics dd { overflow-wrap: anywhere; }

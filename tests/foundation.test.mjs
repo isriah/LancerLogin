@@ -261,7 +261,9 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   const workflow = await readFile(".github/workflows/provision-template.yml", "utf8");
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /Require a private deployment repository/);
-  assert.match(workflow, /release:\s+[\s\S]*type: choice\s+options:\s+- latest stable\s+installation_slug:/);
+  // Two release choices. latest beta only upgrades an installation already on the Beta track (provision-release-choice.test.mjs).
+  assert.match(workflow, /release:\s+[\s\S]*default: latest stable\s+type: choice\s+options:\s+- latest stable\s+- latest beta\s+installation_slug:/);
+  assert.match(workflow, /gh api "repos\/isriah\/LancerLogin\/releases\?per_page=100&page=\$page"/);
   assert.doesNotMatch(workflow, /original template release|TEMPLATE_RELEASE/);
   assert.doesNotMatch(workflow, /release_tag:\s/);
   assert.match(workflow, /gh api repos\/isriah\/LancerLogin\/releases\/latest --jq \.tag_name/);

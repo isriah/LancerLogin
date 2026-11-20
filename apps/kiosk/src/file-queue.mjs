@@ -19,6 +19,12 @@ import { dirname } from "node:path";
 // be newer than the outcomes watermark after a crash between the two writes)
 // and applies outcome effects exactly once. Existing queue files are read as
 // the snapshot, so upgrading needs no conversion and keeps every event id.
+//
+// A damaged journal never stops the queue. An append that fails part-way is cut
+// back off the journal before the next append, so no record is ever joined to a
+// torn line. At load, a line that cannot be parsed is copied to
+// `${path}.journal.damaged` for diagnosis and skipped; a complete record that a
+// release without this repair joined to a torn line is recovered from that line.
 
 const emptyOutcomes = () => ({ version: 1, accepted: 0, duplicate: 0, rejected: [], pendingAck: null, historyComplete: true });
 const dayMs = 24 * 60 * 60_000;
@@ -39,9 +45,10 @@ function rejectionRecord(event, result) {
     reviewStatus: "open" };
 }
 
-export function createFileQueue(path, { now = Date.now, compactBytes = 1024 * 1024, compactRecords = 2000, ackBatch = 25, retention = defaultRetention } = {}) {
+export function createFileQueue(path, { now = Date.now, compactBytes = 1024 * 1024, compactRecords = 2000, ackBatch = 25, retention = defaultRetention, openFile = open, log = message => console.warn(message) } = {}) {
   const outcomesPath = `${path}.outcomes.json`;
   const journalPath = `${path}.journal`;
+  const damagedPath = `${journalPath}.damaged`;
   const directory = dirname(path);
   let events = [];
   let outcomes = emptyOutcomes();
@@ -50,6 +57,8 @@ export function createFileQueue(path, { now = Date.now, compactBytes = 1024 * 10
   let loaded = false;
   let lastSeq = 0;
   let journalBytes = 0, journalRecords = 0, journalExists = false, snapshotBytes = 0;
+  // Set while an append may have left bytes that no operation acknowledged.
+  let journalTorn = false;
   let bufferedAcks = [];
   let operations = Promise.resolve();
   let flushing;
@@ -108,14 +117,28 @@ export function createFileQueue(path, { now = Date.now, compactBytes = 1024 * 10
     await ensureOutcomes();
     const lines = records.map(record => JSON.stringify({ s: ++lastSeq, ...record })).join("\n") + "\n";
     await mkdir(directory, { recursive: true, mode: 0o700 });
+    if (journalTorn) await trimJournal();
     const created = !journalExists;
-    const file = await open(journalPath, "a", 0o600);
+    const file = await openFile(journalPath, "a", 0o600);
+    journalTorn = true;
     try {
       await file.writeFile(lines);
       await file.sync();
-    } finally { await file.close(); }
+    } finally { await file.close().catch(() => undefined); }
+    journalTorn = false;
     if (created) { await chmod(journalPath, 0o600); await syncDirectory(); journalExists = true; }
     journalBytes += Buffer.byteLength(lines); journalRecords += records.length;
+  }
+
+  // Cut the journal back to its last acknowledged byte. A failed append can
+  // leave part of a record there; its operation was rejected, so nothing saved
+  // is removed. If this fails, the append fails too and the trim is retried.
+  async function trimJournal() {
+    let file;
+    try { file = await open(journalPath, "r+"); }
+    catch (error) { if (error?.code !== "ENOENT") throw error; journalTorn = false; return; }
+    try { await file.truncate(journalBytes); await file.sync(); } finally { await file.close(); }
+    journalTorn = false;
   }
 
   // Apply one journal record. Queue effects are idempotent; outcome effects
@@ -156,15 +179,33 @@ export function createFileQueue(path, { now = Date.now, compactBytes = 1024 * 10
     return false;
   }
 
+  // A release without the trim above could append a complete record straight
+  // after a torn one. That record was acknowledged, so recover it: it is the
+  // first place in the line where a whole valid record starts.
+  function joinedRecord(line) {
+    for (let at = line.indexOf('{"s":', 1); at > 0; at = line.indexOf('{"s":', at + 1)) {
+      try { const record = JSON.parse(line.slice(at)); if (validRecord(record)) return record; } catch { /* Not a record start. */ }
+    }
+    return undefined;
+  }
+
   async function readJournal() {
-    let text;
-    try { text = await readFile(journalPath, "utf8"); journalExists = true; }
-    catch (error) { if (error?.code === "ENOENT") return { records: [], torn: false }; throw error; }
-    const lines = text.split("\n");
+    let bytes;
+    try { bytes = await readFile(journalPath); journalExists = true; }
+    catch (error) { if (error?.code === "ENOENT") return { records: [], torn: false, damaged: [] }; throw error; }
+    const lines = bytes.toString("utf8").split("\n");
     const tail = lines.pop();
-    const records = [];
+    const records = [], damaged = [];
     for (const line of lines) {
-      const record = JSON.parse(line);
+      let record;
+      try { record = JSON.parse(line); }
+      catch {
+        // Not a record: keep the line for diagnosis and carry on with the rest.
+        damaged.push(line);
+        const joined = joinedRecord(line);
+        if (joined) records.push(joined);
+        continue;
+      }
       if (!validRecord(record)) throw new Error("Attendance journal has an invalid record");
       records.push(record);
     }
@@ -176,8 +217,21 @@ export function createFileQueue(path, { now = Date.now, compactBytes = 1024 * 10
       try { const record = JSON.parse(tail); if (validRecord(record)) records.push(record); } catch { /* Unacknowledged partial append. */ }
     }
     for (let index = 1; index < records.length; index++) if (records[index].s <= records[index - 1].s) throw new Error("Attendance journal order is invalid");
-    journalBytes = Buffer.byteLength(text); journalRecords = records.length;
-    return { records, torn };
+    journalBytes = bytes.length; journalRecords = records.length;
+    return { records, torn, damaged };
+  }
+
+  // Keep unreadable journal lines in an owner-only side file before the journal is rewritten without them.
+  async function quarantine(lines) {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const foundAt = new Date(now()).toISOString();
+    const file = await open(damagedPath, "a", 0o600);
+    try {
+      await file.writeFile(lines.map(line => `${JSON.stringify({ foundAt, line })}\n`).join(""));
+      await file.sync();
+    } finally { await file.close(); }
+    await chmod(damagedPath, 0o600); await syncDirectory();
+    log(`Queue journal ${journalPath} had ${lines.length} unreadable line${lines.length === 1 ? "" : "s"}. Saved in ${damagedPath}; every readable record was kept.`);
   }
 
   function prune() {
@@ -256,7 +310,7 @@ export function createFileQueue(path, { now = Date.now, compactBytes = 1024 * 10
       nextOutcomes.historyComplete = !existingQueue;
     }
     const watermark = nextOutcomes.journalSeq ?? 0;
-    const { records, torn } = await readJournal();
+    const { records, torn, damaged } = await readJournal();
     events = nextEvents; outcomes = nextOutcomes; outcomesPresent = present;
     cloudReviews = new Map(Object.entries(nextOutcomes.cloudReviews ?? {}));
     delete outcomes.cloudReviews;
@@ -270,10 +324,12 @@ export function createFileQueue(path, { now = Date.now, compactBytes = 1024 * 10
     }
     for (const record of records) if (record.s > watermark) apply(record);
     lastSeq = Math.max(watermark, records.at(-1)?.s ?? 0);
+    if (damaged.length) await quarantine(damaged);
     // Rewrite immediately when the journal tail is partial (a later append
-    // would otherwise follow a broken line), a legacy recovery ran, or the
-    // outcomes baseline is missing while journal records exist.
-    if (torn || recovered || (!present && records.length)) await compact();
+    // would otherwise follow a broken line), unreadable lines were set aside,
+    // a legacy recovery ran, or the outcomes baseline is missing while journal
+    // records exist.
+    if (torn || damaged.length || recovered || (!present && records.length)) await compact();
     loaded = true;
   }
 

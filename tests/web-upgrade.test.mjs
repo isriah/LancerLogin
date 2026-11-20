@@ -524,12 +524,20 @@ test("installation without the dashboard update token skips its verification and
   assert.match(steps[check], /node scripts\/refresh-web-update-credential\.mjs --verify-only/);
   assert.match(steps[check], /echo "state=configured"/);
   assert.match(steps[install], /if: steps\.update-credential\.outputs\.state == 'configured'/);
-  // The expiry comes from GitHub's header; 401 is the fixed rejected code with its fix.
+  // The expiry comes from GitHub's header; 401 is the fixed rejected code, in a warning that says the token is optional.
   assert.match(steps[check], /grep -i '\^github-authentication-token-expiration:'/);
-  assert.match(steps[check], /read_expiry "\$LANCERLOGIN_WEB_UPDATE_TOKEN" dispatch_credential_rejected "The GitHub token for dashboard updates has expired or been revoked: create a new fine-grained token, replace LANCERLOGIN_WEB_UPDATE_TOKEN, then run Refresh web update credential\."/);
+  assert.match(steps[check], /rejected\) skip_token dispatch_credential_rejected "GitHub rejected LANCERLOGIN_WEB_UPDATE_TOKEN, the token for one-click dashboard updates: it has expired or been revoked\."/);
+  assert.match(steps[check], /echo "::warning title=\$1::\$2 The token is optional, so this \$INPUT_OPERATION continues as if it were not set\. \$3"/);
+  // Only create stops for an optional token, and no error annotation in this step is fixed to a token code.
+  assert.match(steps[check], /if \[ "\$INPUT_OPERATION" = "create" \]; then\s+echo "::error title=\$1::\$2 Create stopped before any change\. The token is optional: \$4"\s+exit 1\s+fi/);
+  assert.deepEqual([...steps[check].matchAll(/echo "::error title=([^:]+)::/g)].map((match) => match[1]), ["$1", "$1", "$code"]);
+  // A skipped plugin token is never passed to the step that uploads the credentials.
+  assert.match(steps[install], /LANCERLOGIN_MODULE_SELECTION_TOKEN: \$\{\{ steps\.update-credential\.outputs\.selection != 'skipped' && secrets\.LANCERLOGIN_MODULE_SELECTION_TOKEN \|\| '' \}\}/);
   assert.match(steps[install], /WEB_UPDATE_TOKEN_EXPIRES_AT: \$\{\{ steps\.update-credential\.outputs\.web_update_expires_at \}\}/);
   const summary = steps[stepNamed(steps, /name: Publish setup links/)];
   assert.match(summary, /UPDATE_CREDENTIAL_STATE: \$\{\{ steps\.update-credential\.outputs\.state \}\}/);
+  assert.match(summary, /UPDATE_CREDENTIAL_REASON: \$\{\{ steps\.update-credential\.outputs\.reason \}\}/);
+  assert.match(summary, /if \[ "\$UPDATE_CREDENTIAL_STATE" = "skipped" \]; then\s+echo "### Dashboard update token not installed"[\s\S]*The token is optional, so this \$INPUT_OPERATION continued as if it were not set and did not install it\.[\s\S]*delete the secret/);
   assert.match(summary, /if \[ "\$UPDATE_CREDENTIAL_STATE" != "configured" \]; then[\s\S]*### Dashboard updates are not set up yet[\s\S]*Actions: Read and write[\s\S]*LANCERLOGIN_WEB_UPDATE_TOKEN[\s\S]*\[Refresh web update credential\]\(\$REFRESH_CREDENTIAL_WORKFLOW_URL\)/);
   assert.match(await readFile(".github/workflows/provision-template.yml", "utf8"), /REFRESH_CREDENTIAL_WORKFLOW_URL: https:\/\/github\.com\/\$\{\{ github\.repository \}\}\/actions\/workflows\/refresh-web-update-credential\.yml/);
 });
@@ -607,43 +615,156 @@ test("the collision check runs the shell it ships and names each existing or mis
 });
 
 const gnuDate = findGnuDateBash();
-test("the installation credential check skips a missing token, rejects a revoked one and passes on GitHub's expiry", { skip: toolSkip(gnuDate) }, async (t) => {
-  requireTool(gnuDate);
+// Runs the shipped credential check with stubs. curl answers GitHub with STATUS (SELECTION_STATUS for the plugin token) and
+// an optional expiry header, and fails like an unreachable host for 000. node records what the release's script received and
+// fails with NODE_ERROR as its error annotation ("silent" fails without one, as scripts before v2.0.0-beta.17 do);
+// NODE_ERROR_NEEDS_SELECTION limits that failure to calls that were given the plugin token.
+async function credentialCheck(t) {
   const check = runBlock((await installationSteps()).find((step) => /name: Check the optional dashboard update credential/.test(step)));
   const root = await mkdtemp(join(tmpdir(), "lancerlogin-update-credential-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(join(root, "scripts"));
-  // Stubs: curl answers GitHub with STATUS and an optional expiry header; node records what the release script received.
   const stubs = [
-    "curl() { local headers; while [ $# -gt 0 ]; do [ \"$1\" = --dump-header ] && headers=$2; shift; done; printf 'HTTP/2 %s\\r\\n' \"$STATUS\" > \"$headers\"; [ -n \"$EXPIRY\" ] && printf 'github-authentication-token-expiration: %s\\r\\n' \"$EXPIRY\" >> \"$headers\"; printf '%s' \"$STATUS\"; }",
-    "node() { printf '%s|%s|%s\\n' \"$*\" \"$WEB_UPDATE_TOKEN_EXPIRES_AT\" \"$MODULE_SELECTION_TOKEN_EXPIRES_AT\" >> node-calls.txt; }",
+    "curl() { local headers status=$STATUS; while [ $# -gt 0 ]; do [ \"$1\" = --dump-header ] && headers=$2; case \"$1\" in *synthetic-selection*) status=${SELECTION_STATUS:-$STATUS} ;; esac; shift; done; if [ \"$status\" = 000 ]; then printf 000; return 7; fi; printf 'HTTP/2 %s\\r\\n' \"$status\" > \"$headers\"; [ -n \"$EXPIRY\" ] && printf 'github-authentication-token-expiration: %s\\r\\n' \"$EXPIRY\" >> \"$headers\"; printf '%s' \"$status\"; }",
+    "node() { printf '%s|%s|%s|%s\\n' \"$*\" \"$WEB_UPDATE_TOKEN_EXPIRES_AT\" \"$MODULE_SELECTION_TOKEN_EXPIRES_AT\" \"$LANCERLOGIN_MODULE_SELECTION_TOKEN\" >> node-calls.txt; if [ -n \"$NODE_ERROR\" ] && { [ -z \"$NODE_ERROR_NEEDS_SELECTION\" ] || [ -n \"$LANCERLOGIN_MODULE_SELECTION_TOKEN\" ]; }; then [ \"$NODE_ERROR\" = silent ] || printf '::error title=%s::Fixed explanation of %s.\\n' \"$NODE_ERROR\" \"$NODE_ERROR\"; echo 'Credential refresh stopped.' >&2; return 1; fi; }",
   ].join("\n");
   await writeFile(join(root, "check.sh"), `set -eo pipefail\n${stubs}\n${check}\n`);
-  const run = async ({ token = "synthetic-dispatch", selection = "", status = "200", expiry = "", legacy = false } = {}) => {
+  return async ({ operation = "upgrade", token = "synthetic-dispatch", selection = "", status = "200", selectionStatus = "", expiry = "", legacy = false, nodeError = "", nodeErrorNeedsSelection = false } = {}) => {
     await writeFile(join(root, "scripts/refresh-web-update-credential.mjs"), legacy ? "// earlier release\n" : "// github-authentication-token-expiration\n");
     await rm(join(root, "node-calls.txt"), { force: true }); await writeFile(join(root, "output.txt"), "");
-    const result = spawnSync(gnuDate.path, ["check.sh"], { cwd: root, encoding: "utf8", env: gnuDate.env({ LANCERLOGIN_WEB_UPDATE_TOKEN: token, LANCERLOGIN_MODULE_SELECTION_TOKEN: selection,
-      LANCERLOGIN_UPDATE_REPOSITORY: "example/private-install", RELEASE_TAG: "v1.2.6", RUNNER_TEMP: root, GITHUB_OUTPUT: join(root, "output.txt"), STATUS: status, EXPIRY: expiry }) });
+    const result = spawnSync(gnuDate.path, ["check.sh"], { cwd: root, encoding: "utf8", env: gnuDate.env({ INPUT_OPERATION: operation, LANCERLOGIN_WEB_UPDATE_TOKEN: token, LANCERLOGIN_MODULE_SELECTION_TOKEN: selection,
+      LANCERLOGIN_UPDATE_REPOSITORY: "example/private-install", RELEASE_TAG: "v1.2.6", RUNNER_TEMP: root, GITHUB_OUTPUT: join(root, "output.txt"), STATUS: status, SELECTION_STATUS: selectionStatus, EXPIRY: expiry,
+      NODE_ERROR: nodeError, NODE_ERROR_NEEDS_SELECTION: nodeErrorNeedsSelection ? "1" : "" }) });
     const calls = await readFile(join(root, "node-calls.txt"), "utf8").catch(() => "");
     return { status: result.status, stdout: result.stdout, output: await readFile(join(root, "output.txt"), "utf8"), calls };
   };
-  const missing = await run({ token: "" });
-  assert.equal(missing.status, 0); assert.equal(missing.output, "state=missing\n"); assert.equal(missing.calls, "");
-  assert.match(missing.stdout, /^::warning title=dispatch_credential_not_configured::/m);
-  const rejected = await run({ status: "401" });
-  assert.equal(rejected.status, 1); assert.equal(rejected.calls, "");
-  assert.match(rejected.stdout, /^::error title=dispatch_credential_rejected::The GitHub token for dashboard updates has expired or been revoked/m);
-  const expiring = await run({ expiry: "2026-11-05 00:00:00 UTC" });
-  assert.equal(expiring.status, 0);
-  assert.equal(expiring.calls, "scripts/refresh-web-update-credential.mjs --verify-only|2026-11-05T00:00:00.000Z|\n");
-  assert.match(expiring.output, /^state=configured\nweb_update_expires_at=2026-11-05T00:00:00\.000Z\nmodule_selection_expires_at=\n$/);
-  // A token without an expiry passes to a release that reads the header itself, but not to an earlier release.
-  assert.equal((await run()).status, 0);
-  const legacy = await run({ legacy: true });
-  assert.equal(legacy.status, 1); assert.match(legacy.stdout, /^::error title=dispatch_credential_expiry_required::LancerLogin v1\.2\.6 accepts only GitHub tokens that have an expiration date/m);
-  assert.equal((await run({ legacy: true, expiry: "2026-11-05 00:00:00 UTC" })).status, 0);
-  const selection = await run({ selection: "synthetic-selection", expiry: "2026-11-05 00:00:00 +0700" });
-  assert.equal(selection.calls, "scripts/refresh-web-update-credential.mjs --verify-only|2026-11-04T17:00:00.000Z|2026-11-04T17:00:00.000Z\n");
+}
+const verifyCall = (expiry = "", selectionExpiry = "", selection = "") => `scripts/refresh-web-update-credential.mjs --verify-only|${expiry}|${selectionExpiry}|${selection}\n`;
+const operations = ["create", "resume", "upgrade"];
+
+test("the installation credential check skips a missing token and passes on GitHub's expiry for a valid one, for every operation", { skip: toolSkip(gnuDate) }, async (t) => {
+  requireTool(gnuDate);
+  const run = await credentialCheck(t);
+  for (const operation of operations) {
+    const missing = await run({ operation, token: "" });
+    assert.equal(missing.status, 0, operation); assert.equal(missing.output, "state=missing\n"); assert.equal(missing.calls, "");
+    assert.match(missing.stdout, /^::warning title=dispatch_credential_not_configured::/m);
+    const expiring = await run({ operation, expiry: "2026-11-05 00:00:00 UTC" });
+    assert.equal(expiring.status, 0, operation);
+    assert.equal(expiring.calls, verifyCall("2026-11-05T00:00:00.000Z"));
+    assert.equal(expiring.output, "state=configured\nselection=missing\nweb_update_expires_at=2026-11-05T00:00:00.000Z\nmodule_selection_expires_at=\n");
+    assert.doesNotMatch(expiring.stdout, /::(?:warning|error) /);
+    // A token without an expiry passes to a release that reads the header itself.
+    const unexpiring = await run({ operation });
+    assert.equal(unexpiring.status, 0, operation); assert.match(unexpiring.output, /^state=configured\n/);
+    assert.equal((await run({ operation, legacy: true, expiry: "2026-11-05 00:00:00 UTC" })).status, 0);
+    const selection = await run({ operation, selection: "synthetic-selection", expiry: "2026-11-05 00:00:00 +0700" });
+    assert.equal(selection.calls, verifyCall("2026-11-04T17:00:00.000Z", "2026-11-04T17:00:00.000Z", "synthetic-selection"));
+    assert.match(selection.output, /^state=configured\nselection=configured\n/);
+  }
+});
+
+// Every way the optional dashboard update token can be unusable, with the fixed code the annotation carries.
+const unusableTokens = [
+  { name: "expired or revoked", options: { status: "401" }, code: "dispatch_credential_rejected", problem: /GitHub rejected LANCERLOGIN_WEB_UPDATE_TOKEN, the token for one-click dashboard updates: it has expired or been revoked\./, verified: false },
+  { name: "GitHub unreachable", options: { status: "000" }, code: "dispatch_credential_check_unavailable", problem: /GitHub did not answer the check of LANCERLOGIN_WEB_UPDATE_TOKEN \(HTTP 000\)/, verified: false },
+  { name: "GitHub server error", options: { status: "503" }, code: "dispatch_credential_check_unavailable", problem: /\(HTTP 503\)/, verified: false },
+  { name: "unreadable expiry", options: { expiry: "not a date" }, code: "token_expiration_unreadable", problem: /GitHub reported the expiry of LANCERLOGIN_WEB_UPDATE_TOKEN in an unexpected format\./, verified: false },
+  { name: "no expiry for an earlier release", options: { legacy: true }, code: "dispatch_credential_expiry_required", problem: /LancerLogin v1\.2\.6 accepts only GitHub tokens that have an expiration date, and LANCERLOGIN_WEB_UPDATE_TOKEN has none\./, verified: false },
+  { name: "past its expiry, by the release's check", options: { nodeError: "dispatch_credential_rejected" }, code: "dispatch_credential_rejected", problem: /Fixed explanation of dispatch_credential_rejected\./, verified: true },
+  { name: "without access to the repository", options: { nodeError: "dispatch_credential_access_denied" }, code: "dispatch_credential_access_denied", problem: /Fixed explanation of dispatch_credential_access_denied\./, verified: true },
+  { name: "update workflow missing", options: { nodeError: "reviewed_workflow_required" }, code: "reviewed_workflow_required", problem: /Fixed explanation of reviewed_workflow_required\./, verified: true },
+  { name: "refused by a release that prints no code", options: { nodeError: "silent" }, code: "dispatch_credential_check_failed", problem: /LancerLogin v1\.2\.6 did not accept LANCERLOGIN_WEB_UPDATE_TOKEN\./, verified: true },
+];
+test("an unusable dashboard update token never stops resume or upgrade, and is never reported as configured", { skip: toolSkip(gnuDate) }, async (t) => {
+  requireTool(gnuDate);
+  const run = await credentialCheck(t);
+  for (const { name, options, code, problem, verified } of unusableTokens) for (const operation of ["resume", "upgrade"]) {
+    const result = await run({ operation, ...options });
+    assert.equal(result.status, 0, `${name}, ${operation}`);
+    // The run continues as if the token were not set: the step that uploads it runs only for state=configured.
+    assert.equal(result.output, `state=skipped\nreason=${code}\n`, `${name}, ${operation}`);
+    assert.equal(result.calls, verified ? verifyCall() : "", name);
+    assert.doesNotMatch(result.stdout, /::error /, name);
+    const warnings = result.stdout.split("\n").filter((line) => line.startsWith("::warning "));
+    assert.equal(warnings.length, 1, name);
+    assert.ok(warnings[0].startsWith(`::warning title=${code}::`), name);
+    assert.match(warnings[0], problem, name);
+    assert.match(warnings[0], new RegExp(` The token is optional, so this ${operation} continues as if it were not set\\. `), name);
+  }
+  // The whole text for the case an adopter meets most: the optional token expired since the last update.
+  assert.equal((await run({ status: "401" })).stdout.trim(), "::warning title=dispatch_credential_rejected::GitHub rejected LANCERLOGIN_WEB_UPDATE_TOKEN, the token for one-click dashboard updates: it has expired or been revoked. The token is optional, so this upgrade continues as if it were not set. One-click updates from the dashboard are off until you replace it: create a new fine-grained token, store it as LANCERLOGIN_WEB_UPDATE_TOKEN, then run Refresh web update credential. To keep updating with this workflow instead, delete the secret LANCERLOGIN_WEB_UPDATE_TOKEN, which also stops this warning.");
+  // When GitHub could not be asked, nothing is known about the token, so the message does not claim it must be replaced.
+  assert.match((await run({ status: "000" })).stdout, /continues as if it were not set\. It was not installed, and the dashboard keeps the token it already has\. Run Refresh web update credential later to install it\.$/m);
+});
+
+test("create stops before any change for an unusable optional token and says the token is optional", { skip: toolSkip(gnuDate) }, async (t) => {
+  requireTool(gnuDate);
+  const run = await credentialCheck(t);
+  for (const { name, options, code, problem } of unusableTokens) {
+    const result = await run({ operation: "create", ...options });
+    assert.equal(result.status, 1, name); assert.equal(result.output, "", name);
+    assert.doesNotMatch(result.stdout, /::warning /, name);
+    const errors = result.stdout.split("\n").filter((line) => line.startsWith("::error "));
+    assert.equal(errors.length, 1, name);
+    assert.ok(errors[0].startsWith(`::error title=${code}::`), name);
+    assert.match(errors[0], problem, name);
+    assert.match(errors[0], / Create stopped before any change\. The token is optional: .*delete the secret(?: LANCERLOGIN_WEB_UPDATE_TOKEN)? (?:first )?to install without one-click updates/, name);
+  }
+  const selection = await run({ operation: "create", selection: "synthetic-selection", selectionStatus: "401" });
+  assert.equal(selection.status, 1); assert.equal(selection.output, ""); assert.equal(selection.calls, "");
+  assert.match(selection.stdout, /^::error title=selection_credential_rejected::GitHub rejected LANCERLOGIN_MODULE_SELECTION_TOKEN.* Create stopped before any change\. The token is optional: fix it, or delete the secret LANCERLOGIN_MODULE_SELECTION_TOKEN to install without dashboard plugin management, then run create again\.$/m);
+});
+
+test("an unusable plugin management token is left out while the dashboard update token is still installed", { skip: toolSkip(gnuDate) }, async (t) => {
+  requireTool(gnuDate);
+  const run = await credentialCheck(t);
+  const expiry = "2026-11-05 00:00:00 UTC"; const iso = "2026-11-05T00:00:00.000Z";
+  for (const operation of ["resume", "upgrade"]) {
+    const rejected = await run({ operation, selection: "synthetic-selection", selectionStatus: "401", expiry });
+    assert.equal(rejected.status, 0, operation);
+    // The release's check and the later upload both run without the plugin token.
+    assert.equal(rejected.calls, verifyCall(iso));
+    assert.equal(rejected.output, `state=configured\nselection=skipped\nweb_update_expires_at=${iso}\nmodule_selection_expires_at=\n`);
+    assert.match(rejected.stdout, new RegExp(`^::warning title=selection_credential_rejected::GitHub rejected LANCERLOGIN_MODULE_SELECTION_TOKEN, the token for dashboard plugin management: it has expired or been revoked\\. The token is optional, so this ${operation} continues as if it were not set, and the dashboard keeps the plugin management token it already has\\.`, "m"));
+    assert.doesNotMatch(rejected.stdout, /::error /);
+    // The release's own check refuses the plugin token: it is checked again without it.
+    const refused = await run({ operation, selection: "synthetic-selection", expiry, nodeError: "selection_credential_access_denied", nodeErrorNeedsSelection: true });
+    assert.equal(refused.status, 0, operation);
+    assert.equal(refused.calls, verifyCall(iso, iso, "synthetic-selection") + verifyCall(iso));
+    assert.match(refused.output, /^state=configured\nselection=skipped\n/);
+    assert.match(refused.stdout, /^::warning title=selection_credential_access_denied::Fixed explanation of selection_credential_access_denied\. The token is optional/m);
+    const noExpiry = await run({ operation, selection: "synthetic-selection", legacy: true, expiry, selectionStatus: "401" });
+    assert.match(noExpiry.output, /^state=configured\nselection=skipped\n/);
+  }
+  // A dashboard update token that is unusable skips both, whatever the plugin token's state.
+  const both = await run({ selection: "synthetic-selection", status: "401" });
+  assert.equal(both.status, 0); assert.equal(both.output, "state=skipped\nreason=dispatch_credential_rejected\n");
+});
+
+test("conditions that are not about the optional tokens still stop every operation", { skip: toolSkip(gnuDate) }, async (t) => {
+  requireTool(gnuDate);
+  const run = await credentialCheck(t);
+  for (const code of ["private_installation_required", "installation_slug_required", "private_repository_required"]) for (const operation of operations) {
+    const result = await run({ operation, nodeError: code });
+    assert.equal(result.status, 1, `${code}, ${operation}`); assert.equal(result.output, "");
+    assert.match(result.stdout, new RegExp(`^::error title=${code}::Fixed explanation of ${code}\\.$`, "m"));
+    assert.doesNotMatch(result.stdout, /::warning /);
+  }
+});
+
+test("only a verified dashboard update token reaches the Worker", async () => {
+  const steps = await installationSteps();
+  // The check reads the secret; the upload is the only other step given it, and it runs only for state=configured.
+  const withSecret = steps.filter((step) => step.includes("secrets.LANCERLOGIN_WEB_UPDATE_TOKEN"));
+  assert.equal(withSecret.length, 2);
+  assert.match(withSecret[0], /name: Check the optional dashboard update credential before any cloud mutation/);
+  assert.match(withSecret[1], /name: Install or refresh the private dispatch credential[^\n]*\n\s+if: steps\.update-credential\.outputs\.state == 'configured'\n/);
+  const check = runBlock(withSecret[0]);
+  // state=configured is written once, after every check passed; skip_token ends the step first.
+  assert.equal(check.match(/echo "state=configured"/g).length, 1);
+  assert.ok(check.lastIndexOf("skip_token ") < check.indexOf('echo "state=configured"'));
+  assert.match(check, /echo "state=skipped"\s+echo "reason=\$1"\s+\} >> "\$GITHUB_OUTPUT"\s+exit 0/);
 });
 
 test("installation checks the account, token permissions and exact Pages address before it deploys", async () => {
@@ -670,7 +791,8 @@ test("validation failures print coded error annotations that explain the fix", a
   const validation = steps[stepNamed(steps, /name: Validate deployment request/)];
   for (const code of ["operation_invalid", "installation_slug_invalid", "cloudflare_token_required", "account_token_required", "cloudflare_account_id_invalid", "setup_code_required"]) assert.match(validation, new RegExp(`::error title=${code}::`), code);
   assert.match(validation, /::error title=account_token_required::[^"]*Account API token[^"]*A user API token[^"]*Manage account > Account API tokens[^"]*"/);
-  for (const step of steps) for (const line of step.split("\n").filter((text) => text.includes("::error"))) assert.match(line, /::error title=(?:[a-z][a-z0-9_]+|\$2)::/, line.trim());
+  // The credential check prints the code it was given, or the one the release's script reported.
+  for (const step of steps) for (const line of step.split("\n").filter((text) => text.includes('echo "::error'))) assert.match(line, /::error title=(?:[a-z][a-z0-9_]+|\$1|\$code)::/, line.trim());
   const workflows = await Promise.all(["provision-template", "upgrade-web", "refresh-web-update-credential"].map((name) => readFile(`.github/workflows/${name}.yml`, "utf8")));
   for (const text of [...workflows, await readFile("scripts/workflow-annotations.mjs", "utf8")]) assert.doesNotMatch(text, emDash);
 });

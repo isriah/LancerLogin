@@ -304,7 +304,8 @@ test("a Require PIN kiosk confirms, checks PINs online and offline, counts offli
   f.world.settings = { authenticationMethod: "member_id", memberLookup: "entry", requirePin: false, pinLockout: { enabled: true, attempts: 3, minutes: 15 } };
   await kiosk.stop(); kiosk = await f.start();
   await until(async () => { const members = await f.cached(); return members.length === 3 && members.every(member => !("pin" in member) && !("email" in member)); }, "hashes and emails were removed");
-  await assert.rejects(stat(join(f.root, "pin-failures.json")), { code: "ENOENT" });
+  // The kiosk removes the offline tries right after the hashes, so this waits for the file to go instead of racing it.
+  await until(() => stat(join(f.root, "pin-failures.json")).then(() => false, (error) => error?.code === "ENOENT"), "the offline tries were removed");
   assert.deepEqual(JSON.parse(await readFile(join(f.root, "authentication.json"), "utf8")).requirePin, false);
   assert.equal((await kiosk.json("/display-state")).body.display.message, "Enter member ID");
   assert.equal((await kiosk.json("/identity/search", { query: "test" })).status, 400);
@@ -379,4 +380,55 @@ test("a wrong-PIN report keeps its id and its tries until the server answers it,
   await writeFile(path, JSON.stringify({ version: 1, members: { 1014: { unreported: 2, lastAt: "2026-10-30T12:00:00.000Z", streak: 2, lockedUntil: null } }, report: { id: "", failures: "none" } }));
   const older = createPinFailureStore(path, { now: () => clock, newId });
   assert.deepEqual(await older.report(), { id: "test-report-5", failures: [{ memberId: "1014", count: 2, lastAt: "2026-10-30T12:00:00.000Z" }] });
+});
+
+// ---- Maintenance: Set member PIN sheet ----
+
+// Runs the sheet's own code from the maintenance script against a minimal page: only the elements it touches.
+async function memberPinSheet({ save }) {
+  const { maintenanceApp } = await import("../apps/kiosk/src/maintenance-ui.mjs");
+  const start = maintenanceApp.indexOf("function showMemberPinStep("), end = maintenanceApp.indexOf('byId("reset-member-pin")');
+  assert.ok(start > 0 && end > start, "the Set member PIN code is where this test expects it");
+  const elements = new Map(), messages = [];
+  const byId = id => { if (!elements.has(id)) { const handlers = {}; elements.set(id, { id, value: "", textContent: "", hidden: true, disabled: false, handlers, addEventListener: (type, handler) => { handlers[type] = handler; } }); } return elements.get(id); };
+  const member = { memberId: "1010", firstName: "Test Student", lastName: "J" };
+  new Function("byId", "call", "pinMember", "memberLabel", "message", "friendlyError",
+    `let memberPinStep, memberPinFirst = "";\n${maintenanceApp.slice(start, end)}`)(byId, save, () => member, () => "J, Test Student · 1010", (text, error = false) => messages.push([text, error]), error => error.message);
+  const enter = async pin => { byId("member-pin-display").value = pin; await byId("member-pin-next").handlers.click(); };
+  return { byId, enter, messages, open: () => byId("set-member-pin").handlers.click() };
+}
+
+test("after Set member PIN fails, the operator starts again at the first entry instead of seeing a false mismatch", async () => {
+  const saved = []; let fail = true;
+  const sheet = await memberPinSheet({ save: async (path, options) => {
+    if (fail) throw new Error("The PIN could not be saved");
+    saved.push([path, JSON.parse(options.body)]); return { pinSet: true };
+  } });
+  const text = id => sheet.byId(id).textContent;
+  sheet.open();
+  assert.equal(text("member-pin-title"), "Choose a PIN");
+  await sheet.enter("1357");
+  assert.equal(text("member-pin-title"), "Type the PIN again");
+  await sheet.enter("1357");
+  // The save failed: the sheet stays open, says why, and is back at the first entry with nothing typed.
+  assert.equal(sheet.byId("member-pin-sheet").hidden, false);
+  assert.equal(text("member-pin-error"), "The PIN could not be saved");
+  assert.equal(text("member-pin-title"), "Choose a PIN");
+  assert.equal(text("member-pin-next"), "Next");
+  assert.equal(sheet.byId("member-pin-display").value, "");
+  assert.equal(sheet.byId("member-pin-next").disabled, false);
+  // Typing the PIN again is a first entry, not a comparison with the cleared one.
+  fail = false;
+  await sheet.enter("1357");
+  assert.equal(text("member-pin-error"), "");
+  assert.equal(text("member-pin-title"), "Type the PIN again");
+  await sheet.enter("1357");
+  assert.deepEqual(saved, [["/maintenance/member-pins", { memberId: "1010", pin: "1357" }]]);
+  assert.equal(sheet.byId("member-pin-sheet").hidden, true);
+  assert.deepEqual(sheet.messages, [["PIN set for Test Student J.", false]]);
+  // A real mismatch still says so.
+  sheet.open(); await sheet.enter("1357"); await sheet.enter("2468");
+  assert.equal(text("member-pin-error"), "The two PINs don't match. Choose a PIN again.");
+  assert.equal(text("member-pin-title"), "Choose a PIN");
+  assert.equal(saved.length, 1);
 });

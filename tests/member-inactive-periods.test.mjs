@@ -52,7 +52,9 @@ class Database {
   periods() { return JSON.parse(this.raw.prepare("SELECT inactive_periods_json FROM members WHERE id='member'").get().inactive_periods_json); }
 }
 async function call(db, path, body, method = body ? 'POST' : 'GET', user = 'admin') {
-  const cookie = 'lancerlogin_session=' + await createSessionCodec(secret).issue({ userId: user, role: user === 'admin' ? 'admin' : 'operator' });
+  // A session for the account's current epoch, as signing in gives: an installation restore ends every earlier session.
+  const epoch = Number(db.raw.prepare('SELECT session_epoch AS epoch FROM users WHERE id = ?').get(user)?.epoch ?? 0);
+  const cookie = 'lancerlogin_session=' + await createSessionCodec(secret).issue({ userId: user, role: user === 'admin' ? 'admin' : 'operator', epoch });
   return worker.fetch(new Request('https://fixture.test' + path, { method, headers: { cookie, ...(body ? { 'content-type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }), { DB: db, SESSION_KEY: secret, INTEGRATION_KEY: secret, APP_MODE: 'configured' });
 }
 async function good(db, path, body, method) {

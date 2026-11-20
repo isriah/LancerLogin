@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { linkedSyncText, roleJobMaxFailures, roleJobPollDelay, splitBySync } from "../apps/dashboard/src/discord-roles.ts";
+import { hasUnmatchedRoleList, linkedSyncText, roleJobMaxFailures, roleJobPollDelay, roleJobStuck, roleJobStuckMs, splitBySync, unmatchedRoleUserCount } from "../apps/dashboard/src/discord-roles.ts";
 import { saveInTwoSteps, type FirstWrite } from "../apps/dashboard/src/two-step-save.ts";
 
 // What the dashboard says about when label changes reach Discord. A two-way label syncs on its own every 5 minutes;
@@ -23,6 +23,18 @@ test("after label changes, only labels that wait for a manual sync are said to b
   assert.deepEqual(splitBySync(["test label b"], [twoWay]), { automatic: ["test label b"], manual: [] });
   // When the role links can't be read, every label keeps the warning.
   assert.deepEqual(splitBySync(["Test Label B"], []), { automatic: [], manual: ["Test Label B"] });
+});
+
+test("Discord users not on the roster is offered only when a label syncs both ways, and counts every listed user", () => {
+  // Only a two-way label's check records unmatched users, so with none the list could never have content.
+  assert.equal(hasUnmatchedRoleList([]), false);
+  assert.equal(hasUnmatchedRoleList([manual, { labelName: "Older link" }]), false);
+  assert.equal(hasUnmatchedRoleList([manual, twoWay]), true);
+  // A two-way label paused after a restore is stored as Dashboard to Discord, and its list was cleared.
+  assert.equal(hasUnmatchedRoleList([{ labelName: "Test Label C", syncDirection: "to_discord", twoWayPaused: true }]), false);
+  assert.equal(unmatchedRoleUserCount([]), 0);
+  assert.equal(unmatchedRoleUserCount([{ users: [] }, { users: [] }]), 0);
+  assert.equal(unmatchedRoleUserCount([{ users: ["test-user-a", "test-user-b"] }, { users: ["test-user-c"] }]), 3);
 });
 
 test("a role sync check that keeps failing backs off and then stops", () => {
@@ -58,4 +70,24 @@ test("a save of two writes resumes with the second when only the second failed",
   await assert.rejects(saveInTwoSteps(done, "member-c", first, second, partial));
   await saveInTwoSteps(done, "member-c-renamed", first, undefined, partial);
   assert.deepEqual(calls, ["first", "second", "first"]);
+});
+
+test("a pending or running role sync is called stuck only when it has gone 15 minutes without progress", () => {
+  const now = Date.parse("2026-10-30T12:00:00.000Z"); const ago = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
+  const job = (fields: Partial<Parameters<typeof roleJobStuck>[0]>) => ({ status: "pending", createdAt: ago(20), updatedAt: ago(0), total: 10, completed: 0, failed: 0, ...fields });
+  assert.equal(roleJobStuckMs, 15 * 60_000);
+  // Claimed again and again (updated just now) with nobody changed: the stall seen with three two-way labels.
+  assert.equal(roleJobStuck(job({}), now), true);
+  assert.equal(roleJobStuck(job({ status: "running" }), now), true);
+  // Younger than 15 minutes, or moving: not stuck.
+  assert.equal(roleJobStuck(job({ createdAt: ago(14) }), now), false);
+  assert.equal(roleJobStuck(job({ completed: 3 }), now), false);
+  assert.equal(roleJobStuck(job({ failed: 1 }), now), false, "failures are progress too; they show once the job ends");
+  // Some members done, then nothing touched it for 15 minutes.
+  assert.equal(roleJobStuck(job({ completed: 3, updatedAt: ago(16) }), now), true);
+  // Without counts (an older API), only the last update can tell.
+  assert.equal(roleJobStuck({ status: "pending", createdAt: ago(60), updatedAt: ago(1) }, now), false);
+  assert.equal(roleJobStuck({ status: "pending", createdAt: ago(60), updatedAt: ago(30) }, now), true);
+  // A finished job is never stuck.
+  for (const status of ["completed", "partial", "stale"]) assert.equal(roleJobStuck(job({ status }), now), false, status);
 });

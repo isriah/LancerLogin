@@ -156,14 +156,27 @@ export async function hasTwoWayLabels(db: D1Database): Promise<boolean> {
   return Boolean(await db.prepare("SELECT 1 FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND x.sync_direction = 'two_way' AND l.active = 1 LIMIT 1").first());
 }
 
+const twoWayLabelsSql = "SELECT x.label_id AS labelId FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND x.sync_direction = 'two_way' AND l.active = 1";
+const twoWayLabelOrder = " ORDER BY x.two_way_checked_at IS NOT NULL, x.two_way_checked_at, l.name COLLATE NOCASE";
+
+/**
+ * The active two-way labels a scheduled check looks at, in its order, leaving out each label with a role sync pending
+ * or running (the check skips those anyway). One query, however many labels there are.
+ */
+export async function twoWayLabelsToCheck(db: D1Database): Promise<string[]> {
+  const rows = await db.prepare(`${twoWayLabelsSql} AND NOT EXISTS (SELECT 1 FROM discord_label_role_jobs j WHERE j.installation_id = x.installation_id AND j.label_id = x.label_id AND j.status IN ('pending', 'running'))${twoWayLabelOrder}`).all<{ labelId: string }>();
+  return (rows.results ?? []).map((row) => row.labelId);
+}
+
 /**
  * Checks active two-way labels against one load of the server's members: up to `limit` of them, least recently checked
  * first, so the next pass resumes with the labels this one left. `canContinue` ends the check early, for a pass budget.
+ * `labelIds`, from twoWayLabelsToCheck, saves listing the labels again.
  */
-export async function pollTwoWayLabels(db: D1Database, server: TwoWayServer, deps: TwoWayDependencies, limit = Infinity, canContinue: () => boolean = () => true): Promise<TwoWayPollResult[]> {
-  const rows = await db.prepare("SELECT x.label_id AS labelId FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND x.sync_direction = 'two_way' AND l.active = 1 ORDER BY x.two_way_checked_at IS NOT NULL, x.two_way_checked_at, l.name COLLATE NOCASE").all<{ labelId: string }>();
+export async function pollTwoWayLabels(db: D1Database, server: TwoWayServer, deps: TwoWayDependencies, limit = Infinity, canContinue: () => boolean = () => true, labelIds?: readonly string[]): Promise<TwoWayPollResult[]> {
+  const rows = labelIds ? labelIds.map((labelId) => ({ labelId })) : (await db.prepare(twoWayLabelsSql + twoWayLabelOrder).all<{ labelId: string }>()).results ?? [];
   const results: TwoWayPollResult[] = []; let checked = 0;
-  for (const row of rows.results ?? []) {
+  for (const row of rows) {
     if (checked >= limit || !canContinue()) break;
     const result = await pollTwoWayLabel(db, row.labelId, server, deps); results.push(result);
     // A label that is busy or has a role sync running costs only its lease check, so it does not use up the limit.

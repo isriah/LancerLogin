@@ -120,8 +120,11 @@ export async function markKioskScanReviewed(db: D1Database, actor: string, kiosk
     db.prepare(`INSERT INTO audit_log(id,installation_id,actor_user_id,action,target_type,target_id,metadata_json,created_at)
       SELECT ?,'primary',?,'kiosk.scan_reviewed','kiosk',?,json_object('eventId',?,'note',?),? WHERE EXISTS(SELECT 1 FROM kiosk_scan_reviews WHERE installation_id='primary' AND kiosk_id=? AND event_id=? AND review_status='open')`).bind(auditId, actor, kioskId, eventId, input.note.trim(), now, kioskId, eventId),
     db.prepare(`UPDATE kiosk_scan_reviews SET review_status='reviewed',reviewed_at=?,review_note=? WHERE installation_id='primary' AND kiosk_id=? AND event_id=? AND review_status='open' AND EXISTS(SELECT 1 FROM audit_log WHERE id=?)`).bind(now, input.note.trim(), kioskId, eventId, auditId),
-    db.prepare(`SELECT review_status AS status FROM kiosk_scan_reviews WHERE installation_id='primary' AND kiosk_id=? AND event_id=?`).bind(kioskId, eventId),
+    db.prepare(`SELECT review_status AS status, EXISTS(SELECT 1 FROM audit_log WHERE id=?) AS recorded FROM kiosk_scan_reviews WHERE installation_id='primary' AND kiosk_id=? AND event_id=?`).bind(auditId, kioskId, eventId),
   ]).catch(error => { if (error instanceof Error && error.message.includes("scan-review-admin")) throw new HttpError(403, "Administrator authorization changed"); throw error; });
-  if (!results.at(-1)?.results?.length) throw new HttpError(404, "Retained scan not found");
-  return { reviewed: true };
+  const row = results.at(-1)?.results?.[0] as { recorded?: number } | undefined;
+  if (!row) throw new HttpError(404, "Retained scan not found");
+  // As in the bulk route, a scan someone already reviewed keeps its first note and audit entry; the caller is told so
+  // rather than led to believe this note was saved.
+  return { reviewed: true, alreadyReviewed: Number(row.recorded) !== 1 };
 }

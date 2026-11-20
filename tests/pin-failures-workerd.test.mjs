@@ -102,6 +102,24 @@ test("real D1 applies 200 offline wrong-PIN entries atomically within the Free p
     // The Require PIN lookup uses the index of migration 0101 on D1's engine too.
     const plan = (await database.prepare("EXPLAIN QUERY PLAN SELECT MAX(created_at) AS turnedOnAt FROM audit_log WHERE installation_id = 'primary' AND action = 'kiosk.authentication_method_updated' AND target_type = 'kiosk' AND target_id = ? AND json_extract(metadata_json, '$.requirePin') = 1 AND json_extract(metadata_json, '$.previousRequirePin') = 0").bind(kiosk.kioskId).all()).results.map(row => row.detail).join("; ");
     assert.match(plan, /USING INDEX audit_log_kiosk_method_updates/, plan);
+
+    // The online claim on D1's own engine: with lockout at three tries (the seed), twelve wrong PINs sent at once have
+    // exactly three checked. The claim reads the lockout setting and starts the lock in its one statement.
+    assert.equal((await call("/kiosk/pins", { memberId: "TEST-205", pin: "2468" }, kiosk.kioskToken)).status, 201);
+    const startedAt = Date.now();
+    const tries = await Promise.all(Array.from({ length: 12 }, (_, index) => call("/kiosk/attendance", { eventId: `test-burst-${index}`, memberId: "TEST-205", occurredAt: new Date().toISOString(), pairingId: kiosk.pairingId, pin: String(1000 + index) }, kiosk.kioskToken)));
+    const answers = await Promise.all(tries.map(async result => ({ status: result.status, subrequests: Number(result.headers.get("x-test-d1-subrequests")), ...await result.json() })));
+    assert.equal(answers.filter(answer => answer.status === 403 && answer.code === "pin_incorrect").length, 3, JSON.stringify(answers));
+    assert.equal(answers.filter(answer => answer.status === 423 && answer.code === "pin_locked").length, 9, JSON.stringify(answers));
+    assert.deepEqual(answers.filter(answer => answer.code === "pin_incorrect").map(answer => answer.attemptsLeft).sort(), [0, 1, 2]);
+    const burstPin = await database.prepare("SELECT failed_attempts AS failed, locked_until AS lockedUntil, throttle_failures AS throttle FROM member_pins WHERE member_id = 'test-member-205'").first();
+    assert.deepEqual({ failed: burstPin.failed, throttle: burstPin.throttle }, { failed: 3, throttle: 3 });
+    // The lock's end is written by SQLite in the format of Date.toISOString(), ten minutes after the try.
+    assert.match(burstPin.lockedUntil, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/); assert.equal(new Date(burstPin.lockedUntil).toISOString(), burstPin.lockedUntil);
+    assert.ok(Date.parse(burstPin.lockedUntil) >= startedAt + 600_000 && Date.parse(burstPin.lockedUntil) <= Date.now() + 600_000, burstPin.lockedUntil);
+    const burstAudits = (await database.prepare("SELECT metadata_json AS metadata FROM audit_log WHERE action = 'member_pin.locked' AND target_id = 'test-member-205'").all()).results.map(row => JSON.parse(row.metadata));
+    assert.deepEqual(burstAudits, [{ kioskId: kiosk.kioskId, via: "kiosk", failedAttempts: 3, lockedUntil: burstPin.lockedUntil, minutes: 10 }]);
+    assert.ok(answers.every(answer => answer.subrequests < FREE_PLAN_SUBREQUESTS));
     console.log(JSON.stringify({ benchmark: "synthetic_pin_failure_report", entries: 200, d1Subrequests: fullSubrequests, d1SubrequestsWithReportId: Number(named.headers.get("x-test-d1-subrequests")), d1SubrequestsResend: fullSubrequests, freePlanLimit: FREE_PLAN_SUBREQUESTS }));
   } finally { await runtime.dispose(); }
 });

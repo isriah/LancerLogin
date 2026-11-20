@@ -21,6 +21,14 @@ export function linkedSyncText(mappings: readonly Omit<LabelRoleSync, "labelName
   return automatic === mappings.length ? `${autoSyncText}, so their changes reach Discord without a manual sync.` : `${autoSyncText}. For the others, label and pairing changes reach Discord only when you sync.`;
 }
 
+/**
+ * Whether "Discord users not on the roster" can list anyone: only a label that syncs both ways has its unmatched Discord
+ * users recorded, at each 5-minute check. A Dashboard to Discord label, or a two-way one paused after a restore, has none.
+ */
+export const hasUnmatchedRoleList = (mappings: readonly Omit<LabelRoleSync, "labelName">[]) => mappings.some((mapping) => mapping.syncDirection === "two_way");
+/** The count beside "Discord users not on the roster": every listed user, across the two-way labels. */
+export const unmatchedRoleUserCount = (labels: readonly { users: readonly unknown[] }[]) => labels.reduce((sum, label) => sum + label.users.length, 0);
+
 /** How often a running role sync is checked, and after how many failed checks in a row the page stops asking. */
 export const roleJobPollMs = 4_000;
 export const roleJobMaxFailures = 5;
@@ -35,4 +43,24 @@ export function roleJobPollDelay(failures: number, idleChecks = 0): number | und
   if (failures >= roleJobMaxFailures) return undefined;
   if (failures > 0) return Math.min(60_000, roleJobPollMs * 2 ** failures);
   return idleChecks >= roleJobIdleChecks ? 30_000 : roleJobPollMs;
+}
+
+/** A label's latest role sync as the role links list it, with its progress. */
+export type RoleJobProgress = { status: string; createdAt?: string; updatedAt: string; total?: number; completed?: number; failed?: number };
+/**
+ * How long a pending or running role sync may go before the page calls it stuck: three of the scheduler's 5-minute
+ * runs. A healthy sync changes several members a second, and a Discord rate limit pauses it for seconds, not minutes.
+ */
+export const roleJobStuckMs = 15 * 60_000;
+/**
+ * Whether a pending or running role sync looks stuck: started over 15 minutes ago and either no member has been
+ * changed (or failed) at all, or the job itself has not been touched for 15 minutes.
+ */
+export function roleJobStuck(job: RoleJobProgress, now = Date.now()): boolean {
+  if (!["pending", "running"].includes(job.status) || !job.createdAt) return false;
+  const created = Date.parse(job.createdAt), updated = Date.parse(job.updatedAt);
+  if (!(now - created > roleJobStuckMs)) return false;
+  // Without counts (an API from before they were listed) only the job's last update can tell.
+  const progress = job.total === undefined ? undefined : (job.completed ?? 0) + (job.failed ?? 0);
+  return progress === 0 || now - updated > roleJobStuckMs;
 }

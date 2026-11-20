@@ -55,7 +55,7 @@ Enable Outreach, or Carpool when its plugin is included, deliberately through **
 
 A portable installation restore is a recovery or replacement workflow, not the in-place upgrade path. It intentionally revokes kiosk and pairing authority and disables fingerprint cloud storage. Vault templates and authority are not portable and are cleared by restore. It does not restore Pi-local mappings, secrets, queues or reader contents. See [Backup and restore](BACKUP-RESTORE.md) before choosing that path.
 
-If verification fails, preserve current state and follow approved recovery. Do not automatically roll back code, restore D1, restore an old queue, rotate secrets or re-pair kiosks. Review backward code changes against the forward-migrated schema first.
+If verification fails, preserve current state and follow approved recovery. Do not automatically roll back code, restore D1, restore an old queue, rotate secrets or re-pair kiosks. Review backward code changes against the forward-migrated schema first, and note that Cloudflare blocks rolling the API Worker back from 2.1 to an earlier release; see [Recovery](WEB-UPDATES.md#recovery).
 
 ## What the release checks cover
 

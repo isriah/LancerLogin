@@ -185,6 +185,9 @@ test("each answer to a scan maps to a queue outcome", async () => {
   assert.deepEqual(await answer(Response.json({ error: "Invalid" }, { status: 400 })), { kind: "rejected", status: 400, message: "Invalid" });
   assert.equal((await answer(Response.json({ error: "Scan again", code: "possible_wrong_match" }, { status: 409 }))).kind, "rescan");
   assert.deepEqual(await answer(Response.json({ error: "Kiosk credential is invalid" }, { status: 401 })), { kind: "credential" });
+  // Any other 401, such as a proxy's sign-in page, keeps the scan queued and the kiosk paired.
+  assert.deepEqual(await answer(new Response("<html>Sign in</html>", { status: 401, headers: { "content-type": "text/html" } })), { kind: "retry", status: 401 });
+  assert.deepEqual(await answer(Response.json({ error: "Kiosk authentication required" }, { status: 401 })), { kind: "retry", status: 401 });
   assert.deepEqual(await answer(Response.json({ error: "Slow down" }, { status: 429 })), { kind: "retry", status: 429 });
   assert.deepEqual(await answer(Response.json({ error: "Down" }, { status: 503 })), { kind: "retry", status: 503 });
   assert.deepEqual(await answer(new Response("<html>Not found</html>", { status: 404, headers: { "content-type": "text/html" } })), { kind: "retry", status: 404 });

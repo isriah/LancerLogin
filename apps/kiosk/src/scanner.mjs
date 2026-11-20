@@ -1,4 +1,4 @@
-import { kioskDisplayForQueuedScan } from "./kiosk-presentation.mjs";
+import { kioskDisplayForQueuedScan, kioskDisplayForRefusal } from "./kiosk-presentation.mjs";
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -62,11 +62,20 @@ export function createIdentityScanner({ captureIdentity, captureAllowed = () => 
       try {
         const result = await Promise.race([flushAttendance(config), new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), flushWaitMs); })]);
         acknowledgement = result?.acknowledgements?.find((item) => item.eventId === event.eventId);
-        if (result) onCloud(Boolean(acknowledgement));
+        // Only a send that got no answer says the server is unreachable (result.unreachable). A flush that was deferred,
+        // or that stopped at an earlier scan the server keeps refusing, says nothing about the connection.
+        if (acknowledgement) onCloud(true); else if (result?.unreachable) onCloud(false);
       } finally { clearTimeout(timer); }
     } catch { onCloud(false); }
     if (!acknowledgement) { await show(queuedDisplay.id, { detail: event.clock?.verified === false ? "Saved on kiosk | Clock needs sync before attendance can be confirmed" : queuedDisplay.detail }); await delay(250); return; }
-    if (acknowledgement.rejected) { await show("rejected", { detail: acknowledgement.error }); await delay(250); return; }
+    if (acknowledgement.rejected) {
+      // Nothing wrong with the scan (no meeting open, attendance already settled): say so. Anything else, or a Worker
+      // that gives no reason, keeps the generic screen with the server's text.
+      const notice = kioskDisplayForRefusal(acknowledgement.refusal);
+      if (notice) await show(notice.id, { message: notice.message, detail: notice.detail });
+      else await show("rejected", { detail: acknowledgement.error });
+      await delay(250); return;
+    }
     // The member scanned on another kiosk moments apart from this scan, so this finger was probably matched to the
     // wrong member. Nothing was recorded. The debounce still applies, so a finger left on the reader is not resent.
     if (acknowledgement.rescan) { await show("rescan"); await delay(250); return; }

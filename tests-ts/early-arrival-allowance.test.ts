@@ -38,7 +38,7 @@ test("a kiosk scan in the early arrival window is an arrival at its own time; on
   const { call, scan, events } = await fixture(context);
   const before = await scan("SYN-001", "early-0", "2026-09-30T17:44:00.000Z");
   assert.equal(before.status, 409);
-  assert.deepEqual(await before.json(), { error: "No meeting is accepting attendance scans at this time", code: "no_eligible_meeting" });
+  assert.deepEqual(await before.json(), { error: "No meeting is accepting attendance scans at this time", code: "no_eligible_meeting", reason: "too_early", meetingTitle: "Test Evening", at: "2026-09-30T17:45:00.000Z", time: "5:45 PM" }, "the text and code older kiosks know, with the reason for newer ones");
   const chosen = await scan("SYN-001", "early-1", "2026-09-30T17:44:59.000Z", "evening");
   assert.equal(chosen.status, 409, "one second before the window opens");
   assert.deepEqual(await chosen.json(), { error: "This meeting has not started", code: "scan_window_closed" }, "the wording the kiosk recognizes");
@@ -101,11 +101,78 @@ test("meeting saves refuse overlaps through the early window and ignore overlaps
   assert.match((await edit.json() as { error: string }).error, /Test Legacy A .* conflicts with Test Legacy B/);
 });
 
+test("a meeting that overlaps since the upgrade can be edited until its times change", async (context) => {
+  const { database, call } = await fixture(context);
+  // Forty-five minutes apart: clear of the 30-minute late window alone, and within reach of the 15-minute early window.
+  database.sqlite.exec(`INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,created_by,created_at) VALUES ('legacy-a','primary','Test Legacy A','2026-10-05T18:00:00.000Z','2026-10-05T20:00:00.000Z','admin','2026-01-01');
+    INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,created_by,created_at) VALUES ('legacy-b','primary','Test Legacy B','2026-10-05T20:45:00.000Z','2026-10-05T21:30:00.000Z','admin','2026-01-01');
+    INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,created_by,created_at) VALUES ('later','primary','Test Later','2026-10-05T23:00:00.000Z','2026-10-05T23:30:00.000Z','admin','2026-01-01');`);
+  const stored = (id: string) => ({ ...database.sqlite.prepare("SELECT title, notes, required, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE id = ?").get(id) });
+  const patch = (id: string, body: Record<string, unknown>) => call(`/meetings/${id}`, body, "PATCH");
+  const b = { startsAt: "2026-10-05T20:45:00.000Z", endsAt: "2026-10-05T21:30:00.000Z" };
+  assert.equal((await call("/meetings", { title: "Test Same Slot", ...b, required: true })).status, 409, "the pair does overlap: a new meeting in the second one's slot is refused");
+
+  const edited = await patch("legacy-b", { title: "Test Legacy B renamed", notes: "Synthetic note", required: false, ...b });
+  assert.equal(edited.status, 200, await edited.clone().text());
+  assert.deepEqual(stored("legacy-b"), { title: "Test Legacy B renamed", notes: "Synthetic note", required: 0, ...b });
+  // The same instants written another way are still unchanged times.
+  const reformatted = await patch("legacy-b", { title: "Test Legacy B", required: true, startsAt: "2026-10-05T20:45:00Z", endsAt: "2026-10-05T16:30:00-05:00" });
+  assert.equal(reformatted.status, 200, await reformatted.clone().text());
+  const first = await patch("legacy-a", { title: "Test Legacy A renamed", notes: "Synthetic note", required: false, startsAt: "2026-10-05T18:00:00.000Z", endsAt: "2026-10-05T20:00:00.000Z" });
+  assert.equal(first.status, 200, await first.clone().text()); assert.equal(stored("legacy-a").title, "Test Legacy A renamed");
+
+  // A change of either time is checked as before, against the overlap that already exists and against a new one.
+  for (const times of [{ startsAt: "2026-10-05T20:44:00.000Z", endsAt: b.endsAt }, { startsAt: b.startsAt, endsAt: "2026-10-05T21:31:00.000Z" }]) {
+    const moved = await patch("legacy-b", { title: "Test Legacy B", required: true, ...times });
+    assert.equal(moved.status, 409); assert.match((await moved.json() as { error: string }).error, /attendance windows cannot overlap\. Test Legacy A renamed .* conflicts with Test Legacy B/);
+  }
+  const created = await patch("later", { title: "Test Later", required: true, startsAt: "2026-10-05T22:10:00.000Z", endsAt: "2026-10-05T22:40:00.000Z" });
+  assert.equal(created.status, 409, "Test Legacy B closes at 10:00 PM and this would open at 9:55 PM");
+  assert.match((await created.json() as { error: string }).error, /Test Legacy B .* conflicts with Test Later/);
+  assert.equal(stored("later").startsAt, "2026-10-05T23:00:00.000Z", "a refused save changes nothing");
+  const clear = await patch("legacy-b", { title: "Test Legacy B", required: true, startsAt: "2026-10-05T20:46:00.000Z", endsAt: b.endsAt });
+  assert.equal(clear.status, 200, await clear.clone().text());
+});
+
+test("a series edit checks only the occurrences whose times change", async (context) => {
+  const { database, call } = await fixture(context);
+  const times = { startsAt: "2026-10-06T18:00:00.000Z", endsAt: "2026-10-06T20:00:00.000Z" };
+  const made = await call("/meetings", { title: "Test Series", ...times, required: true, recurrence: { frequency: "weekly", until: "2026-10-20T23:00:00.000Z" } });
+  assert.equal(made.status, 201, await made.clone().text());
+  const { seriesId, meetings } = await made.json() as { seriesId: string; meetings: { id: string }[] };
+  assert.equal(meetings.length, 3);
+  // Forty-five minutes after the second occurrence, as a meeting saved before the early arrival allowance could be.
+  database.sqlite.exec("INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,created_by,created_at) VALUES ('legacy','primary','Test Legacy','2026-10-13T20:45:00.000Z','2026-10-13T21:30:00.000Z','admin','2026-01-01')");
+  const series = () => database.sqlite.prepare("SELECT title, notes, required, ends_at AS endsAt FROM meetings WHERE series_id = ? ORDER BY starts_at").all(seriesId).map((row) => ({ ...row }));
+  const patch = (body: Record<string, unknown>) => call(`/meeting-series/${seriesId}`, { meetingId: meetings[0].id, ...body }, "PATCH");
+
+  const edited = await patch({ title: "Test Series renamed", notes: "Synthetic note", required: false, ...times });
+  assert.equal(edited.status, 200, await edited.clone().text()); assert.equal((await edited.json() as { updated: number }).updated, 3);
+  assert.deepEqual(series(), ["2026-10-06", "2026-10-13", "2026-10-20"].map((day) => ({ title: "Test Series renamed", notes: "Synthetic note", required: 0, endsAt: `${day}T20:00:00.000Z` })));
+
+  // Moving or lengthening the series changes every occurrence, so the second one's overlap refuses the save.
+  for (const changed of [{ startsAt: times.startsAt, endsAt: "2026-10-06T20:01:00.000Z" }, { startsAt: "2026-10-06T18:01:00.000Z", endsAt: "2026-10-06T20:01:00.000Z" }]) {
+    const moved = await patch({ title: "Test Series", required: true, ...changed });
+    assert.equal(moved.status, 409); assert.match((await moved.json() as { error: string }).error, /attendance windows cannot overlap\. Test Series .* conflicts with Test Legacy/);
+  }
+  assert.equal(series()[0].title, "Test Series renamed", "a refused save changes nothing");
+
+  // An occurrence edited on its own is brought back to the series' times by a series edit, so it alone is checked.
+  database.sqlite.prepare("UPDATE meetings SET ends_at = '2026-10-20T19:00:00.000Z' WHERE id = ?").run(meetings[2].id);
+  database.sqlite.exec("INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,created_by,created_at) VALUES ('near-third','primary','Test Near Third','2026-10-20T20:00:00.000Z','2026-10-20T20:30:00.000Z','admin','2026-01-01')");
+  const restored = await patch({ title: "Test Series", required: true, ...times });
+  assert.equal(restored.status, 409); assert.match((await restored.json() as { error: string }).error, /Test Series \(2026-10-20T18:00:00\.000Z\) conflicts with Test Near Third/);
+  database.sqlite.exec("DELETE FROM meetings WHERE id = 'near-third'");
+  const saved = await patch({ title: "Test Series", required: true, ...times });
+  assert.equal(saved.status, 200, await saved.clone().text());
+  assert.deepEqual(series().map((meeting) => [meeting.title, meeting.endsAt]), ["2026-10-06", "2026-10-13", "2026-10-20"].map((day) => ["Test Series", `${day}T20:00:00.000Z`]));
+});
+
 test("schema 51 backups carry the early arrival allowance and older backups restore with 15 minutes", async (context) => {
   const db = new BackupDatabase(); context.after(() => db.raw.close()); const client = backupClient(worker, db);
   db.raw.exec("UPDATE organization_settings SET early_scan_minutes = 40");
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 51);
+  assert.equal(backup.schemaVersion, 52);
   assert.equal(backup.tables.organization_settings[0].early_scan_minutes, 40);
   for (const scope of ["meetings", "roster"] as const) assert.equal("organization_settings" in (await client.backup(scope)).tables, false);
 

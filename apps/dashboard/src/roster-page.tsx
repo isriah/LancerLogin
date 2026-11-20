@@ -4,6 +4,7 @@ import { attendanceRateText,defaultRosterRates,loadReportAttendance,policyResult
 import { FormEvent,type ReactNode,useEffect,useRef,useState } from "react";
 import { api } from "./dashboard-api";
 import { useErrorFocus, useModalFocus } from "./modal-focus";
+import { saveInTwoSteps } from "./two-step-save.ts";
 import { type RosterMember } from "./user-settings";
 import { RosterImportPanel } from "./roster-import-panel";
 import { labelsForMember, type LabelData } from "./member-labels";
@@ -29,17 +30,21 @@ function AttendanceStartField({ idPrefix,summary,value,custom,onCustomChange,onV
 export function AddMemberForm({ idPrefix,members,attendanceEnabled,compact=false,onAdded,onBusyChange,secondaryAction }: { idPrefix: string; members: RosterMember[]; attendanceEnabled: boolean; compact?: boolean; onAdded: () => Promise<void>; onBusyChange?: (busy: boolean) => void; secondaryAction?: ReactNode; }) {
   const [member,setMember]=useState<NewMember>(emptyMember); const [customStart,setCustomStart]=useState(false); const [error,setError]=useState(""); const [busy,setBusyState]=useState(false);
   const errorId=`${idPrefix}-error`; const errorFocus=useErrorFocus(errorId);
+  // The member already added by this form when only the attendance start date failed: a retry sends just the date.
+  const added=useRef<string | undefined>(undefined);
   const setBusy=(value: boolean) => { setBusyState(value); onBusyChange?.(value); };
   const field=(name: string) => `${idPrefix}-${name}`;
   async function submit(event: FormEvent) {
     event.preventDefault(); setError("");
-    if(members.some((current) => current.memberId.toLocaleLowerCase()===member.memberId.trim().toLocaleLowerCase())) { setError("That member ID already exists. Use roster import to update an existing member."); return; }
+    if(!added.current&&members.some((current) => current.memberId.toLocaleLowerCase()===member.memberId.trim().toLocaleLowerCase())) { setError("That member ID already exists. Use roster import to update an existing member."); return; }
     if(member.discordUserId&&!/^\d{10,24}$/.test(member.discordUserId)) { setError("Discord ID must contain 10 to 24 digits, or be left blank."); return; }
     setBusy(true);
     try {
-      const memberId=member.memberId.trim();
-      await api("/admin/members",{ method: "POST",body: JSON.stringify({ mode: "merge",members: [{ memberId,firstName: member.firstName.trim(),lastName: member.lastName.trim(),email: member.email.trim()||undefined,discordUserId: member.discordUserId.trim()||undefined }] }) });
-      if(attendanceEnabled&&!compact&&customStart&&member.attendanceRequiredFrom) await api(`/admin/attendance/members/${encodeURIComponent(memberId)}`,{ method:"PATCH",body:JSON.stringify({ attendanceRequiredFrom:member.attendanceRequiredFrom,expected:null }) });
+      const memberId=member.memberId.trim(); const name=`${member.firstName.trim()} ${member.lastName.trim()}`;
+      const body=JSON.stringify({ mode: "merge",members: [{ memberId,firstName: member.firstName.trim(),lastName: member.lastName.trim(),email: member.email.trim()||undefined,discordUserId: member.discordUserId.trim()||undefined }] });
+      await saveInTwoSteps(added,body,() => api("/admin/members",{ method: "POST",body }),
+        attendanceEnabled&&!compact&&customStart&&member.attendanceRequiredFrom? () => api(`/admin/attendance/members/${encodeURIComponent(memberId)}`,{ method:"PATCH",body:JSON.stringify({ attendanceRequiredFrom:member.attendanceRequiredFrom,expected:null }) }):undefined,
+        (message) => `${name} was added to the roster, but the attendance start date was not saved: ${message} Try again to save only the date, or untick Custom date to keep today.`);
       await onAdded(); setMember(emptyMember()); setCustomStart(false);
     }
     catch(caught) { setError((caught as Error).message); errorFocus(); }
@@ -61,9 +66,12 @@ export function EditMemberDialog({ member,labelData,attendanceEnabled,onClose,on
   useEffect(() => { setFirstName(member?.firstName??""); setLastName(member?.lastName??""); setEmail(member?.email??""); setRequiredFrom(effectiveStart); setCustomStart(false); setActive(Boolean(member?.active)); setError(""); setBusy(false); },[member]);
   useModalFocus(dialog,Boolean(member),busy,onClose);
   const errorFocus=useErrorFocus("edit-member-error");
+  // The details already saved by this dialog when only the attendance start date failed: a retry sends just the date.
+  const detailsSaved=useRef<string | undefined>(undefined);
+  useEffect(() => { detailsSaved.current=undefined; },[member]);
   if(!member) return null;
   const selected=member;
-  async function submit(event: FormEvent) { event.preventDefault(); setError(""); setBusy(true); try { await api(`/admin/members/${encodeURIComponent(selected.id)}`,{ method: "PATCH",body: JSON.stringify({ firstName,lastName,email: email||null,active }) }); if(attendanceEnabled&&customStart&&requiredFrom&&requiredFrom!==storedStart) await api(`/admin/attendance/members/${encodeURIComponent(selected.memberId)}`,{ method:"PATCH",body:JSON.stringify({ attendanceRequiredFrom:requiredFrom,expected:storedStart||null }) }); await onSaved(); onClose(); } catch(caught) { setError((caught as Error).message); errorFocus(); } finally { setBusy(false); } }
+  async function submit(event: FormEvent) { event.preventDefault(); setError(""); setBusy(true); try { const body=JSON.stringify({ firstName,lastName,email: email||null,active }); await saveInTwoSteps(detailsSaved,body,() => api(`/admin/members/${encodeURIComponent(selected.id)}`,{ method: "PATCH",body }),attendanceEnabled&&customStart&&requiredFrom&&requiredFrom!==storedStart? () => api(`/admin/attendance/members/${encodeURIComponent(selected.memberId)}`,{ method:"PATCH",body:JSON.stringify({ attendanceRequiredFrom:requiredFrom,expected:storedStart||null }) }):undefined,(message) => `The member's details were saved, but the attendance start date was not: ${message} Save again to retry only the date.`); await onSaved(); onClose(); } catch(caught) { setError((caught as Error).message); errorFocus(); } finally { setBusy(false); } }
   async function memberAction(action: "status"|"delete") {
     if(busy) return;
     if(action==="delete"&&!window.confirm(`Permanently delete ${selected.firstName} ${selected.lastName}? This is available only when they have no attendance history.`)) return;

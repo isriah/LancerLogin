@@ -200,9 +200,9 @@ test("removal is blocked while a module is on, incompatible updates cannot be co
   // Only the Actions-scoped update token is configured: the optional selection token is explained, not reported as broken.
   await expect(card.getByText("Adding, updating and removing modules from the dashboard is not set up yet.")).toHaveAttribute("data-tone", "neutral");
   const pending = card.locator(".plugin-pending");
-  await expect(pending).toContainText("Reading and changing the module selection from the dashboard needs the optional module selection token, LANCERLOGIN_MODULE_SELECTION_TOKEN.");
+  await expect(pending).toContainText("Reading and changing the module selection from the dashboard needs the optional module management token, LANCERLOGIN_MODULE_SELECTION_TOKEN.");
   await expect(pending).toContainText("Without it, installed modules keep working; edit lancerlogin.modules.json in the private deployment repository instead.");
-  await expect(pending).toContainText("\"Module selection credential\" in docs/MODULE-PLUGINS.md");
+  await expect(pending).toContainText("\"Module management credential\" in docs/MODULE-PLUGINS.md");
   await expect(pending).not.toContainText("unavailable until the selection can be read");
   // The selection cannot be read without the token, so nothing is reported as pending or undeployed, and Apply changes is not offered.
   await expect(pending.getByRole("heading", { name: "Pending changes" })).toBeVisible();

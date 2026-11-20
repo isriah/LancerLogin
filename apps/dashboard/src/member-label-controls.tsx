@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 import { api } from "./dashboard-api";
 import { labelChangesTemplateCsv, labelsForMember, parseLabelChangesCsv, type LabelData } from "./member-labels";
 import { InfoHeading } from "./info-tip";
@@ -29,14 +29,6 @@ function useLabelChanges(onApplied: () => Promise<void>, data?: LabelData) {
   async function prepare(changes: Change[]) { setBusy(true); setNotice(""); try { const result = await api<Preview>("/labels/membership/preview", { method: "POST", body: JSON.stringify({ changes }) }); setPending(result.changes); setPreview(result); } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); } }
   async function apply() { if (!preview) return; setBusy(true); try { await api("/labels/membership/apply", { method: "POST", body: JSON.stringify({ changes: pending, previewToken: preview.previewToken }) }); setPreview(undefined); await onApplied(); setNotice(String(pending.length) + " dated label changes applied."); setLinked(linkedLabelNames(pending, data)); } catch (error) { setPreview(undefined); setNotice((error as Error).message); } finally { setBusy(false); } }
   return { preview, setPreview, busy, notice, setNotice, prepare, apply, linked };
-}
-export function MemberLabelControls({ memberId, memberName, data, onApplied }: { memberId: string; memberName?: string; data?: LabelData; onApplied: () => Promise<void> }) {
-  const [labelId, setLabelId] = useState("");
-  const [action, setAction] = useState<Change["action"]>("add");
-  const [effectiveDate, setEffectiveDate] = useState("");
-  const state = useLabelChanges(onApplied, data);
-  function submit(event: FormEvent) { event.preventDefault(); const label = data?.labels.find((item) => item.id === labelId); if (label) void state.prepare([{ memberId, label: label.name, action, effectiveDate }]); }
-  return <section className="task-card ui-card member-labels-panel" aria-labelledby="member-label-control-title"><InfoHeading id="member-label-control-title" info="Changes take effect on the chosen date, or today when the date is blank. Preview how completed attendance changes before applying.">Assign member labels</InfoHeading>{state.notice && <p className="ui-status" role="status">{state.notice}</p>}<DiscordSyncReminder labels={state.linked} /><form className="form-grid" onSubmit={submit}><label>Label<select required value={labelId} onChange={(event) => setLabelId(event.target.value)}><option value="">Choose label</option>{data?.labels.filter((label) => action === "remove" || label.active).map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}</select></label><label>Action<select value={action} onChange={(event) => setAction(event.target.value as Change["action"])}><option value="add">Add</option><option value="remove">Remove</option></select></label><label>Effective date <span>(optional)</span><input type="date" value={effectiveDate} onChange={(event) => setEffectiveDate(event.target.value)} /><small>{dateHelp}</small></label><button className="ui-button ui-button--primary" type="submit" disabled={state.busy}>Preview label change</button></form>{state.preview && <LabelPreview preview={state.preview} busy={state.busy} names={singleName(memberId, memberName)} onBack={() => state.setPreview(undefined)} onApply={() => void state.apply()} />}</section>;
 }
 export function QuickMemberLabels({ memberId, externalMemberId, memberName, data, onApplied }: { memberId: string; externalMemberId: string; memberName?: string; data?: LabelData; onApplied: () => Promise<void> }) {
   const current = data ? labelsForMember(data, memberId) : [];

@@ -1,6 +1,6 @@
 # LancerLogin
 
-LancerLogin is standalone, open-source, self-hosted attendance software for clubs, classrooms, teams, and arts groups. Each installation runs a web dashboard in the organization's own Cloudflare account and pairs any number of Raspberry Pi attendance kiosks.
+LancerLogin is standalone, open-source, self-hosted attendance software for clubs, classrooms, teams, and arts groups. Each installation runs a web dashboard in the organization's own Cloudflare account and pairs any number of attendance kiosks: Raspberry Pi kiosks with a fingerprint or badge reader, and web kiosks that run in the browser of a touchscreen laptop or tablet.
 
 The public repository contains the source, reviewed releases, and documentation. Each installation is a separate **private** repository created from this template; that private repository holds the installation's deployment history and secrets.
 
@@ -8,7 +8,7 @@ The public repository contains the source, reviewed releases, and documentation.
 
 ## What it does
 
-- Records kiosk check-in and check-out by fingerprint, RFID badge, NFC badge, member ID, or QR code. Members never choose a meeting; the scan time selects it.
+- Records kiosk check-in and check-out by fingerprint, RFID badge, NFC badge, member ID, or QR code on a Raspberry Pi kiosk, and by member ID, member search, or a one-time Discord code on a web kiosk, with an optional member PIN. Members never choose a meeting; the scan time selects it.
 - Lets Admins and Operators manage meetings, attendance corrections, the roster, and reports within their permissions.
 - Keeps fingerprint templates in the R503 sensor by default. Admin-enabled cloud storage can share enrollments between kiosks. Raw fingerprint images, badge values, and QR values are never uploaded. See the [privacy notice](https://isriah.github.io/LancerLogin/privacy.html).
 - Queues scans on each kiosk while the network is down and sends them when it returns.

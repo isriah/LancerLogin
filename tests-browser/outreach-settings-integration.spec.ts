@@ -128,8 +128,7 @@ test("Admins set Outreach's own reporting start date in General and are warned a
   });
   await page.goto("/settings/outreach-setup?section=general");
   await expect(page.getByRole("heading", { name: "Reporting defaults", level: 2 })).toBeVisible();
-  // The field ships with module SDK 1.5.0; an Outreach build pinned before it has no such card.
-  test.skip(await page.getByRole("heading", { name: "Reporting start date", level: 2 }).count() === 0, "the composed Outreach plugin predates its reporting start date");
+  await expect(page.getByRole("heading", { name: "Reporting start date", level: 2 })).toBeVisible();
   await expect(page.getByText("The window limits how far back participation can be logged; it does not affect reports.", { exact: false })).toBeVisible();
   const field = page.getByLabel("Outreach reporting start date (operational baseline)");
   await expect(field).toHaveValue("2026-08-15");

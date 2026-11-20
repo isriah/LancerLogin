@@ -88,6 +88,21 @@ test("report counts are singular only for exactly one", () => {
   assert.equal(countText(3, "person", "people"), "3 people");
 });
 
+test("a draft report shows the period and every filter that limits its rows", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const page = await readFile(new URL("../apps/dashboard/src/reports-page.tsx", import.meta.url), "utf8");
+  // A new report starts with Roster: Active members, and an imported one can carry more. They apply before the first
+  // save, so the chips (each with its remove button) and Clear filters never wait for the report to be saved.
+  assert.match(page, /\{chips\.length > 0 && <div className="report-filter-chips" role="group" aria-label="Applied report filters">/);
+  assert.doesNotMatch(page, /filterable && chips\.length/);
+  // The period chip is a button on drafts too, not plain text.
+  assert.match(page, /\{supports\.has\("period"\) && <button className="ui-button report-period-chip"/);
+  assert.doesNotMatch(page, /<p className="report-compact-scope">\{periodLabel\}<\/p>/);
+  // Adding a filter still waits for the first save.
+  assert.match(page, /const filterable = Boolean\(saved\);/);
+  assert.match(page, /\{filterable && <button ref=\{addFilterButton\}/);
+});
+
 test("report and leaderboard counts use the shared singular-aware helper", async () => {
   const { readFile } = await import("node:fs/promises");
   const page = await readFile(new URL("../apps/dashboard/src/reports-page.tsx", import.meta.url), "utf8");

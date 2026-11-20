@@ -11,6 +11,8 @@ export const pinKeyBytes = 32;
 export const maxPinIterations = 100_000;
 const maxReportedFailures = 200;
 const maxFailureCount = 1000;
+// One call sends the report that was waiting and the one holding the tries made since; anything more waits for the next call.
+const maxReportsPerCall = 2;
 
 /** A member PIN: 4 to 6 digits. */
 export const validPin = (value) => typeof value === "string" && /^\d{4,6}$/.test(value);
@@ -43,10 +45,17 @@ export function normalizePinLockout(value) {
   };
 }
 
-/** How a member ID kiosk finds members and whether it asks for a PIN. Both apply only to the member ID method. */
+/**
+ * How a member ID kiosk finds members, whether it asks for a PIN, and whether it takes Discord codes (with the member
+ * lookup as the backup method, offered only offline or at any time). All apply only to the member ID method; a Worker
+ * from before Discord codes sends neither field, which reads as off and "offline".
+ */
 export function normalizeMemberSettings(settings) {
   const memberId = settings?.authenticationMethod === "member_id";
-  return { memberLookup: memberId && settings?.memberLookup === "search" ? "search" : "entry", requirePin: memberId && settings?.requirePin === true, pinLockout: normalizePinLockout(settings?.pinLockout) };
+  return {
+    memberLookup: memberId && settings?.memberLookup === "search" ? "search" : "entry", requirePin: memberId && settings?.requirePin === true, pinLockout: normalizePinLockout(settings?.pinLockout),
+    discordCode: memberId && settings?.discordCode === true, discordCodeBackup: memberId && settings?.discordCodeBackup === "always" ? "always" : "offline",
+  };
 }
 
 const future = (value, now) => typeof value === "string" && Number.isFinite(Date.parse(value)) && Date.parse(value) > now;
@@ -65,12 +74,26 @@ function cleanEntry(value) {
   return entry.unreported || entry.streak || entry.lockedUntil ? entry : undefined;
 }
 
+/** A saved report: an id and the tries it carries, or null when it is missing or malformed. */
+function cleanReport(value) {
+  if (!value || typeof value !== "object" || typeof value.id !== "string" || !value.id || value.id.length > 128 || !Array.isArray(value.failures)) return null;
+  const failures = value.failures.filter((item) => item && typeof item === "object" && typeof item.memberId === "string" && item.memberId && item.memberId.length <= 100
+    && Number.isInteger(item.count) && item.count >= 1 && item.count <= maxFailureCount && typeof item.lastAt === "string" && Number.isFinite(Date.parse(item.lastAt)))
+    .slice(0, maxReportedFailures).map(({ memberId, count, lastAt }) => ({ memberId, count, lastAt }));
+  return failures.length ? { id: value.id, failures } : null;
+}
+
 /**
  * Wrong PIN tries made while the kiosk could not reach the server, saved owner-only in the kiosk's state folder.
  * `unreported` waits for /kiosk/pin-failures; `streak` and `lockedUntil` apply the cached lockout setting here.
+ *
+ * A report on its way is saved with the members, as `report`: an id and the tries it carries. It is frozen until the
+ * server answers it. Every resend, after a lost answer or a restart, carries the same id and the same tries, so the
+ * server can tell it has applied them and not count them again. Tries made meanwhile add to `unreported` only, and go
+ * in the next report, under a new id.
  */
-export function createPinFailureStore(path, { now = Date.now } = {}) {
-  let members; let operations = Promise.resolve();
+export function createPinFailureStore(path, { now = Date.now, newId = randomUUID } = {}) {
+  let members; let report = null; let operations = Promise.resolve();
   const exclusive = (operation) => { const result = operations.then(operation); operations = result.catch(() => undefined); return result; };
   async function load() {
     if (members) return members;
@@ -78,16 +101,17 @@ export function createPinFailureStore(path, { now = Date.now } = {}) {
       const value = JSON.parse(await readFile(path, "utf8"));
       members = {};
       for (const [memberId, entry] of Object.entries(value?.members ?? {})) { const clean = cleanEntry(entry); if (clean && memberId.length <= 100) members[memberId] = clean; }
-    } catch (error) { if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; members = {}; }
+      report = cleanReport(value?.report);
+    } catch (error) { if (error?.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; members = {}; report = null; }
     return members;
   }
-  async function save(next) {
+  async function save(next, nextReport = report) {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
     try {
       const file = await open(temporary, "wx", 0o600);
-      try { await file.writeFile(`${JSON.stringify({ version: 1, members: next })}\n`); await file.sync(); } finally { await file.close(); }
-      await chmod(temporary, 0o600); await rename(temporary, path); members = next;
+      try { await file.writeFile(`${JSON.stringify({ version: 1, members: next, ...(nextReport ? { report: nextReport } : {}) })}\n`); await file.sync(); } finally { await file.close(); }
+      await chmod(temporary, 0o600); await rename(temporary, path); members = next; report = nextReport;
     } catch (error) { await unlink(temporary).catch(() => undefined); throw error; }
   }
   const update = (memberId, change) => exclusive(async () => {
@@ -97,6 +121,8 @@ export function createPinFailureStore(path, { now = Date.now } = {}) {
     if (JSON.stringify(next[memberId] ?? null) !== before) await save(next);
     return result.outcome;
   });
+  const pendingFailures = (current) => Object.entries(current).filter(([, entry]) => entry.unreported > 0).slice(0, maxReportedFailures)
+    .map(([memberId, entry]) => ({ memberId, count: entry.unreported, lastAt: entry.lastAt ?? new Date(now()).toISOString() }));
   return {
     async lockedUntil(memberId) { const lock = (await load())[memberId]?.lockedUntil; return future(lock, now()) ? lock : null; },
     /** Counts a wrong try. With lockout on, the try that reaches the limit locks the member here for the set minutes. */
@@ -120,11 +146,28 @@ export function createPinFailureStore(path, { now = Date.now } = {}) {
     /** Forgets a member after their PIN is set or reset: tries against an older PIN no longer count. */
     forget(memberId) { return update(memberId, () => ({ entry: undefined })); },
     async pending() {
-      return exclusive(async () => Object.entries(await load()).filter(([, entry]) => entry.unreported > 0).slice(0, maxReportedFailures)
-        .map(([memberId, entry]) => ({ memberId, count: entry.unreported, lastAt: entry.lastAt ?? new Date(now()).toISOString() })));
+      return exclusive(async () => pendingFailures(await load()));
     },
-    /** Removes reported tries; tries counted while the report was on its way stay for the next one. */
-    acknowledge(reported) {
+    /**
+     * The report to send, { id, failures }, or null when there is nothing to report. A report not yet acknowledged is
+     * returned again as it was saved, id and tries; otherwise the tries waiting now are frozen under a new id and saved
+     * before this returns, so a restart sends the same report.
+     */
+    report() {
+      return exclusive(async () => {
+        const current = await load();
+        if (report) return report;
+        const failures = pendingFailures(current);
+        if (!failures.length) return null;
+        await save(current, { id: newId(), failures });
+        return report;
+      });
+    },
+    /**
+     * Removes reported tries; tries counted while the report was on its way stay for the next one. With the id of the
+     * frozen report, that report is done too, in the same write, so the next one starts fresh.
+     */
+    acknowledge(reported, reportId) {
       return exclusive(async () => {
         const next = { ...await load() };
         for (const { memberId, count } of reported) {
@@ -132,18 +175,27 @@ export function createPinFailureStore(path, { now = Date.now } = {}) {
           const clean = cleanEntry({ ...entry, unreported: Math.max(0, entry.unreported - count) });
           if (clean) next[memberId] = clean; else delete next[memberId];
         }
-        await save(next);
+        await save(next, reportId !== undefined && report?.id === reportId ? null : report);
       });
     },
-    clear() { return exclusive(async () => { members = {}; await unlink(path).catch((error) => { if (error?.code !== "ENOENT") throw error; }); }); },
+    clear() { return exclusive(async () => { members = {}; report = null; await unlink(path).catch((error) => { if (error?.code !== "ENOENT") throw error; }); }); },
   };
 }
 
-/** Sends the kiosk's unreported wrong tries with send(failures), then removes what was sent. Returns how many members. */
+/**
+ * Sends the kiosk's unreported wrong tries with send(failures, reportId), then removes what was sent. Returns how many
+ * members. reportId is the same each time the same report is sent, so a server that applied it and whose answer was lost
+ * does not count it twice; a server from before report ids ignores it. A report that is not answered stays as it is for
+ * the next call. Tries made after a report was frozen follow in a report of their own, in the same call.
+ */
 export async function reportPinFailures(store, send) {
-  const failures = await store.pending();
-  if (!failures.length) return 0;
-  await send(failures);
-  await store.acknowledge(failures);
-  return failures.length;
+  let members = 0;
+  for (let reports = 0; reports < maxReportsPerCall; reports += 1) {
+    const report = await store.report();
+    if (!report) break;
+    await send(report.failures, report.id);
+    await store.acknowledge(report.failures, report.id);
+    members += report.failures.length;
+  }
+  return members;
 }

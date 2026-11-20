@@ -1,11 +1,12 @@
 // The web kiosk's screen logic, kept free of React and the browser so it can be tested on its own: reading the pairing
-// code from the address, the attendance steps (entry or search, confirm, sending, result) and how API answers display.
+// code from the address, the attendance steps (Discord code, or entry or search, confirm, sending, result) and how API
+// answers display.
 import type { CSSProperties } from "react";
-import { kioskDisplayForAttendance, kioskDisplayForQueuedScan, kioskState, type KioskDisplay } from "../../../kiosk/src/kiosk-presentation.mjs";
+import { kioskDisplayForAttendance, kioskDisplayForQueuedScan, kioskDisplayForRefusal, kioskState, type KioskDisplay, type ScanRefusal } from "../../../kiosk/src/kiosk-presentation.mjs";
 import { findMemberById, membersUseNumericIds } from "../../../../packages/shared/src/member-lookup.mjs";
 import { normalizePairingCode, pairingCodeAlphabet, validWebPairingCode } from "../../../../packages/shared/src/pairing-code.mjs";
 import { brandTheme } from "../theme.ts";
-import { KioskApiError, KioskNetworkError, type AttendanceResult, type KioskConfig, type KioskSettings, type PinRequest, type PinRequestStatus, type RosterMember } from "./kiosk-api.ts";
+import { KioskApiError, KioskNetworkError, type AttendanceResult, type KioskConfig, type KioskSettings, type PinRequest, type PinRequestStatus, type RosterMember, type SendOutcome } from "./kiosk-api.ts";
 import type { ScanFate } from "./kiosk-sync.ts";
 import type { PinOutcome } from "./member-pin.ts";
 
@@ -15,6 +16,8 @@ export const configRefreshMs = 60_000;
 export const rosterRefreshMs = 5 * 60_000;
 export const heartbeatMs = 60_000;
 export const commandPollMs = 10_000;
+/** Maintenance goes back to the start screen after this long with no tap or key, so it is never left open for a member. */
+export const maintenanceIdleTimeoutMs = 60_000;
 export const maxEntryLength = 40;
 export const maxSearchResults = 6;
 
@@ -81,6 +84,16 @@ export function settingsPinProblem(first: string, second: string) {
 
 export type MemberLookup = "entry" | "search";
 export const memberLookupFor = (config?: KioskConfig) => config?.settings?.memberLookup === "search" ? "search" : "entry";
+/** Discord code mode: members type a code from `/code`. Only a member ID kiosk can have it; an older Worker never sends it. */
+export const discordCodeFor = (config?: KioskConfig) => config?.settings?.discordCode === true && (config.settings.authenticationMethod ?? "member_id") === "member_id";
+/** When the backup method (the member lookup, with a PIN if required) is offered: only offline, or at any time. */
+export type DiscordCodeBackup = "offline" | "always";
+export const discordCodeBackupFor = (config?: KioskConfig): DiscordCodeBackup => config?.settings?.discordCodeBackup === "always" ? "always" : "offline";
+/** What the kiosk shows when nobody is using it: the Discord code screen, or the member lookup. */
+export type IdleMode = "code" | "lookup";
+/** Discord codes need the server, so a kiosk that can't reach it starts at its backup method. */
+export const idleModeFor = (config: KioskConfig | undefined, online: boolean | undefined): IdleMode => discordCodeFor(config) && online !== false ? "code" : "lookup";
+export const discordCodeLength = 6;
 /** A big numeric keypad when every member ID is digits, otherwise the on-screen keyboard. */
 export const entryInputFor = (roster: readonly RosterMember[]) => membersUseNumericIds(roster) ? "keypad" : "keyboard";
 
@@ -95,7 +108,9 @@ export function kioskBrandStyle(settings?: KioskSettings | null): CSSProperties 
 /** A config change that needs a fresh roster: the lookup decides whether emails come with it. */
 export const rosterChanged = (before: KioskConfig | undefined, after: KioskConfig) => memberLookupFor(before) !== memberLookupFor(after) || before?.settings?.authenticationMethod !== after.settings?.authenticationMethod
   // Require PIN decides whether PIN hashes come with it.
-  || (before?.settings?.requirePin === true) !== (after.settings?.requirePin === true);
+  || (before?.settings?.requirePin === true) !== (after.settings?.requirePin === true)
+  // Discord code mode changes what the kiosk's start screen is; the backup method still needs the roster.
+  || discordCodeFor(before) !== discordCodeFor(after) || discordCodeBackupFor(before) !== discordCodeBackupFor(after);
 
 // ---- Attendance steps ----
 
@@ -106,6 +121,9 @@ export type PinStart = { kind: "entry" } | { kind: "none" } | { kind: "locked"; 
  * The attendance steps. With Require PIN, Confirm leads to `pin` (or `no_pin`, or `pin_locked`), and the scan is sent
  * after Enter. A member with no PIN asks for approval (`no_pin`, then `waiting`), and once an Operator approves chooses
  * one, typed twice (`choose_pin`), before the scan is sent.
+ *
+ * In Discord code mode the start is `code`: six digits, sent straight away (`code_sending`) with no confirm or PIN
+ * step. A refused code shows `code_invalid`. The other steps are then the backup method.
  */
 export type Flow =
   | { step: "entry"; text: string }
@@ -117,6 +135,9 @@ export type Flow =
   | { step: "waiting"; member: KioskMember; requestId: string; expiresAt: string }
   | { step: "choose_pin"; member: KioskMember; requestId: string; first?: string; error?: string }
   | { step: "sending"; member: KioskMember }
+  | { step: "code"; digits: string }
+  | { step: "code_sending" }
+  | { step: "code_invalid" }
   | { step: "result"; display: KioskDisplay };
 export type FlowAction =
   | { type: "key"; key: string }
@@ -140,6 +161,10 @@ export type FlowAction =
   | { type: "pin_chosen" }
   | { type: "cancel" }
   | { type: "sent"; display: KioskDisplay }
+  | { type: "code_submit" }
+  | { type: "code_refused"; outcome: CodeOutcome }
+  | { type: "use_backup" }
+  | { type: "home" }
   | { type: "timeout" }
   | { type: "done" }
   | { type: "reset" };
@@ -162,18 +187,72 @@ function flowForPinRequest(member: KioskMember, request: PinRequest): Flow {
 }
 
 export const initialFlow: Flow = { step: "entry", text: "" };
+/** The start in Discord code mode while the kiosk is online. */
+export const codeFlow: Flow = { step: "code", digits: "" };
+export const startFlowFor = (home: IdleMode): Flow => home === "code" ? codeFlow : initialFlow;
+
+/** What a refused Discord code scan means for the screens. */
+export type CodeOutcome =
+  /** Wrong, expired or already used. */
+  | { kind: "invalid" }
+  | { kind: "throttled"; message: string }
+  /** Discord code mode was turned off on the dashboard since the kiosk last loaded its config. */
+  | { kind: "not_enabled" }
+  /** No answer, or a server error: the kiosk is offline, and codes can't be checked offline. */
+  | { kind: "unreachable" };
+/** What the kiosk says when the server's message for throttled codes is missing. */
+export const codeThrottledFallback = "Try again in a few minutes.";
+/** The code screen a refused scan leads to, or undefined when the answer isn't about the code. */
+export function codeOutcomeFor(answer: SendOutcome): CodeOutcome | undefined {
+  if (answer.kind === "unreachable" || answer.kind === "retry" && answer.status >= 500) return { kind: "unreachable" };
+  if (answer.kind !== "rejected") return undefined;
+  switch (answer.code) {
+    case "code_invalid": return { kind: "invalid" };
+    // The server's message says when to try again; the screen's title already says "Too many wrong codes".
+    case "code_throttled": return { kind: "throttled", message: answer.message.replace(/^Too many wrong codes\.\s*/i, "") || codeThrottledFallback };
+    case "code_not_enabled": return { kind: "not_enabled" };
+    default: return undefined;
+  }
+}
+/** The steps that, in Discord code mode, go back to the code screen after `pinIdleTimeoutMs` with no tap or key. */
+export const codeIdleSteps: ReadonlySet<Flow["step"]> = new Set(["entry", "code", "code_invalid"]);
 
 export const unknownMemberDisplay = () => kioskState("unknown", { message: "Member ID not recognized", detail: "Check the ID and try again, or ask an operator for help." });
 
 export const memberName = (member: KioskMember) => `${member.firstName} ${member.lastName}`.trim();
 const visibleMember = ({ memberId, firstName, lastName }: KioskMember): KioskMember => ({ memberId, firstName, lastName });
 
-export function flowReducer(flow: Flow, action: FlowAction): Flow {
+/**
+ * `home` is what the kiosk returns to when a member is done: the member lookup, or the Discord code screen (see
+ * `idleModeFor`). The lookup steps work the same either way; in Discord code mode they are the backup method.
+ */
+export function flowReducer(flow: Flow, action: FlowAction, home: IdleMode = "lookup"): Flow {
+  const start = startFlowFor(home);
   switch (action.type) {
-    case "key": return flow.step === "entry" && flow.text.length < maxEntryLength ? { step: "entry", text: flow.text + action.key } : flow;
+    case "key":
+      if (flow.step === "code") return flow.digits.length < discordCodeLength && /^\d$/.test(action.key) ? { step: "code", digits: flow.digits + action.key } : flow;
+      return flow.step === "entry" && flow.text.length < maxEntryLength ? { step: "entry", text: flow.text + action.key } : flow;
     case "set": return flow.step === "entry" ? { step: "entry", text: action.text.slice(0, maxEntryLength) } : flow;
-    case "backspace": return flow.step === "entry" ? { step: "entry", text: flow.text.slice(0, -1) } : flow;
-    case "clear": return flow.step === "entry" ? initialFlow : flow;
+    case "backspace":
+      if (flow.step === "code") return flow.digits ? { step: "code", digits: flow.digits.slice(0, -1) } : flow;
+      return flow.step === "entry" ? { step: "entry", text: flow.text.slice(0, -1) } : flow;
+    case "clear": return flow.step === "entry" ? initialFlow : flow.step === "code" ? codeFlow : flow;
+    // The code is sent as typed; the server finds the member, so there is no confirm step.
+    case "code_submit": return flow.step === "code" && flow.digits.length === discordCodeLength ? { step: "code_sending" } : flow;
+    case "code_refused": {
+      if (flow.step !== "code_sending") return flow;
+      const { outcome } = action;
+      if (outcome.kind === "invalid") return { step: "code_invalid" };
+      if (outcome.kind === "throttled") return { step: "result", display: kioskState("rejected", { message: "Too many wrong codes", detail: outcome.message, durationMs: 4_000 }) };
+      // The mode is off, or the server can't be reached: the backup method.
+      return initialFlow;
+    }
+    // "No code?" on the code screen, at a kiosk that offers the backup at any time.
+    case "use_backup": return flow.step === "code" ? initialFlow : flow;
+    // The start changed (the kiosk went offline or came back): an idle kiosk shows the new start; a member midway stays.
+    case "home":
+      if (home === "code") return flow.step === "entry" && !flow.text ? codeFlow : flow;
+      return flow.step === "code" || flow.step === "code_invalid" ? initialFlow : flow;
     case "submit": {
       if (flow.step !== "entry" || !flow.text.trim()) return flow;
       const member = findMemberById(action.roster, flow.text);
@@ -200,7 +279,9 @@ export function flowReducer(flow: Flow, action: FlowAction): Flow {
       return { step: "wrong_pin", member, ...(outcome.lockedUntil ? { lockedUntil: outcome.lockedUntil } : {}), ...(outcome.attemptsLeft !== undefined ? { attemptsLeft: outcome.attemptsLeft } : {}) };
     }
     // A wrong try that locked the member can't be tried again.
-    case "try_again": return flow.step === "wrong_pin" && !flow.lockedUntil ? { step: "pin", member: flow.member } : flow;
+    case "try_again":
+      if (flow.step === "code_invalid") return codeFlow;
+      return flow.step === "wrong_pin" && !flow.lockedUntil ? { step: "pin", member: flow.member } : flow;
     case "ask": return flow.step === "no_pin" && !flow.asking ? { step: "no_pin", member: flow.member, asking: true } : flow;
     case "asked": return flow.step === "no_pin" && flow.asking ? flowForPinRequest(flow.member, action.request) : flow;
     case "ask_failed": return flow.step === "no_pin" ? { step: "no_pin", member: flow.member, error: action.message } : flow;
@@ -210,11 +291,16 @@ export function flowReducer(flow: Flow, action: FlowAction): Flow {
     case "choose_first": return flow.step === "choose_pin" ? { step: "choose_pin", member: flow.member, requestId: flow.requestId, first: action.pin } : flow;
     case "choose_problem": return flow.step === "choose_pin" ? { step: "choose_pin", member: flow.member, requestId: flow.requestId, error: action.problem } : flow;
     case "pin_chosen": return flow.step === "choose_pin" && flow.first !== undefined ? { step: "sending", member: flow.member } : flow;
-    case "cancel": return pinIdleSteps.has(flow.step) || flow.step === "waiting" ? initialFlow : flow;
-    case "sent": return flow.step === "sending" ? { step: "result", display: action.display } : flow;
-    case "timeout": return flow.step === "confirm" || pinIdleSteps.has(flow.step) ? initialFlow : flow;
-    case "done": return flow.step === "result" ? initialFlow : flow;
-    case "reset": return initialFlow;
+    case "cancel":
+      // Cancel on the backup method's lookup, or on "Code not recognized", goes back to the code screen.
+      if (flow.step === "code_invalid" || home === "code" && flow.step === "entry") return start;
+      return pinIdleSteps.has(flow.step) || flow.step === "waiting" ? start : flow;
+    case "sent": return flow.step === "sending" || flow.step === "code_sending" ? { step: "result", display: action.display } : flow;
+    case "timeout":
+      if (home === "code" && codeIdleSteps.has(flow.step)) return flow.step === "code" && !flow.digits ? flow : start;
+      return flow.step === "confirm" || pinIdleSteps.has(flow.step) ? start : flow;
+    case "done": return flow.step === "result" ? start : flow;
+    case "reset": return start;
   }
 }
 
@@ -226,8 +312,14 @@ export function displayForAttendance(result: AttendanceResult, member?: KioskMem
   return { ...display, ...(name ? { name } : {}), ...(meetingTitle ? { meetingTitle } : {}) };
 }
 
-/** The result screen for a scan the API refused or never received. A 401 is handled by the page (pair again). */
-export function displayForAttendanceError(error: unknown): KioskDisplay {
+/**
+ * The result screen for a scan the API refused or never received. A 401 is handled by the page (pair again).
+ * `refusal` is the Worker's reason when nothing is wrong with the scan itself; it then decides the screen, as on the
+ * Pi kiosk. An older Worker sends none, and the screens below stay as they were.
+ */
+export function displayForAttendanceError(error: unknown, refusal?: ScanRefusal): KioskDisplay {
+  const notice = kioskDisplayForRefusal(refusal);
+  if (notice) return notice;
   if (!(error instanceof KioskApiError)) return kioskState("rejected", { message: "Couldn't reach the server", detail: "Try again.", durationMs: 3_500 });
   switch (error.code) {
     case "roster_inactive": return unknownMemberDisplay();
@@ -240,11 +332,38 @@ export function displayForAttendanceError(error: unknown): KioskDisplay {
   }
 }
 
+/** The result screen for a Discord code scan the server answered with something other than a code refusal. */
+export function displayForCodeScan(outcome: SendOutcome): KioskDisplay {
+  if (outcome.kind === "accepted") return displayForAttendance(outcome.result);
+  // The member scanned on another kiosk moments apart. The code may be spent, so they ask for a new one.
+  if (outcome.kind === "rescan") return kioskState("rescan", { message: "Try again", detail: "Run /code again and enter the new code in a moment." });
+  if (outcome.kind === "rejected") return displayForAttendanceError(new KioskApiError(outcome.message, outcome.status, outcome.code), outcome.refusal);
+  return kioskState("rejected", { message: "Couldn't check your code", detail: "Try again in a moment. If the code stops working, run /code again.", durationMs: 3_500 });
+}
+
+/** The note on the backup method's start screen while a Discord code kiosk is offline. */
+export const offlineCodeNote = (lookup: MemberLookup) => `Discord codes need a network connection. ${lookup === "search" ? "Search for your name instead." : "Sign in with your member ID instead."}`;
+/** The button on the code screen that opens the backup method. */
+export const backupButtonLabel = (lookup: MemberLookup) => lookup === "search" ? "No code? Search for your name" : "No code? Use member ID";
+
+// ---- Maintenance ----
+
+/**
+ * Where a maintenance PIN task goes when it finishes or is cancelled. Set member PIN hands the kiosk to the member at
+ * the PIN pad, so from there on it leaves maintenance for the start screen; before that, and for a reset, which the
+ * Operator does alone, it goes back to the maintenance menu.
+ */
+export type MaintenanceReturn = "menu" | "start";
+export const maintenanceReturnFor = (task: "set" | "reset", handedToMember: boolean): MaintenanceReturn => task === "set" && handedToMember ? "start" : "menu";
+/** The button that closes a finished maintenance PIN task. */
+export const maintenanceReturnLabel = (to: MaintenanceReturn) => to === "start" ? "Done" : "Back to maintenance";
+
 // ---- Commands ----
 
 export type CommandAction = "reload" | "reset_pin" | "unsupported";
 export const commandActionFor = (type: string): CommandAction => type === "reload_display" ? "reload" : type === "reset_network_pin" ? "reset_pin" : "unsupported";
-export const credentialRejected = (error: unknown) => error instanceof KioskApiError && error.status === 401;
+/** Only the Worker's own "credential is invalid" answer; any other 401 keeps the pairing (see `credentialRevoked`). */
+export const credentialRejected = (error: unknown) => error instanceof KioskApiError && error.credentialRevoked;
 
 // ---- Offline queue ----
 
@@ -261,7 +380,7 @@ export function displayForQueuedScan(member: KioskMember, pending: readonly { me
 /** The result screen for a scan the queue settled while the member waited. */
 export function displayForScanFate(fate: ScanFate, member?: KioskMember): KioskDisplay {
   if (fate.kind === "accepted") return displayForAttendance(fate.result, member);
-  return displayForAttendanceError(new KioskApiError(fate.message, fate.status, fate.code));
+  return displayForAttendanceError(new KioskApiError(fate.message, fate.status, fate.code), fate.kind === "rejected" ? fate.refusal : undefined);
 }
 
 /** The footer's connection status: online or offline, and how many scans wait to sync. */

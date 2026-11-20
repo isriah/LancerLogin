@@ -18,7 +18,9 @@
     <li>Organization settings, accounts, roster, meetings, attendance, corrections, reports, and audit records, in your D1 database</li>
     <li>Data for any plugins you turn on, such as outreach hours or carpool addresses, in the same database</li>
     <li>Encrypted integration credentials; saved values are never displayed again</li>
-    <li>On each kiosk: its pairing, the links between members and fingerprints, badges, or QR codes, a cache of active members, and scans waiting to be sent</li>
+    <li>On each Raspberry Pi kiosk: its pairing, the links between members and fingerprints, badges, or QR codes, a cache of active members, and scans waiting to be sent</li>
+    <li>On each web kiosk, in that device's browser: its pairing, a cache of active members, and scans waiting to be sent</li>
+    <li>Member PINs, only as salted hashes: in your database, in entire-installation backups, and on kiosks that require a PIN</li>
     <li>Fingerprint templates inside the R503 reader where they were enrolled, unless an Admin turns on cloud storage</li>
   </ul>
   <h2 id="not-shared">Not collected or shared</h2>
@@ -28,7 +30,19 @@
     <li>Raw badge and QR values never leave the kiosk; it keeps only keyed digests</li>
     <li>Network addresses are not stored; sign-in rate limits keep only a keyed hash for a day</li>
   </ul>
-  <p>Integrations you turn on send only what they need: Google Calendar and Discord receive meeting titles, notes, and times; Resend and Discord deliver the messages you configure.</p>
+  <p>Integrations you turn on send only what they need: Google Calendar and Discord receive meeting titles, notes, and times; Resend and Discord deliver the messages you configure. The FIRST connection sends FIRST only the team number being looked up, with your saved FIRST username and token for FRC and FTC; it sends nothing about your members or guests.</p>
+
+  <h2 id="kiosk-data">What a kiosk receives</h2>
+  <p>Every paired kiosk receives the names and member IDs of your active members, so it can recognize them without a network. Some settings send more:</p>
+  <ul>
+    <li><strong>Member search</strong> also sends each member's email address to that kiosk, because members can search by the start of their email. The kiosk never shows emails; results list names and member IDs only.</li>
+    <li><strong>Require PIN</strong> also sends each member's PIN hash to that kiosk, so it can check PINs while offline. The PIN itself is never stored anywhere. The hashes are removed from the kiosk when Require PIN is turned off or the kiosk is unpaired.</li>
+    <li><strong>Discord codes</strong> are checked by the server only. A code works once, expires after 2 minutes, and is never stored on a kiosk or in a backup.</li>
+  </ul>
+  <p>A 4 to 6 digit PIN is short, so someone who copies a PIN hash from a stolen device could work the PIN out. Treat a PIN as a way to stop members signing in for each other, not as a password.</p>
+
+  <h2 id="web-kiosk-trust">Web kiosks and trust</h2>
+  <p>Pairing gives a kiosk its own credential. On a web kiosk that credential is kept in the device's browser, and the settings PIN only locks the kiosk's menu on screen; it does not protect the credential. A paired kiosk is trusted to record visits, including visits it checked while offline, and to set or reset member PINs from its maintenance menu. Pair web kiosks only on laptops and tablets your team controls, and choose <strong>Retire kiosk</strong> on <strong>Kiosks</strong> at once if a device is lost.</p>
 
   <h2 id="fingerprint-cloud-storage">Optional fingerprint cloud storage</h2>
   <p><strong>Fingerprint cloud storage</strong> is off by default and only an Admin can turn it on, in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Fingerprint sharing</span>. Get your organization's permission first: fingerprint templates are biometric data.</p>
@@ -37,10 +51,10 @@
   <p>Cloud copies are deleted when the member is made inactive or their member ID changes, when cloud storage or Attendance is turned off, or when the installation is restored from a backup. Turning cloud storage off does not erase templates already on readers. To remove those, reset fingerprint links and use <strong>Erase unlinked fingerprints</strong> on each kiosk.</p>
 
   <h2 id="backups">Backups</h2>
-  <p>Portable dashboard backups exclude fingerprint templates, sharing settings, and the encryption key. They do include password hashes, encrypted integration secrets, and attendance history, so protect them like an Admin password. Raw database exports and copies of a kiosk's local files are more sensitive still and may contain information already deleted from the live installation.</p>
+  <p>Portable dashboard backups exclude fingerprint templates, sharing settings, and the encryption key. They do include password hashes, member PIN hashes, encrypted integration secrets, and attendance history, so protect them like an Admin password. Raw database exports and copies of a kiosk's local files are more sensitive still and may contain information already deleted from the live installation.</p>
 
   <h2 id="kiosk-retirement">Retiring or repurposing a kiosk</h2>
-  <p>Retiring a kiosk in the dashboard stops its credential working, but it cannot erase the Pi. Before giving a kiosk away or reusing it, remove its member links in <strong>Authentication maintenance</strong> on the kiosk and wipe or replace its SD card.</p>
+  <p>Retiring a kiosk in the dashboard stops its credential working, but it cannot erase the device. Before giving a web kiosk's laptop or tablet away, unpair it from its maintenance menu or clear the site's data in its browser. Before giving a Raspberry Pi kiosk away or reusing it, remove its member links in <strong>Authentication maintenance</strong> on the kiosk and wipe or replace its SD card.</p>
 
   <h2 id="deletion">Deletion and contact</h2>
   <p>Data stays in your installation until an Admin deletes it in <span class="ui-path">Settings <span>›</span> Data</span>. Exporting a report or backup creates a copy and does not remove anything.</p>

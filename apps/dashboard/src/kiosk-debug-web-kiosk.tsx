@@ -42,7 +42,7 @@ export function OpenWebKioskOnThisDevice({ onPaired }: { onPaired?: () => void }
       }
       const url = webKioskPairingUrl(pairing.code);
       if (tab) { tab.opener = null; tab.location.href = url; } else window.open(url, "_blank", "noopener");
-      setNotice({ message: `${kioskName} opened in a new tab. It pairs on its own and appears in the kiosk list once it checks in.`, tone: "success" });
+      setNotice({ message: `${kioskName} opened in a new tab with its pairing code filled in. Tap Pair there and choose a settings PIN. It appears in the kiosk list once it checks in.`, tone: "success" });
       onPaired?.();
     } catch (error) {
       tab?.close();
@@ -52,7 +52,7 @@ export function OpenWebKioskOnThisDevice({ onPaired }: { onPaired?: () => void }
   }
 
   return <section className="task-card kiosk-debug-web-kiosk" aria-labelledby="kiosk-debug-web-kiosk-title">
-    <div className="panel-heading"><div><h3 id="kiosk-debug-web-kiosk-title">Open web kiosk on this device</h3><p>Pairs a web kiosk named after this browser and opens it in a new tab, to try the kiosk without a second device. Its check-ins are real attendance, so use synthetic test members.</p></div>
+    <div className="panel-heading"><div><h3 id="kiosk-debug-web-kiosk-title">Open web kiosk on this device</h3><p>Creates a pairing code for a web kiosk named after this browser and opens the kiosk in a new tab with the code filled in, to try the kiosk without a second device. You tap Pair and choose its settings PIN there. Its check-ins are real attendance, so use synthetic test members.</p></div>
       <button className="ui-button" type="button" disabled={busy} onClick={() => void open()}>{busy ? "Opening…" : "Open web kiosk on this device"}</button></div>
     {notice && <p className="ui-status" data-tone={notice.tone} role={notice.tone === "error" ? "alert" : "status"}>{notice.message}</p>}
   </section>;

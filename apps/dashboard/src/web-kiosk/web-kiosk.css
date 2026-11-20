@@ -1,5 +1,5 @@
-/* The web kiosk's own look: a dark surface with the installation's branding colors, following the approved mockup
-   (private/plans/web-kiosk-mockup.html, sections 1 and 2). Every rule sits under .wk-root or the kiosk document. */
+/* The web kiosk's own look: a dark surface with the installation's branding colors, following the approved web kiosk
+   design. Every rule sits under .wk-root or the kiosk document. */
 html.wk-document, html.wk-document body { height: 100%; margin: 0; overflow: hidden; background: #191c1f; overscroll-behavior: none; }
 html.wk-document #root { height: 100%; }
 
@@ -91,6 +91,11 @@ html.wk-document #root { height: 100%; }
 .wk-pins { display: flex; flex-wrap: wrap; gap: .7em; }
 .wk-pins span { width: 1.3em; height: 1.3em; border-radius: 50%; border: 3px solid var(--muted); }
 .wk-pins span.wk-pin-on { background: var(--ink); border-color: var(--ink); }
+
+/* Discord code: six boxes that show the digits as typed, with the next empty box highlighted. */
+.wk-code { display: flex; gap: calc(var(--wk-gap) * .8); }
+.wk-code span { display: grid; place-items: center; width: clamp(2.2rem, 7.5vmin, 3.4rem); height: var(--wk-key); border: 2px solid var(--line); border-radius: var(--wk-radius); color: var(--ink); background: var(--surface-soft); font-size: 1.6em; font-weight: 800; }
+.wk-code span.wk-code-next { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 30%, transparent); }
 
 /* Notes. */
 .wk-note { padding: .6em 1em; border-radius: var(--wk-radius); font-size: .95em; }

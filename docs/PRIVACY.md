@@ -14,6 +14,16 @@ Server-side retirement or Attendance disablement does not remotely erase local m
 
 Unpairing archives the previous installation's local state (credential, roster cache, mappings, attendance history and fingerprint sharing state) in owner-only storage on the kiosk. The kiosk deletes those archives when it is paired again and 30 days after unpairing. Reader templates are not part of the archive and stay on the sensor. File deletion on flash storage does not guarantee physical erasure of the card.
 
+### Web kiosks, member search, member PINs and Discord codes
+
+A web kiosk is a browser page on a laptop or tablet, paired like a Raspberry Pi kiosk. It keeps its kiosk credential, its last settings, the active roster and any scans waiting to be sent in that browser's storage (IndexedDB) on the device. Unpairing removes them; clearing the site's data or retiring the kiosk on **Kiosks** ends the pairing.
+
+Every paired kiosk receives the active roster: each member's roster identity, member ID, first name and last name. A kiosk set to **Member search** also receives each member's email address, because search can match the start of an email; the kiosk never displays it. No other kiosk receives emails. Search results show names and member IDs only, to whoever is standing at the kiosk.
+
+A member PIN is 4 to 6 digits. The server stores only a salted PBKDF2-SHA256 hash, never the PIN, with when and at which kiosk it was set, its wrong tries and any lock. A kiosk with **Require PIN** on, Pi or web, also receives each member's PIN hash, salt and lock state so that it can check PINs while offline; a Pi keeps them in its owner-only roster cache and a web kiosk in the browser's storage. They are sent only while **Require PIN** is on and are removed from the kiosk when it is turned off or the kiosk is unpaired. A hash of a PIN this short can be guessed by someone who copies it from a stolen or compromised device, so treat a member PIN as a deterrent against signing in for a friend, not as a password, and retire a lost kiosk at once. PIN hashes are part of entire-installation backups; see [backup and restore](BACKUP-RESTORE.md). A member's request to set a first PIN (**Ask for approval**) records the member, the kiosk, when it was made and who decided it, and is deleted 30 days after it expires.
+
+A Discord kiosk code (`/code`) is random, works once and expires after two minutes. The server stores only a SHA-256 hash of it with the member it belongs to, and removes used and expired codes. Codes are checked online only: a kiosk never stores one, never queues one and never sends one twice, and codes are not backed up. Discord itself sees that the member ran the command, as for any command.
+
 ### Retired peer fingerprint sharing
 
 Cloud storage is the only supported fingerprint synchronization path. Peer enablement, approval, registration and transfer endpoints are retired. Older clients receive disabled peer metadata; transfer requests are rejected. Upgrading does not enable cloud storage automatically or delete reader templates, local mappings, historical keys, encrypted outboxes or import journals. Preserve this protected historical state for recovery. Previously retained relay ciphertext and backups are not erased by this software change; any historical cleanup requires a separately reviewed procedure.
@@ -50,7 +60,11 @@ Validation uses a bounded, exact server lookup after leaving the ID field. No ro
 
 The installation allows up to 60 public ID checks per minute across all visitors. The temporary limiter stores only an installation identifier, minute window, and count, not entered IDs or network addresses. When the limit or network prevents checking, the form does not label the ID invalid; submissions can still be verified normally. Throttling reduces casual enumeration but is not proof against a determined visitor. Disabling live checks does not turn the public submission form into member authentication.
 
-The dashboard stores local-password hashes, encrypted optional-integration credentials, roster and attendance records, and audit history. Saved integration values are not displayed in the browser. An entire-installation backup can contain password hashes, encrypted integration ciphertext, kiosk credential hashes, and audit history. Protect it like an Administrator credential.
+### FIRST team lookup
+
+The optional **FIRST** connection looks up a team's name from its number. LancerLogin sends FIRST the team number, the program and season it is asking about and, for FRC and FTC, the Events API username and token an Admin saved. It sends no roster, member, guest or attendance information. FIRST's answers are cached in D1 (a team for seven days, "no such team" for one day). The token is stored encrypted like other integration credentials.
+
+The dashboard stores local-password hashes, encrypted optional-integration credentials, roster and attendance records, and audit history. Saved integration values are not displayed in the browser. An entire-installation backup can contain password hashes, member PIN hashes, encrypted integration ciphertext, kiosk credential hashes, and audit history. Protect it like an Administrator credential.
 
 ## No usage reporting
 

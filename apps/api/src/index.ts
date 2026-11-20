@@ -13,13 +13,16 @@ import { commitPluginChange, currentSelectionSha, freshUntil, lookupPluginReleas
 import { discoveryForChannel, releaseRequestHeaders, resolveOfficialRelease } from "./release-discovery.ts";
 import { readUpdateChannel, changeUpdateChannel } from "./update-channel.ts";
 import { checkScanPin, dashboardKioskPinRequests, dashboardMemberPin, decidePinRequest, kioskPinRoute, pinLockoutSettings, readPinLockout, rosterPins } from "./member-pins.ts";
-import { kioskReleaseTransition } from "../../../packages/shared/src/release-policy.mjs";
+import { pruneStaleRows } from "./stale-row-pruning.ts";
+import { discordCodeBackups, issueDiscordKioskCode, normalizeDiscordCodeBackup, pruneDiscordKioskCodes, discordCodeAcceptance, findDiscordKioskCode, type DiscordCodeBackup } from "./discord-kiosk-codes.ts";
+import { kioskHonoursRequirePin, kioskReleaseTransition, requirePinFirstKioskRelease } from "../../../packages/shared/src/release-policy.mjs";
 import { formatPairingCode, generateWebPairingCode, normalizePairingCode, validWebPairingCode } from "../../../packages/shared/src/pairing-code.mjs";
 import { resolveDefaultTheme } from "../../../packages/shared/src/product.ts";
 import { attendanceStatusText, withRecentWindow } from "../../../packages/shared/src/attendance-terms.ts";
 import { type LabelPolicySummary } from "../../../packages/shared/src/attendance-label-sets.ts";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, attendanceWindow, DEFAULT_ANOMALY_THRESHOLD_MINUTES, DEFAULT_EARLY_SCAN_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanMeetingFor, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 import { assertAllowanceChangeKeepsMeetingsApart, attendanceAllowances, meetingWindowLabel, validEarlyScanMinutes, validLateScanMinutes, type AttendanceAllowances } from "./attendance-allowances.ts";
+import { alreadyDoneRefusal, notStartedYetRefusal, scanWindowRefusal } from "./scan-refusal.ts";
 import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, ruleOn as policyRuleOn, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
 import { labelSetResult, reportColumnCsvLabel, reportHasLabelSets, buildReportRows, combinedMemberDataset, defaultReportDefinition, displayedReportRows, reportComputationDefinition, reportBaselineFor, reportBaselineModuleIds, reportBaselineModuleLabel, reportBaselineStarted, type ReportBaselines, filterAndSortReportRows, reportColumnCatalog, reportColumnId, reportColumnLabel, reportDatasetCatalog, reportDatasetDefinition, reportFieldSourceDataset, reportFilterSourceDataset, reportLabelsMatch, reportModuleFilters, resolveReportPeriod, validateReportDefinition, type NormalizedReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
 import { createModuleReportDispatcher, projectCoreMembers, type ReportProjectionContext } from "./module-reporting.ts";
@@ -1016,14 +1019,16 @@ function retireKioskStatements(db: D1Database, principal: Principal, kiosk: { id
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', ?, ?, 'kiosk', ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1)").bind(crypto.randomUUID(), principal.userId, action, kiosk.id, JSON.stringify({ name: kiosk.name, ...options.metadata }), new Date().toISOString(), kiosk.id),
   ];
 }
-type PairedKiosk = { id: string; name: string; pairingId: string; pairingBound: boolean; configuredAuthenticationMethod: KioskAuthenticationMethod; kioskKind: KioskKind; memberLookup: KioskMemberLookup; requirePin: boolean; rosterRevision?: number };
+type PairedKiosk = { id: string; name: string; pairingId: string; pairingBound: boolean; configuredAuthenticationMethod: KioskAuthenticationMethod; kioskKind: KioskKind; memberLookup: KioskMemberLookup; requirePin: boolean; discordCode: boolean; discordCodeBackup: DiscordCodeBackup; discordCodeFailures: number; discordCodeThrottleUntil: string | null; rosterRevision?: number };
 async function kioskFor(request: Request, env: Env, includeRosterRevision = false): Promise<PairedKiosk> {
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Kiosk authentication required");
-  const kiosk = await requireDatabase(env).prepare(`SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound, configured_authentication_method AS configuredAuthenticationMethod, kind AS kioskKind, member_lookup AS memberLookup, require_pin AS requirePin${includeRosterRevision ? ", (SELECT revision FROM kiosk_roster_revision WHERE installation_id = 'primary') AS rosterRevision" : ""} FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1`).bind(await sha256(authorization.slice(7))).first<Omit<PairedKiosk, "pairingBound" | "kioskKind" | "memberLookup" | "requirePin"> & { pairingBound: number; kioskKind?: KioskKind; memberLookup?: KioskMemberLookup; requirePin?: number }>();
+  const kiosk = await requireDatabase(env).prepare(`SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound, configured_authentication_method AS configuredAuthenticationMethod, kind AS kioskKind, member_lookup AS memberLookup, require_pin AS requirePin, discord_code AS discordCode, discord_code_backup AS discordCodeBackup, discord_code_failures AS discordCodeFailures, discord_code_throttle_until AS discordCodeThrottleUntil${includeRosterRevision ? ", (SELECT revision FROM kiosk_roster_revision WHERE installation_id = 'primary') AS rosterRevision" : ""} FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1`).bind(await sha256(authorization.slice(7))).first<Omit<PairedKiosk, "pairingBound" | "kioskKind" | "memberLookup" | "requirePin" | "discordCode" | "discordCodeBackup" | "discordCodeFailures" | "discordCodeThrottleUntil"> & { pairingBound: number; kioskKind?: KioskKind; memberLookup?: KioskMemberLookup; requirePin?: number; discordCode?: number; discordCodeBackup?: string; discordCodeFailures?: number; discordCodeThrottleUntil?: string | null }>();
   if (!kiosk) throw new HttpError(401, "Kiosk credential is invalid");
-  // Require PIN applies only with the member ID method; the method PATCH keeps them together, and this guards older rows.
-  return { ...kiosk, pairingBound: Boolean(kiosk.pairingBound), kioskKind: kiosk.kioskKind === "web" ? "web" : "pi", memberLookup: kiosk.memberLookup === "search" ? "search" : "entry", requirePin: Number(kiosk.requirePin) === 1 && kiosk.configuredAuthenticationMethod === "member_id" };
+  // Require PIN and Discord codes apply only with the member ID method; the method PATCH keeps them together, and this
+  // guards older rows.
+  const memberIdMethod = kiosk.configuredAuthenticationMethod === "member_id";
+  return { ...kiosk, pairingBound: Boolean(kiosk.pairingBound), kioskKind: kiosk.kioskKind === "web" ? "web" : "pi", memberLookup: kiosk.memberLookup === "search" ? "search" : "entry", requirePin: Number(kiosk.requirePin) === 1 && memberIdMethod, discordCode: Number(kiosk.discordCode) === 1 && memberIdMethod, discordCodeBackup: normalizeDiscordCodeBackup(kiosk.discordCodeBackup), discordCodeFailures: Number(kiosk.discordCodeFailures ?? 0), discordCodeThrottleUntil: typeof kiosk.discordCodeThrottleUntil === "string" ? kiosk.discordCodeThrottleUntil : null };
 }
 type KioskAttention = { scansNeedReview: number; clockConfirmed: boolean; clockPendingScans: number; reviewSyncFailing: boolean; weakMatches?: number; readerTemplates?: number; linkedTemplates?: number };
 // The causes behind a kiosk's error category, plus fingerprint matches below the minimum score that it asked to
@@ -1077,12 +1082,12 @@ async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContex
 async function kioskStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]);
   const db = requireDatabase(env);
-  const result = await db.prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, authentication_method AS authenticationMethod, configured_authentication_method AS configuredAuthenticationMethod, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, scans_need_review AS scansNeedReview, clock_confirmed AS clockConfirmed, clock_pending_scans AS clockPendingScans, review_sync_failing AS reviewSyncFailing, weak_matches AS weakMatches, reader_templates AS readerTemplates, linked_templates AS linkedTemplates, kind, member_lookup AS memberLookup, require_pin AS requirePin, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all<Record<string, unknown>>();
-  return response({ kiosks: (result.results ?? []).map((kiosk) => ({ ...kiosk, requirePin: Number(kiosk.requirePin) === 1 })) });
+  const result = await db.prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, authentication_method AS authenticationMethod, configured_authentication_method AS configuredAuthenticationMethod, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, scans_need_review AS scansNeedReview, clock_confirmed AS clockConfirmed, clock_pending_scans AS clockPendingScans, review_sync_failing AS reviewSyncFailing, weak_matches AS weakMatches, reader_templates AS readerTemplates, linked_templates AS linkedTemplates, kind, member_lookup AS memberLookup, require_pin AS requirePin, discord_code AS discordCode, discord_code_backup AS discordCodeBackup, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all<Record<string, unknown>>();
+  return response({ kiosks: (result.results ?? []).map((kiosk) => ({ ...kiosk, requirePin: Number(kiosk.requirePin) === 1, discordCode: Number(kiosk.discordCode) === 1 && kiosk.configuredAuthenticationMethod === "member_id", discordCodeBackup: normalizeDiscordCodeBackup(kiosk.discordCodeBackup) })) });
 }
 async function kioskConfiguration(request: Request, env: Env): Promise<Response> {
   const kiosk = await kioskFor(request, env); const db = requireDatabase(env); const [settings, pinLockout] = await Promise.all([db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, logo_backdrop AS logoBackdrop FROM organization_settings WHERE installation_id = 'primary'").first(), readPinLockout(db)]);
-  return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings: settings ? { ...settings, authenticationMethod: kiosk.configuredAuthenticationMethod, kind: kiosk.kioskKind, memberLookup: kiosk.memberLookup, requirePin: kiosk.requirePin, pinLockout, ...await fingerprintMinimumScore(requireDatabase(env)).catch(() => 0).then(minimumScore => ({ fingerprintMinimumScore: minimumScore, fingerprintReenrollScore: reenrollThreshold(minimumScore) })) } : null });
+  return response({ kiosk: { id: kiosk.id, name: kiosk.name }, settings: settings ? { ...settings, authenticationMethod: kiosk.configuredAuthenticationMethod, kind: kiosk.kioskKind, memberLookup: kiosk.memberLookup, requirePin: kiosk.requirePin, discordCode: kiosk.discordCode, discordCodeBackup: kiosk.discordCodeBackup, pinLockout, ...await fingerprintMinimumScore(requireDatabase(env)).catch(() => 0).then(minimumScore => ({ fingerprintMinimumScore: minimumScore, fingerprintReenrollScore: reenrollThreshold(minimumScore) })) } : null });
 }
 type KioskRosterMember = { rosterId: string; memberId: string; firstName: string; lastName: string; email?: string | null };
 const kioskRosterCache = new ReportDataCache<KioskRosterMember[]>();
@@ -1136,23 +1141,37 @@ async function manageKiosk(request: Request, env: Env, kioskId: string): Promise
 async function kioskAuthenticationConfiguration(request: Request, env: Env, kioskId?: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
   if (!kioskId) throw new HttpError(400, "Select a kiosk and save its authentication method individually");
-  const input = await parseJson<{ authenticationMethod?: KioskAuthenticationMethod; memberLookup?: KioskMemberLookup; requirePin?: boolean }>(request);
+  const input = await parseJson<{ authenticationMethod?: KioskAuthenticationMethod; memberLookup?: KioskMemberLookup; requirePin?: boolean; discordCode?: boolean; discordCodeBackup?: DiscordCodeBackup }>(request);
   if (!input.authenticationMethod || !kioskAuthenticationMethods.has(input.authenticationMethod)) throw new HttpError(400, "Choose fingerprint, RFID badge, NFC badge, member ID entry, or QR code");
   if (input.memberLookup !== undefined && (input.authenticationMethod !== "member_id" || !kioskMemberLookups.has(input.memberLookup))) throw new HttpError(400, "Member search or member ID entry can be chosen only with the member ID method");
   if (input.requirePin !== undefined && (typeof input.requirePin !== "boolean" || input.requirePin && input.authenticationMethod !== "member_id")) throw new HttpError(400, "Require PIN can be turned on only with the member ID method");
-  const kiosk = await db.prepare("SELECT id, kind, configured_authentication_method AS authenticationMethod, member_lookup AS memberLookup, require_pin AS requirePin FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; kind?: KioskKind; authenticationMethod: KioskAuthenticationMethod; memberLookup?: KioskMemberLookup; requirePin?: number }>();
+  if (input.discordCode !== undefined && (typeof input.discordCode !== "boolean" || input.discordCode && input.authenticationMethod !== "member_id")) throw new HttpError(400, "Discord codes can be turned on only with the member ID method");
+  if (input.discordCodeBackup !== undefined && (typeof input.discordCodeBackup !== "string" || !discordCodeBackups.has(input.discordCodeBackup))) throw new HttpError(400, "The backup for Discord codes is offline or always");
+  const kiosk = await db.prepare("SELECT id, kind, configured_authentication_method AS authenticationMethod, member_lookup AS memberLookup, require_pin AS requirePin, discord_code AS discordCode, discord_code_backup AS discordCodeBackup, release_version AS releaseVersion FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(kioskId).first<{ id: string; kind?: KioskKind; releaseVersion?: string | null; authenticationMethod: KioskAuthenticationMethod; memberLookup?: KioskMemberLookup; requirePin?: number; discordCode?: number; discordCodeBackup?: string }>();
   if (!kiosk) throw new HttpError(404, "Active kiosk not found");
-  if (kiosk.kind === "web" && input.authenticationMethod !== "member_id") throw new HttpError(400, "Web kiosks identify members by member ID or member search.");
-  // Any other method resets the lookup, so a later switch back to member ID starts on entry.
-  const memberLookup: KioskMemberLookup = input.authenticationMethod === "member_id" ? input.memberLookup ?? "entry" : "entry";
+  if (kiosk.kind === "web" && input.authenticationMethod !== "member_id") throw new HttpError(400, "Web kiosks identify members by Discord code, member ID or member search.");
+  // The lookup stays as it was when omitted with the member ID method, so a save that does not mention it keeps member
+  // search. Any other method resets it, so a later switch back to member ID starts on entry.
+  const previousMemberLookup: KioskMemberLookup = kiosk.authenticationMethod === "member_id" && kiosk.memberLookup === "search" ? "search" : "entry";
+  const memberLookup: KioskMemberLookup = input.authenticationMethod === "member_id" ? input.memberLookup ?? previousMemberLookup : "entry";
   // Require PIN stays as it was when omitted with the member ID method, so a save that does not mention it never turns
   // PINs off; any other method clears it.
   const previousRequirePin = Number(kiosk.requirePin) === 1 && kiosk.authenticationMethod === "member_id";
   const requirePin = input.authenticationMethod === "member_id" ? input.requirePin ?? previousRequirePin : false;
-  const result = await db.prepare("UPDATE kiosks SET configured_authentication_method = ?, member_lookup = ?, require_pin = ? WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(input.authenticationMethod, memberLookup, requirePin ? 1 : 0, kioskId).run();
+  // Only turning Require PIN on is refused, and only for a Pi kiosk whose last reported release is from before member
+  // PINs (or unknown): it would keep sending plain scans, which are refused, and record nothing. The same flag is
+  // "Require PIN for the backup method" on a Discord code kiosk. Turning it off and every other save go through.
+  if (requirePin && !previousRequirePin && !kioskHonoursRequirePin(kiosk.kind, kiosk.releaseVersion)) throw new HttpError(409, `Update this kiosk before turning on Require PIN. Kiosks older than ${requirePinFirstKioskRelease} do not ask for a PIN, so every scan would be refused.`, undefined, "kiosk_update_required_for_pin");
+  // Discord codes follow the same rule. The backup choice is kept whatever the method, so turning codes back on finds it.
+  const previousDiscordCode = Number(kiosk.discordCode) === 1 && kiosk.authenticationMethod === "member_id";
+  const discordCode = input.authenticationMethod === "member_id" ? input.discordCode ?? previousDiscordCode : false;
+  const previousDiscordCodeBackup = normalizeDiscordCodeBackup(kiosk.discordCodeBackup);
+  const discordCodeBackup = input.discordCodeBackup ?? previousDiscordCodeBackup;
+  // Turning codes off, or on again, starts the kiosk's wrong-code count over.
+  const result = await db.prepare("UPDATE kiosks SET configured_authentication_method = ?, member_lookup = ?, require_pin = ?, discord_code = ?, discord_code_backup = ?, discord_code_failures = CASE WHEN discord_code = ? THEN discord_code_failures ELSE 0 END, discord_code_throttle_until = CASE WHEN discord_code = ? THEN discord_code_throttle_until ELSE NULL END WHERE installation_id = 'primary' AND id = ? AND active = 1").bind(input.authenticationMethod, memberLookup, requirePin ? 1 : 0, discordCode ? 1 : 0, discordCodeBackup, discordCode ? 1 : 0, discordCode ? 1 : 0, kioskId).run();
   if (result.meta?.changes === 0) throw new HttpError(409, "Kiosk was retired before its method could be saved");
-  await writeAudit(db, principal, "kiosk.authentication_method_updated", "kiosk", kioskId, { previousMethod: kiosk.authenticationMethod, authenticationMethod: input.authenticationMethod, previousMemberLookup: kiosk.memberLookup ?? "entry", memberLookup, previousRequirePin, requirePin });
-  return response({ kioskId, authenticationMethod: input.authenticationMethod, memberLookup, requirePin });
+  await writeAudit(db, principal, "kiosk.authentication_method_updated", "kiosk", kioskId, { previousMethod: kiosk.authenticationMethod, authenticationMethod: input.authenticationMethod, previousMemberLookup: kiosk.memberLookup ?? "entry", memberLookup, previousRequirePin, requirePin, previousDiscordCode, discordCode, previousDiscordCodeBackup, discordCodeBackup });
+  return response({ kioskId, authenticationMethod: input.authenticationMethod, memberLookup, requirePin, discordCode, discordCodeBackup });
 }
 async function dashboardKioskEnrollment(request: Request, env: Env, kioskId: string, sessionId?: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]), db = requireDatabase(env);
@@ -1375,11 +1394,15 @@ async function updateMeeting(request: Request, env: Env, meetingId: string): Pro
   const historicalChange = Boolean(current.required) !== (input.required !== false) || current.audienceMode !== audience.mode || [...currentIds].sort().join(",") !== [...audience.labelIds].sort().join(",");
   const impact = historicalChange ? await meetingImpactPreview(db, meetingId, input.required !== false, audience) : { changed: false, completed: false, impact: [], previewToken: "" };
   if (impact.changed && impact.completed && input.impactToken !== impact.previewToken) throw new HttpError(409, "Preview and confirm the historical attendance impact before saving this meeting");
-  const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<Partial<AttendanceAllowances>>();
-  await assertNoMeetingOverlap(db, [{ id: meetingId, title: input.title, startsAt: input.startsAt, endsAt: input.endsAt }], attendanceAllowances(settings), [meetingId]);
+  // Only a meeting whose times change is checked for overlap. Meetings saved before the early arrival allowance existed may
+  // already overlap a neighbour, and editing their title, notes, requirement or audience must still save.
+  const rescheduled = Date.parse(current.startsAt) !== Date.parse(input.startsAt) || Date.parse(current.endsAt) !== Date.parse(input.endsAt);
+  if (rescheduled) {
+    const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<Partial<AttendanceAllowances>>();
+    await assertNoMeetingOverlap(db, [{ id: meetingId, title: input.title, startsAt: input.startsAt, endsAt: input.endsAt }], attendanceAllowances(settings), [meetingId]);
+  }
   const assignment = input.weightCategoryId === undefined ? undefined : await resolveMeetingWeightAssignment(db, input.weightCategoryId, input.startsAt, input.endsAt);
   await db.batch(meetingUpdateStatements(db, principal.userId, meetingId, input, audience, assignment, { historicalImpact: impact.completed && impact.changed ? impact.impact : [] }));
-  const rescheduled = Date.parse(current.startsAt) !== Date.parse(input.startsAt) || Date.parse(current.endsAt) !== Date.parse(input.endsAt);
   const discordNotices = historicalChange || rescheduled ? await retractDiscordAttendanceNotices(env, principal, [meetingId]) : [];
   const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "sync", [meetingId]);
   return response({ discordNotices, meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, notes: input.notes?.trim() || null, audienceMode: audience.mode, audienceLabelIds: audience.labelIds, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, weightCategoryName: assignment?.name ?? null, attendanceWeight: assignment?.weight ?? 1 }) }, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
@@ -1404,10 +1427,14 @@ async function updateMeetingSeries(request: Request, env: Env, seriesId: string)
   if (Date.parse(anchor.endsAt) <= Date.now()) throw new HttpError(409, "Edit a completed occurrence individually to preview its historical impact");
   const anchorIds = (await meetingAudienceIds(db, [input.meetingId])).get(input.meetingId) ?? [];
   const audience = await resolveAudience(db, { ...input, audienceMode: input.audienceMode ?? anchor.audienceMode, audienceLabelIds: input.audienceLabelIds ?? anchorIds }, anchorIds);
-  const future = await db.prepare("SELECT id, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL ORDER BY starts_at").bind(seriesId, anchor.startsAt).all<{ id: string; startsAt: string }>();
+  const future = await db.prepare("SELECT id, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL ORDER BY starts_at").bind(seriesId, anchor.startsAt).all<{ id: string; startsAt: string; endsAt: string }>();
   const duration = Date.parse(input.endsAt) - Date.parse(input.startsAt); const shift = Date.parse(input.startsAt) - Date.parse(anchor.startsAt); const proposed = (future.results ?? []).map((meeting) => { const start = new Date(Date.parse(meeting.startsAt) + shift); return { id: meeting.id, title: input.title, startsAt: start.toISOString(), endsAt: new Date(start.getTime() + duration).toISOString() }; });
-  const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<Partial<AttendanceAllowances>>();
-  await assertNoMeetingOverlap(db, proposed, attendanceAllowances(settings), proposed.map((meeting) => meeting.id));
+  // Only occurrences whose times change are checked for overlap, as in updateMeeting; the others stay where they already were.
+  const rescheduled = proposed.filter((meeting, index) => { const current = future.results![index]; return Date.parse(current.startsAt) !== Date.parse(meeting.startsAt) || Date.parse(current.endsAt) !== Date.parse(meeting.endsAt); });
+  if (rescheduled.length) {
+    const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<Partial<AttendanceAllowances>>();
+    await assertNoMeetingOverlap(db, rescheduled, attendanceAllowances(settings), rescheduled.map((meeting) => meeting.id));
+  }
   const assignment = input.weightCategoryId === undefined ? undefined : await resolveMeetingWeightAssignment(db, input.weightCategoryId, input.startsAt, input.endsAt);
   const statements = proposed.map((meeting) => assignment === undefined
     ? db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, audience_mode = ?, is_test = 0 WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title!.trim(), meeting.startsAt, meeting.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, audience.mode, meeting.id)
@@ -1460,15 +1487,19 @@ async function restoreMeetings(request: Request, env: Env, meetingId: string): P
 }
 // Kiosk scans keep working on a schema from before migration 0099 (an upgrade that has not applied it yet): the early
 // arrival allowance then takes its 15-minute default. Migrated schemas read both allowances in one query, as before.
-async function scanAllowances(db: D1Database): Promise<AttendanceAllowances> {
+// The same read carries the installation's time zone, which only a refused scan uses (scan-refusal.ts).
+async function scanAllowances(db: D1Database): Promise<AttendanceAllowances & { timeZone: string }> {
+  type Row = Partial<AttendanceAllowances> & { timeZone?: string | null };
+  const settings = (row: Row | null) => ({ ...attendanceAllowances(row), timeZone: row?.timeZone || "UTC" });
   try {
-    return attendanceAllowances(await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<Partial<AttendanceAllowances>>());
+    return settings(await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<Row>());
   } catch (error) {
     if (!/no such column: early_scan_minutes/.test(error instanceof Error ? error.message : String(error))) throw error;
-    return attendanceAllowances(await db.prepare("SELECT late_scan_minutes AS lateScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<Partial<AttendanceAllowances>>());
+    return settings(await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<Row>());
   }
 }
-type KioskScanOrigin = { kioskId: string; refuseWrongMatches: boolean; matchScore?: unknown };
+// discordCodeHash: the scan named its member with a Discord code, which is used up only by the batch that records the scan.
+type KioskScanOrigin = { kioskId: string; refuseWrongMatches: boolean; matchScore?: unknown; discordCodeHash?: string };
 async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual", actorId?: string, origin?: KioskScanOrigin): Promise<Response> {
   if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, and a valid occurredAt timestamp are required", undefined, "invalid_scan");
   const existing = await db.prepare("SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?").bind(input.eventId.trim()).first<{ action: AttendanceAction }>();
@@ -1481,15 +1512,19 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
   // Without a chosen meeting, one read returns the latest meeting that started by the scan and the next one to start, whose
   // early arrival window may hold the scan; scanMeetingFor picks between them.
   type ScanMeeting = { id: string; title: string; startsAt: string; endsAt: string };
-  const meeting = input.meetingId
-    ? await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<ScanMeeting>()
-    : scanMeetingFor((await db.prepare("SELECT id, title, startsAt, endsAt FROM (SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL AND starts_at <= ? ORDER BY starts_at DESC LIMIT 1) UNION ALL SELECT id, title, startsAt, endsAt FROM (SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL AND starts_at > ? ORDER BY starts_at LIMIT 1)").bind(input.occurredAt, input.occurredAt).all<ScanMeeting>()).results ?? [], input.occurredAt, allowances.lateScanMinutes, allowances.earlyScanMinutes);
+  // A scan with a chosen meeting reads that meeting only, so it has no candidates and its refusals carry no window reason.
+  const candidates = input.meetingId ? undefined : (await db.prepare("SELECT id, title, startsAt, endsAt FROM (SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL AND starts_at <= ? ORDER BY starts_at DESC LIMIT 1) UNION ALL SELECT id, title, startsAt, endsAt FROM (SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL AND starts_at > ? ORDER BY starts_at LIMIT 1)").bind(input.occurredAt, input.occurredAt).all<ScanMeeting>()).results ?? [];
+  const meeting = candidates
+    ? scanMeetingFor(candidates, input.occurredAt, allowances.lateScanMinutes, allowances.earlyScanMinutes)
+    : await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<ScanMeeting>();
+  // Why no meeting takes the scan, from the meetings already read: no further query.
+  const windowRefusal = () => candidates ? scanWindowRefusal(candidates, input.occurredAt!, settings.timeZone, allowances.lateScanMinutes, allowances.earlyScanMinutes) : undefined;
   if (!member) throw new HttpError(404, "This identity is not linked to an active roster member", undefined, "roster_inactive");
-  if (!meeting) throw new HttpError(409, "No meeting is accepting attendance scans at this time", undefined, "no_eligible_meeting");
+  if (!meeting) throw new HttpError(409, "No meeting is accepting attendance scans at this time", undefined, "no_eligible_meeting", windowRefusal());
   const participationStartsOn = member.attendanceRequiredFrom ?? member.rosterAddedAt?.slice(0, 10) ?? "";
-  if (participationStartsOn && meeting.startsAt.slice(0, 10) < participationStartsOn) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${participationStartsOn}`, undefined, "participation_not_started");
+  if (participationStartsOn && meeting.startsAt.slice(0, 10) < participationStartsOn) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${participationStartsOn}`, undefined, "participation_not_started", notStartedYetRefusal(participationStartsOn));
   const window = scanWindowState(meeting, input.occurredAt, allowances.lateScanMinutes, allowances.earlyScanMinutes);
-  if (!window.accepted) throw new HttpError(409, input.meetingId ? window.reason : "No meeting is accepting attendance scans at this time", undefined, input.meetingId ? "scan_window_closed" : "no_eligible_meeting");
+  if (!window.accepted) throw new HttpError(409, input.meetingId ? window.reason : "No meeting is accepting attendance scans at this time", undefined, input.meetingId ? "scan_window_closed" : "no_eligible_meeting", windowRefusal());
   const occurredAt = new Date(input.occurredAt).toISOString();
   const [prior, conflict] = await Promise.all([
     db.prepare("SELECT id, action, occurred_at AS occurredAt FROM attendance_events WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ? ORDER BY occurred_at, id").bind(member.id, meeting.id).all<{ id: string; action: AttendanceAction; occurredAt: string }>(),
@@ -1505,26 +1540,46 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
     ? priorEvents.some((event) => event.action === input.desiredAction) ? { status: "duplicate" as const, action: input.desiredAction } : input.desiredAction === "check_out" && !priorEvents.some((event) => event.action === "check_in") ? { status: "complete" as const } : { status: "accepted" as const, action: input.desiredAction }
     : nextAttendanceAction(priorEvents, input.occurredAt);
   if (transition.status === "duplicate") return response({ accepted: false, duplicate: true, eventId: input.eventId, action: transition.action, attendanceClosesAt: window.closesAt }, 200);
-  if (transition.status === "complete") throw new HttpError(409, "Attendance is already complete for this member and meeting", undefined, "attendance_complete");
+  if (transition.status === "complete") throw new HttpError(409, "Attendance is already complete for this member and meeting", undefined, "attendance_complete", priorEvents.some((event) => event.action === "check_in") && priorEvents.some((event) => event.action === "check_out") ? alreadyDoneRefusal() : undefined);
   const id = crypto.randomUUID();
-  const insert = db.prepare("INSERT OR IGNORE INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by, action) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)").bind(id, member.id, meeting.id, source, input.occurredAt, input.eventId.trim(), actorId ?? null, transition.action);
+  // A Discord code scan is recorded only while its code is still good, and uses the code up in the same batch: every
+  // refusal above, and a failure here, leaves the code for another try. If another scan used it first, this one is refused.
+  const code = origin?.discordCodeHash ? discordCodeAcceptance(db, { kioskId: origin.kioskId, codeHash: origin.discordCodeHash, memberId: member.id, eventId: input.eventId.trim() }) : undefined;
+  const insert = db.prepare(`INSERT OR IGNORE INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by, action) ${code ? `SELECT ?, 'primary', ?, ?, ?, ?, ?, ?, ? WHERE ${code.live}` : "VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)"}`).bind(id, member.id, meeting.id, source, input.occurredAt, input.eventId.trim(), actorId ?? null, transition.action, ...(code?.liveValues ?? []));
   // Kiosk scans also remember their kiosk, in the same round trip, so a scan on another kiosk can be checked against them.
-  // A schema before 0088 lacks the table; the scan is then recorded alone, as before.
-  const result = origin ? await db.batch([insert, ...acceptedScanStatements(db, { eventId: input.eventId.trim(), kioskId: origin.kioskId, memberId: member.id, occurredAt })]).then(results => results[0], () => insert.run()) : await insert.run();
+  // A schema before 0088 lacks the table; the scan is then recorded alone, as before. (Discord codes need a later schema.)
+  const accepted = origin ? acceptedScanStatements(db, { eventId: input.eventId.trim(), kioskId: origin.kioskId, memberId: member.id, occurredAt }) : [];
+  let result: Awaited<ReturnType<D1Statement["run"]>>;
+  if (code) {
+    const results = await db.batch([insert, ...code.statements, ...accepted]); result = results[0]!;
+    const refusal = (result.meta?.changes ?? 1) > 0 ? undefined : code.refused(results.slice(1, 1 + code.statements.length));
+    if (refusal) throw refusal;
+  } else result = origin ? await db.batch([insert, ...accepted]).then(results => results[0]!, () => insert.run()) : await insert.run();
   return response({ accepted: (result.meta?.changes ?? 1) > 0, duplicate: (result.meta?.changes ?? 1) === 0, eventId: input.eventId, action: transition.action, attendanceClosesAt: window.closesAt, meeting: { id: meeting.id, title: meeting.title }, member: { id: member.id, externalId: member.externalId, displayName: `${member.firstName} ${member.lastName}`.trim() } }, 202);
 }
 async function kioskAttendance(request: Request, env: Env): Promise<Response> {
-  const kiosk = await kioskFor(request, env); const input = await parseJson<{ eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction; pairingId?: string; matchScore?: unknown; rescanSupported?: unknown; pin?: unknown; pinCheck?: unknown }>(request);
+  const kiosk = await kioskFor(request, env); const input = await parseJson<{ eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction; pairingId?: string; matchScore?: unknown; rescanSupported?: unknown; pin?: unknown; pinCheck?: unknown; discordCode?: unknown }>(request);
   if ((kiosk.pairingBound || input.pairingId !== undefined) && input.pairingId !== kiosk.pairingId) throw new HttpError(409, "This queued scan belongs to a different kiosk pairing and was not attached to the current kiosk", undefined, "pairing_mismatch");
-  const db = requireDatabase(env);
+  const db = requireDatabase(env); let discordCodeHash: string | undefined;
   // A kiosk with Require PIN checks the member's PIN before the scan is recorded; other kiosks ignore pin and pinCheck.
   // A malformed scan skips the check and fails below with its usual reason.
-  if (kiosk.requirePin && input.eventId?.trim() && input.eventId.length <= 100 && input.memberId && validTimestamp(input.occurredAt)) await checkScanPin(db, kiosk, input);
+  // A scan with discordCode names no member: the code, from /code in Discord, does. It is looked up here, online, whatever
+  // pin or pinCheck say, and never needs a PIN: Require PIN covers the kiosk's member ID method only. Only the scan being
+  // recorded uses the code up (recordAttendance).
+  if (input.discordCode !== undefined && input.discordCode !== null) {
+    if (input.memberId !== undefined && input.memberId !== null) throw new HttpError(400, "Send a member ID or a Discord code, not both", undefined, "invalid_scan");
+    // A malformed scan fails before the code is looked up.
+    if (!input.eventId?.trim() || input.eventId.length > 100 || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, a Discord code, and a valid occurredAt timestamp are required", undefined, "invalid_scan");
+    const found = await findDiscordKioskCode(db, kiosk, { discordCode: input.discordCode, eventId: input.eventId.trim() });
+    if ("duplicate" in found) return response({ accepted: false, duplicate: true, eventId: input.eventId, action: found.duplicate }, 200);
+    input.memberId = found.memberId; discordCodeHash = found.codeHash;
+  }
+  else if (kiosk.requirePin && input.eventId?.trim() && input.eventId.length <= 100 && input.memberId && validTimestamp(input.occurredAt)) await checkScanPin(db, kiosk, input);
   // Recorded whatever the outcome, so rejected scans show their match confidence too. Diagnostics never block attendance.
   if (input.matchScore !== undefined) await recordScanMatch(db, kiosk.id, input.eventId, input.matchScore).catch(() => undefined);
   // Only kiosks that can ask for a rescan are refused a possible wrong match. Older kiosks retry an unknown refusal
   // forever, holding up every scan queued behind it, so their scans are recorded as before.
-  return recordAttendance(db, input, "kiosk", undefined, { kioskId: kiosk.id, refuseWrongMatches: input.rescanSupported === true, matchScore: input.matchScore });
+  return recordAttendance(db, input, "kiosk", undefined, { kioskId: kiosk.id, refuseWrongMatches: input.rescanSupported === true, matchScore: input.matchScore, ...(discordCodeHash ? { discordCodeHash } : {}) });
 }
 async function attendance(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const url = new URL(request.url);
@@ -2853,6 +2908,7 @@ type DiscordApplicationCommand = { id?: string; application_id?: string; guild_i
 const coreDiscordManagedCommands: DiscordApplicationCommand[] = [
   { name: "pair", type: 1, description: "Link your Discord account to your LancerLogin member ID", options: [{ name: "member-id", description: "Your LancerLogin member ID", type: 3, required: true }] },
   { name: "attendance-report", type: 1, description: "Privately view your current LancerLogin attendance report" },
+  { name: "code", type: 1, description: "Get a one-time code to sign in at a kiosk" },
   { name: "label", type: 1, description: "Associate a Discord role with a matching LancerLogin label", options: [{ name: "role", description: "Discord role to associate", type: 8, required: true }] },
 ];
 const discordManagedCommands: DiscordApplicationCommand[] = [...coreDiscordManagedCommands, ...bundledModuleRegistry.modules.flatMap((module) => module.discordCommands)];
@@ -3387,18 +3443,68 @@ async function discordLabelSource(db: D1Database, mapping: DiscordLabelMapping, 
   if (mapping.guildId !== guildId) throw new HttpError(409, "This mapping belongs to a different Discord server. Unlink it before continuing.");
   const settings = await db.prepare("SELECT time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone: string }>();
   const today = policyLocalDate(new Date().toISOString(), settings?.timeZone ?? "UTC");
-  const result = await db.prepare("SELECT m.id, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id AS discordUserId, m.active, (SELECT c.action FROM member_label_changes c WHERE c.installation_id = m.installation_id AND c.member_id = m.id AND c.label_id = ? AND c.effective_date <= ? ORDER BY c.effective_date DESC, c.created_at DESC, c.id DESC LIMIT 1) AS labelAction FROM members m WHERE m.installation_id = 'primary' ORDER BY m.id").bind(mapping.labelId, today).all<{ id: string; memberId: string; firstName: string; lastName: string; discordUserId?: string; active: number; labelAction?: string }>();
+  const result = await db.prepare("SELECT m.id, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id AS discordUserId, m.active, (SELECT c.action FROM member_label_changes c WHERE c.installation_id = m.installation_id AND c.member_id = m.id AND c.label_id = ? AND c.effective_date <= ? ORDER BY c.effective_date DESC, c.created_at DESC, c.id DESC LIMIT 1) AS labelAction FROM members m WHERE m.installation_id = 'primary' ORDER BY m.id").bind(mapping.labelId, today).all<DiscordLabelRosterRow>();
   const roster = result.results ?? [];
-  const sourceFingerprint = await sha256(JSON.stringify({ labelId: mapping.labelId, roleId: mapping.roleId, guildId, today, active: mapping.active, roster }));
-  return { roster, sourceFingerprint };
+  return { roster, sourceFingerprint: await discordLabelSourceFingerprint(mapping, guildId, today, roster) };
 }
+type DiscordLabelRosterRow = { id: string; memberId: string; firstName: string; lastName: string; discordUserId?: string; active: number; labelAction?: string | null };
+type DiscordLabelSourceState = { roster: DiscordLabelRosterRow[]; sourceFingerprint: string };
+/** A job is stale once this differs, so every path that builds a label's roster must produce the same rows in the same order. */
+const discordLabelSourceFingerprint = (mapping: DiscordLabelMapping, guildId: string, today: string, roster: DiscordLabelRosterRow[]) => sha256(JSON.stringify({ labelId: mapping.labelId, roleId: mapping.roleId, guildId, today, active: mapping.active, roster }));
 type DiscordServerState = { access: DiscordRoleAccess; guildMembers: DiscordGuildMember[] };
-async function discordRoleSnapshot(db: D1Database, config: Record<string, string>, labelId: string, server?: DiscordServerState): Promise<DiscordRoleSnapshot> {
-  const mapping = await discordLabelMapping(db, labelId);
+/** A subquery that selects label IDs, with its bound values: the labels a bulk route works on. */
+type DiscordLabelSet = { sql: string; values: unknown[] };
+type DiscordLabelSources = { mappings: Map<string, DiscordLabelMapping>; today: string; members: Omit<DiscordLabelRosterRow, "labelAction">[]; actions: Map<string, Map<string, string>> };
+/**
+ * The mapping and roster of every label in a set from four reads, however many labels it holds. Pass a coalescing
+ * database so they share one D1 batch, which the Workers Free plan counts as one of its 50 subrequests per invocation.
+ * discordLabelSource reads one label at a time; both must give the same roster and fingerprint.
+ */
+async function discordLabelSources(reads: D1Database, labels: DiscordLabelSet): Promise<DiscordLabelSources> {
+  // Label changes are read up to the latest date any time zone can be on, then cut to the installation's own date below.
+  const latestLocalDate = new Date(Date.now() + 24 * 60 * 60_000).toISOString().slice(0, 10);
+  const [mappingRows, settings, memberRows, changeRows] = await Promise.all([
+    reads.prepare(`SELECT x.label_id AS labelId, l.name AS labelName, l.active, x.guild_id AS guildId, x.role_id AS roleId, x.role_name AS roleName, x.created_at AS createdAt, x.sync_direction AS syncDirection, x.two_way_enabled_at AS twoWayEnabledAt, x.two_way_checked_at AS twoWayCheckedAt, x.two_way_error AS twoWayError FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND x.label_id IN (${labels.sql})`).bind(...labels.values).all<DiscordLabelMapping>(),
+    reads.prepare("SELECT time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone: string }>(),
+    reads.prepare("SELECT m.id, m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id AS discordUserId, m.active FROM members m WHERE m.installation_id = 'primary' ORDER BY m.id").all<Omit<DiscordLabelRosterRow, "labelAction">>(),
+    reads.prepare(`SELECT c.label_id AS labelId, c.member_id AS memberId, c.action, c.effective_date AS effectiveDate FROM member_label_changes c WHERE c.installation_id = 'primary' AND c.effective_date <= ? AND c.label_id IN (${labels.sql}) ORDER BY c.effective_date DESC, c.created_at DESC, c.id DESC`).bind(latestLocalDate, ...labels.values).all<{ labelId: string; memberId: string; action: string; effectiveDate: string }>(),
+  ]);
+  const today = policyLocalDate(new Date().toISOString(), settings?.timeZone ?? "UTC");
+  // Rows arrive newest first, so the first one per label and member that is in effect today is the member's current action.
+  const actions = new Map<string, Map<string, string>>();
+  for (const change of changeRows.results ?? []) {
+    if (change.effectiveDate > today) continue;
+    let byMember = actions.get(change.labelId); if (!byMember) actions.set(change.labelId, byMember = new Map());
+    if (!byMember.has(change.memberId)) byMember.set(change.memberId, change.action);
+  }
+  return { mappings: new Map((mappingRows.results ?? []).map((mapping) => [mapping.labelId, mapping])), today, members: memberRows.results ?? [], actions };
+}
+/** One label's snapshot from the bulk reads and one load of the server, refusing a label for the reasons discordRoleSnapshot does. */
+async function discordRoleSnapshotFrom(sources: DiscordLabelSources, config: Record<string, string>, labelId: string, server: DiscordServerState): Promise<DiscordRoleSnapshot> {
+  const mapping = sources.mappings.get(labelId);
+  if (!mapping) throw new HttpError(404, "This label has no Discord role association");
+  if (!mapping.active) throw new HttpError(409, "Restore the retired label before syncing its Discord role");
+  assertDiscordLabelNotPaused(mapping);
+  const role = discordAccessibleRole(server.access, config, mapping.roleId);
+  if (mapping.guildId !== config.guildId) throw new HttpError(409, "This mapping belongs to a different Discord server. Unlink it before continuing.");
+  const labelActions = sources.actions.get(labelId);
+  // The same columns in the same order as discordLabelSource's rows, so both paths fingerprint a roster identically.
+  const roster = sources.members.map((member) => ({ id: member.id, memberId: member.memberId, firstName: member.firstName, lastName: member.lastName, discordUserId: member.discordUserId, active: member.active, labelAction: labelActions?.get(member.id) ?? null }));
+  return discordRoleSnapshotOf(mapping, { roster, sourceFingerprint: await discordLabelSourceFingerprint(mapping, config.guildId, sources.today, roster) }, role, server.guildMembers);
+}
+function assertDiscordLabelNotPaused(mapping: DiscordLabelMapping): void {
   // A label paused after a restore changes nobody's role until an Admin reviews it again or switches it to Dashboard to Discord.
   if (isTwoWayPaused(mapping)) throw new HttpError(409, `${mapping.labelName}: ${twoWayPausedMessage} Or switch it to Dashboard to Discord.`, undefined, "two_way_review_required");
-  const role = server ? discordAccessibleRole(server.access, config, mapping.roleId) : await discordManageableRole(config, mapping.roleId);
-  const [source, guildMembers] = await Promise.all([discordLabelSource(db, mapping, config.guildId), server?.guildMembers ?? discordAllGuildMembers(config)]);
+}
+async function discordRoleSnapshot(db: D1Database, config: Record<string, string>, labelId: string): Promise<DiscordRoleSnapshot> {
+  const mapping = await discordLabelMapping(db, labelId);
+  assertDiscordLabelNotPaused(mapping);
+  const role = await discordManageableRole(config, mapping.roleId);
+  const [source, guildMembers] = await Promise.all([discordLabelSource(db, mapping, config.guildId), discordAllGuildMembers(config)]);
+  return discordRoleSnapshotOf(mapping, source, role, guildMembers);
+}
+/** What a sync would change: the label's roster compared with who holds the role in the server. */
+async function discordRoleSnapshotOf(mapping: DiscordLabelMapping, source: DiscordLabelSourceState, role: DiscordGuildRole, guildMembers: DiscordGuildMember[]): Promise<DiscordRoleSnapshot> {
   const guild = new Map(guildMembers.map((member) => [member.user!.id!, member]));
   const qualified = new Map(source.roster.filter((member) => member.active && member.labelAction === "add" && member.discordUserId).map((member) => [member.discordUserId!, member]));
   const additions: DiscordRoleChange[] = []; const removals: DiscordRoleChange[] = [];
@@ -3447,10 +3553,16 @@ async function discordLabelUnlink(request: Request, env: Env, labelId: string): 
   await writeAudit(db, principal, "discord.label_role_unlinked", "member_label", labelId, { guildId: mapping.guildId, roleId: mapping.roleId });
   return response({ unlinked: true, roleAssignmentsUnchanged: true });
 }
-async function saveDiscordLabelPreview(db: D1Database, principal: Principal, config: Record<string, string>, snapshot: DiscordRoleSnapshot) {
+/** A reviewed snapshot as the preview the dashboard shows, with the statement that stores it for ten minutes. */
+function discordLabelPreviewRecord(db: D1Database, principal: Principal, config: Record<string, string>, snapshot: DiscordRoleSnapshot) {
   const id = crypto.randomUUID(); const now = new Date(); const expiresAt = new Date(now.getTime() + 10 * 60_000).toISOString();
-  await db.prepare("INSERT INTO discord_label_role_previews (id, installation_id, label_id, guild_id, role_id, fingerprint, actor_user_id, expires_at, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)").bind(id, snapshot.mapping.labelId, config.guildId, snapshot.mapping.roleId, snapshot.fingerprint, principal.userId, expiresAt, now.toISOString()).run();
-  return { previewId: id, expiresAt, labelId: snapshot.mapping.labelId, labelName: snapshot.mapping.labelName, roleId: snapshot.mapping.roleId, roleName: snapshot.roleName, memberCount: snapshot.memberCount, additions: snapshot.additions, removals: snapshot.removals, unpaired: snapshot.unpaired, absent: snapshot.absent, inactive: snapshot.inactive };
+  const statement = db.prepare("INSERT INTO discord_label_role_previews (id, installation_id, label_id, guild_id, role_id, fingerprint, actor_user_id, expires_at, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)").bind(id, snapshot.mapping.labelId, config.guildId, snapshot.mapping.roleId, snapshot.fingerprint, principal.userId, expiresAt, now.toISOString());
+  return { statement, preview: { previewId: id, expiresAt, labelId: snapshot.mapping.labelId, labelName: snapshot.mapping.labelName, roleId: snapshot.mapping.roleId, roleName: snapshot.roleName, memberCount: snapshot.memberCount, additions: snapshot.additions, removals: snapshot.removals, unpaired: snapshot.unpaired, absent: snapshot.absent, inactive: snapshot.inactive } };
+}
+async function saveDiscordLabelPreview(db: D1Database, principal: Principal, config: Record<string, string>, snapshot: DiscordRoleSnapshot) {
+  const { statement, preview } = discordLabelPreviewRecord(db, principal, config, snapshot);
+  await statement.run();
+  return preview;
 }
 async function discordLabelPreview(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ labelId?: string }>(request);
@@ -3459,45 +3571,88 @@ async function discordLabelPreview(request: Request, env: Env): Promise<Response
   if (snapshot.mapping.syncDirection === "two_way") throw new HttpError(409, `${snapshot.mapping.labelName} syncs both ways, so Discord is checked every 5 minutes. A full-server sync would also remove the role from Discord users who aren't on the roster.`);
   return response(await saveDiscordLabelPreview(db, principal, config, snapshot));
 }
-/** Previews every active linked label from one load of the server's roles and members. */
+/**
+ * Previews every active linked label from one load of the server's roles and members. D1 use does not grow with the
+ * number of labels: one read lists them, one batch reads their rosters and one batch stores every preview, or none.
+ */
 async function discordLabelPreviewAll(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const config = await discordConfiguration(env);
   const rows = await db.prepare("SELECT x.label_id AS labelId, l.name AS labelName FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND l.active = 1 AND x.guild_id = ? AND x.sync_direction = 'to_discord' ORDER BY l.name COLLATE NOCASE").bind(config.guildId).all<{ labelId: string; labelName: string }>();
   if (!rows.results?.length) throw new HttpError(409, "No active Dashboard to Discord labels are linked to roles in this Discord server");
-  const [access, guildMembers] = await Promise.all([discordRoleAccess(config), discordAllGuildMembers(config)]);
-  const previews = []; const skipped: { labelId: string; labelName: string; reason: string }[] = [];
+  const labels: DiscordLabelSet = { sql: "SELECT value FROM json_each(?)", values: [JSON.stringify(rows.results.map((row) => row.labelId))] };
+  const [sources, access, guildMembers] = await Promise.all([discordLabelSources(coalescingDatabase(db), labels), discordRoleAccess(config), discordAllGuildMembers(config)]);
+  const records = []; const skipped: { labelId: string; labelName: string; reason: string }[] = [];
   for (const row of rows.results) {
-    try { previews.push(await saveDiscordLabelPreview(db, principal, config, await discordRoleSnapshot(db, config, row.labelId, { access, guildMembers }))); }
+    try { records.push(discordLabelPreviewRecord(db, principal, config, await discordRoleSnapshotFrom(sources, config, row.labelId, { access, guildMembers }))); }
     catch (error) { if (!(error instanceof HttpError)) throw error; skipped.push({ ...row, reason: error.message }); }
   }
-  return response({ previews, skipped });
+  if (records.length) await db.batch(records.map((record) => record.statement));
+  return response({ previews: records.map((record) => record.preview), skipped });
 }
 async function discordLabelApply(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ previewId?: string }>(request);
   if (!input.previewId) throw new HttpError(400, "A current role sync preview is required");
   const db = requireDatabase(env); const config = await discordConfiguration(env);
   const result = await applyDiscordLabelPreview(db, principal, config, input.previewId);
-  if (result.status === "pending" && context) context.waitUntil(processDiscordLabelRoleJobs(env));
+  if (result.status === "pending" && context) context.waitUntil(processDiscordLabelRoleJobs(env, undefined, DISCORD_LABEL_ROLE_ITEMS_AFTER_SINGLE_SYNC));
   return response(result, 202);
 }
-/** Starts sync jobs for several reviewed previews. Each preview is checked against the server as it is now. */
+/**
+ * Starts sync jobs for several reviewed previews. Each preview is checked against the server as it is now. D1 use does not
+ * grow with the number of previews: one batch reads them with their labels' rosters, and one batch claims every accepted
+ * preview and writes its job, members and audit entry, so a failure leaves no preview used and no job started.
+ */
 async function discordLabelApplyAll(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ previewIds?: string[] }>(request);
   if (!Array.isArray(input.previewIds) || input.previewIds.length < 1 || input.previewIds.length > 100 || input.previewIds.some((id) => typeof id !== "string") || new Set(input.previewIds).size !== input.previewIds.length) throw new HttpError(400, "Current role sync previews are required");
-  const db = requireDatabase(env); const config = await discordConfiguration(env);
-  const [access, guildMembers] = await Promise.all([discordRoleAccess(config), discordAllGuildMembers(config)]);
-  const jobs = []; const failed: { previewId: string; error: string }[] = [];
+  const db = requireDatabase(env); const config = await discordConfiguration(env); const reads = coalescingDatabase(db);
+  const previewIds = JSON.stringify(input.previewIds);
+  const labels: DiscordLabelSet = { sql: "SELECT p.label_id FROM discord_label_role_previews p WHERE p.installation_id = 'primary' AND p.id IN (SELECT value FROM json_each(?))", values: [previewIds] };
+  type StoredPreview = { id: string; labelId: string; guildId: string; roleId: string; fingerprint: string; actorUserId: string; expiresAt: string; usedAt?: string };
+  const [previewRows, activeRows, sources, access, guildMembers] = await Promise.all([
+    reads.prepare("SELECT id, label_id AS labelId, guild_id AS guildId, role_id AS roleId, fingerprint, actor_user_id AS actorUserId, expires_at AS expiresAt, used_at AS usedAt FROM discord_label_role_previews WHERE installation_id = 'primary' AND id IN (SELECT value FROM json_each(?))").bind(previewIds).all<StoredPreview>(),
+    reads.prepare(`SELECT label_id AS labelId FROM discord_label_role_jobs WHERE installation_id = 'primary' AND status IN ('pending', 'running') AND label_id IN (${labels.sql})`).bind(...labels.values).all<{ labelId: string }>(),
+    discordLabelSources(reads, labels), discordRoleAccess(config), discordAllGuildMembers(config),
+  ]);
+  const stored = new Map((previewRows.results ?? []).map((preview) => [preview.id, preview]));
+  const syncing = new Set((activeRows.results ?? []).map((job) => job.labelId));
+  const snapshots = new Map<string, Promise<DiscordRoleSnapshot>>();
+  const now = new Date().toISOString(); const jobExists = "EXISTS (SELECT 1 FROM discord_label_role_jobs WHERE installation_id = 'primary' AND id = ?)";
+  const accepted: { previewId: string; claim: number; job: { jobId: string; labelId: string; status: string; additions: number; removals: number } }[] = [];
+  const failed: { previewId: string; error: string }[] = []; const statements: D1Statement[] = [];
   for (const previewId of input.previewIds) {
-    try { jobs.push(await applyDiscordLabelPreview(db, principal, config, previewId, { access, guildMembers })); }
-    catch (error) { if (!(error instanceof HttpError)) throw error; failed.push({ previewId, error: error.message }); }
+    try {
+      const preview = stored.get(previewId);
+      if (!preview || preview.actorUserId !== principal.userId || preview.usedAt || preview.expiresAt <= now) throw new HttpError(409, "This role sync preview expired or was already used. Preview again.");
+      let pending = snapshots.get(preview.labelId); if (!pending) snapshots.set(preview.labelId, pending = discordRoleSnapshotFrom(sources, config, preview.labelId, { access, guildMembers }));
+      const snapshot = await pending;
+      if (preview.guildId !== config.guildId || preview.roleId !== snapshot.mapping.roleId || preview.fingerprint !== snapshot.fingerprint) throw new HttpError(409, "Roster or Discord roles changed since the preview. Preview again before syncing.");
+      if (syncing.has(preview.labelId)) throw new HttpError(409, "A sync for this label is already in progress");
+      const id = crypto.randomUUID(); const changes = [...snapshot.additions.map((item) => [item.discordUserId, "add"]), ...snapshot.removals.map((item) => [item.discordUserId, "remove"])];
+      const status = changes.length ? "pending" : "completed"; if (changes.length) syncing.add(preview.labelId);
+      // The job is written only while the preview is unused and the label has no running sync, and everything after it only
+      // when the job exists, so a preview another request used first, or a sync it started, changes nothing here.
+      statements.push(db.prepare("INSERT INTO discord_label_role_jobs (id, installation_id, label_id, guild_id, role_id, status, source_fingerprint, actor_user_id, next_attempt_at, created_at, updated_at, completed_at) SELECT ?, 'primary', ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM discord_label_role_previews WHERE installation_id = 'primary' AND id = ? AND used_at IS NULL AND expires_at > ?) AND NOT EXISTS (SELECT 1 FROM discord_label_role_jobs WHERE installation_id = 'primary' AND label_id = ? AND status IN ('pending', 'running'))").bind(id, preview.labelId, config.guildId, preview.roleId, status, snapshot.sourceFingerprint, principal.userId, now, now, now, changes.length ? null : now, preview.id, now, preview.labelId));
+      accepted.push({ previewId, claim: statements.length, job: { jobId: id, labelId: preview.labelId, status, additions: snapshot.additions.length, removals: snapshot.removals.length } });
+      statements.push(db.prepare(`UPDATE discord_label_role_previews SET used_at = ? WHERE installation_id = 'primary' AND id = ? AND used_at IS NULL AND ${jobExists}`).bind(now, preview.id, id));
+      // One statement per job, whatever its number of members.
+      if (changes.length) statements.push(db.prepare(`INSERT INTO discord_label_role_job_items (installation_id, job_id, discord_user_id, action, status) SELECT 'primary', ?, json_extract(value, '$[0]'), json_extract(value, '$[1]'), 'pending' FROM json_each(?) WHERE ${jobExists}`).bind(id, JSON.stringify(changes), id));
+      statements.push(db.prepare(`INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', ?, 'discord.label_role_sync_requested', 'member_label', ?, ?, ? WHERE ${jobExists}`).bind(crypto.randomUUID(), principal.userId, preview.labelId, JSON.stringify({ jobId: id, roleId: preview.roleId, adds: snapshot.additions.length, removals: snapshot.removals.length }), now, id));
+    } catch (error) { if (!(error instanceof HttpError)) throw error; failed.push({ previewId, error: error.message }); }
   }
-  if (jobs.some((job) => job.status === "pending") && context) context.waitUntil(processDiscordLabelRoleJobs(env));
+  const results = statements.length ? await db.batch(statements) : [];
+  const jobs = [];
+  for (const item of accepted) {
+    if ((results[item.claim]?.meta?.changes ?? 0) === 1) jobs.push(item.job);
+    else failed.push({ previewId: item.previewId, error: "This role sync preview was already used, or a sync for this label just started. Preview again." });
+  }
+  if (jobs.some((job) => job.status === "pending") && context) context.waitUntil(processDiscordLabelRoleJobs(env, undefined, DISCORD_LABEL_ROLE_ITEMS_AFTER_REQUEST));
   return response({ jobs, failed }, 202);
 }
-async function applyDiscordLabelPreview(db: D1Database, principal: Principal, config: Record<string, string>, previewId: string, server?: DiscordServerState) {
+async function applyDiscordLabelPreview(db: D1Database, principal: Principal, config: Record<string, string>, previewId: string) {
   const preview = await db.prepare("SELECT id, label_id AS labelId, guild_id AS guildId, role_id AS roleId, fingerprint, actor_user_id AS actorUserId, expires_at AS expiresAt, used_at AS usedAt FROM discord_label_role_previews WHERE installation_id = 'primary' AND id = ?").bind(previewId).first<{ id: string; labelId: string; guildId: string; roleId: string; fingerprint: string; actorUserId: string; expiresAt: string; usedAt?: string }>();
   if (!preview || preview.actorUserId !== principal.userId || preview.usedAt || preview.expiresAt <= new Date().toISOString()) throw new HttpError(409, "This role sync preview expired or was already used. Preview again.");
-  const snapshot = await discordRoleSnapshot(db, config, preview.labelId, server);
+  const snapshot = await discordRoleSnapshot(db, config, preview.labelId);
   if (preview.guildId !== config.guildId || preview.roleId !== snapshot.mapping.roleId || preview.fingerprint !== snapshot.fingerprint) throw new HttpError(409, "Roster or Discord roles changed since the preview. Preview again before syncing.");
   const active = await db.prepare("SELECT id FROM discord_label_role_jobs WHERE installation_id = 'primary' AND label_id = ? AND status IN ('pending', 'running')").bind(preview.labelId).first();
   if (active) throw new HttpError(409, "A sync for this label is already in progress");
@@ -3542,32 +3697,45 @@ async function discordLabelLink(request: Request, env: Env): Promise<Response> {
   const role = await discordManageableRole(config, input.roleId);
   return response({ mapping: await saveDiscordLabelMapping(db, principal, label, role, config.guildId), roleAssignmentsUnchanged: true }, 201);
 }
-/** Creates a label named after each chosen role, or reuses an unlinked active label with that name, and links them. */
+/**
+ * Creates a label named after each chosen role, or reuses an unlinked active label with that name, and links them. Every
+ * role is checked from one batch of reads and every label, link and audit entry is written in one batch, so D1 use does
+ * not grow with the number of roles and a refused or failed import links nothing.
+ */
 async function discordLabelsFromRoles(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<{ roleIds?: string[] }>(request);
   if (!Array.isArray(input.roleIds) || input.roleIds.length < 1 || input.roleIds.length > 25 || !input.roleIds.every(discordSnowflake) || new Set(input.roleIds).size !== input.roleIds.length) throw new HttpError(400, "Choose 1 to 25 Discord roles");
   const db = requireDatabase(env); const config = await discordConfiguration(env); const access = await discordRoleAccess(config);
-  const roles = input.roleIds.map((roleId) => discordAccessibleRole(access, config, roleId));
+  // Label names are unique ignoring ASCII case (SQLite NOCASE), so roles and labels are matched the same way here.
+  const nameKey = (name: string) => name.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+  const chosen = input.roleIds.map((roleId) => {
+    const role = discordAccessibleRole(access, config, roleId); const name = role.name.trim();
+    if (!name || name.length > 80) throw new HttpError(400, `${role.name} cannot be a label name. Label names are 1 to 80 characters.`);
+    return { role, name, key: nameKey(name) };
+  });
+  const repeated = chosen.find((item, index) => chosen.findIndex((other) => other.key === item.key) !== index);
+  if (repeated) throw new HttpError(409, `More than one chosen role is named ${repeated.name}. Choose only one of them.`);
   // Check every role before writing so a bad choice leaves nothing half-linked.
-  const plans = [];
-  for (const role of roles) {
-    const name = role.name.trim(); if (!name || name.length > 80) throw new HttpError(400, `${role.name} cannot be a label name. Label names are 1 to 80 characters.`);
-    const label = await db.prepare("SELECT id, name, active FROM member_labels WHERE installation_id = 'primary' AND name = ? COLLATE NOCASE").bind(name).first<{ id: string; name: string; active: number }>();
-    if (label && !label.active) throw new HttpError(409, `Restore the retired label ${label.name} before linking it.`);
-    const conflict = await db.prepare("SELECT 1 FROM discord_label_role_mappings WHERE installation_id = 'primary' AND (guild_id = ? AND role_id = ?" + (label ? " OR label_id = ?" : "") + ")").bind(...(label ? [config.guildId, role.id, label.id] : [config.guildId, role.id])).first();
-    if (conflict) throw new HttpError(409, `${role.name} or its label is already linked. Unlink it first.`);
-    plans.push({ role, name, label });
+  const names = JSON.stringify(chosen.map((item) => item.name)); const reads = coalescingDatabase(db);
+  const namedLabels = "FROM json_each(?) j JOIN member_labels l ON l.installation_id = 'primary' AND l.name = j.value COLLATE NOCASE";
+  const [labelRows, linkRows] = await Promise.all([
+    reads.prepare(`SELECT l.id, l.name, l.active ${namedLabels}`).bind(names).all<{ id: string; name: string; active: number }>(),
+    reads.prepare(`SELECT x.label_id AS labelId, x.guild_id AS guildId, x.role_id AS roleId FROM discord_label_role_mappings x WHERE x.installation_id = 'primary' AND ((x.guild_id = ? AND x.role_id IN (SELECT value FROM json_each(?))) OR x.label_id IN (SELECT l.id ${namedLabels}))`).bind(config.guildId, JSON.stringify(input.roleIds), names).all<{ labelId: string; guildId: string; roleId: string }>(),
+  ]);
+  const labels = new Map((labelRows.results ?? []).map((label) => [nameKey(label.name), label])); const links = linkRows.results ?? [];
+  const now = new Date().toISOString(); const statements: D1Statement[] = []; const linked = [];
+  const audit = (action: string, labelId: string, metadata: unknown) => db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, ?, 'member_label', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, action, labelId, JSON.stringify(metadata), now);
+  for (const { role, name, key } of chosen) {
+    const existing = labels.get(key);
+    if (existing && !existing.active) throw new HttpError(409, `Restore the retired label ${existing.name} before linking it.`);
+    if (links.some((link) => (link.guildId === config.guildId && link.roleId === role.id) || (existing && link.labelId === existing.id))) throw new HttpError(409, `${role.name} or its label is already linked. Unlink it first.`);
+    const label = existing ?? { id: crypto.randomUUID(), name };
+    if (!existing) statements.push(db.prepare("INSERT INTO member_labels (id, installation_id, name, formula_enabled, created_by, created_at) VALUES (?, 'primary', ?, 0, ?, ?)").bind(label.id, name, principal.userId, now), audit("label.created", label.id, { name, formulaEnabled: false, discordRoleId: role.id }));
+    statements.push(db.prepare("INSERT INTO discord_label_role_mappings (installation_id, label_id, guild_id, role_id, role_name, created_by, created_at) VALUES ('primary', ?, ?, ?, ?, ?, ?)").bind(label.id, config.guildId, role.id, role.name, principal.userId, now), audit("discord.label_role_associated", label.id, { guildId: config.guildId, roleId: role.id, source: "dashboard" }));
+    linked.push({ labelId: label.id, labelName: label.name, roleId: role.id, roleName: role.name, created: !existing });
   }
-  const linked = [];
-  for (const plan of plans) {
-    let label = plan.label;
-    if (!label) {
-      const id = crypto.randomUUID(); const now = new Date().toISOString();
-      await db.batch([db.prepare("INSERT INTO member_labels (id, installation_id, name, formula_enabled, created_by, created_at) VALUES (?, 'primary', ?, 0, ?, ?)").bind(id, plan.name, principal.userId, now), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'label.created', 'member_label', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify({ name: plan.name, formulaEnabled: false, discordRoleId: plan.role.id }), now)]);
-      label = { id, name: plan.name, active: 1 };
-    }
-    linked.push({ ...await saveDiscordLabelMapping(db, principal, label, plan.role, config.guildId), created: !plan.label });
-  }
+  try { await db.batch(statements); }
+  catch (error) { if (/unique|constraint/i.test(String(error))) throw new HttpError(409, "One of these labels or roles was just created or linked by another Admin, so nothing was linked. Reload and review it."); throw error; }
   return response({ linked, roleAssignmentsUnchanged: true }, 201);
 }
 async function discordLabelJobStatus(request: Request, env: Env, jobId: string): Promise<Response> {
@@ -3582,7 +3750,15 @@ async function discordLabelJobStatus(request: Request, env: Env, jobId: string):
 const DISCORD_LABEL_ROLE_ITEMS_PER_PASS = 8;
 // One member's request and update, with room left for the job's closing count, update and audit.
 const DISCORD_LABEL_ROLE_ITEM_COST: PassCost = { d1: 5, external: 1 };
-async function processDiscordLabelRoleJobs(env: Env, targetJobId?: string): Promise<void> {
+// The pass a request starts for the jobs it just created runs in that request's invocation, so the two share the Workers
+// Free limit of 50 subrequests. There a member costs 3 (the provider authority check, the Discord request and the update)
+// on top of about 15 for the job, so that pass does fewer members; the dashboard's polling and the scheduler do the rest.
+const DISCORD_LABEL_ROLE_ITEMS_AFTER_REQUEST = 4;
+// The one-label routes cost more before their pass starts, so their passes do fewer members. Sync to Discord and Retry
+// failed use 18 subrequests themselves (42 with a pass of 3 members); turning on two-way sync uses 24 (45 with 2).
+const DISCORD_LABEL_ROLE_ITEMS_AFTER_SINGLE_SYNC = 3;
+const DISCORD_LABEL_ROLE_ITEMS_AFTER_TWO_WAY_CONFIRM = 2;
+async function processDiscordLabelRoleJobs(env: Env, targetJobId?: string, itemLimit = DISCORD_LABEL_ROLE_ITEMS_PER_PASS): Promise<void> {
   if (await deliveryPausedUntil(env) !== null) return;
   const db = requireDatabase(env); const now = new Date().toISOString();
   const job = await db.prepare("SELECT id, label_id AS labelId, guild_id AS guildId, role_id AS roleId, source_fingerprint AS sourceFingerprint, actor_user_id AS actorUserId FROM discord_label_role_jobs WHERE installation_id = 'primary' AND status IN ('pending', 'running') AND next_attempt_at <= ? AND (lease_token IS NULL OR lease_expires_at <= ?) AND (? IS NULL OR id = ?) ORDER BY created_at LIMIT 1").bind(now, now, targetJobId ?? null, targetJobId ?? null).first<{ id: string; labelId: string; guildId: string; roleId: string; sourceFingerprint: string; actorUserId?: string }>();
@@ -3599,7 +3775,7 @@ async function processDiscordLabelRoleJobs(env: Env, targetJobId?: string): Prom
       return;
     }
     await discordManageableRole(config, job.roleId);
-    const rows = await db.prepare("SELECT discord_user_id AS discordUserId, action, attempts FROM discord_label_role_job_items WHERE installation_id = 'primary' AND job_id = ? AND status = 'pending' ORDER BY discord_user_id LIMIT ?").bind(job.id, DISCORD_LABEL_ROLE_ITEMS_PER_PASS).all<{ discordUserId: string; action: "add" | "remove"; attempts: number }>();
+    const rows = await db.prepare("SELECT discord_user_id AS discordUserId, action, attempts FROM discord_label_role_job_items WHERE installation_id = 'primary' AND job_id = ? AND status = 'pending' ORDER BY discord_user_id LIMIT ?").bind(job.id, itemLimit).all<{ discordUserId: string; action: "add" | "remove"; attempts: number }>();
     for (const item of rows.results ?? []) {
       if (!passAllows(env, DISCORD_LABEL_ROLE_ITEM_COST)) break;
       const path = `/guilds/${job.guildId}/members/${item.discordUserId}/roles/${job.roleId}`;
@@ -3650,7 +3826,7 @@ async function discordLabelRetry(request: Request, env: Env, jobId: string, cont
     ...changes.map((item) => db.prepare("INSERT INTO discord_label_role_job_items (installation_id, job_id, discord_user_id, action, status) VALUES ('primary', ?, ?, ?, 'pending')").bind(id, item.discordUserId, item.action)),
   ]);
   await writeAudit(db, principal, "discord.label_role_sync_retried", "member_label", old.labelId, { fromJobId: jobId, jobId: id, retried: changes.length });
-  if (context) context.waitUntil(processDiscordLabelRoleJobs(env));
+  if (context) context.waitUntil(processDiscordLabelRoleJobs(env, undefined, DISCORD_LABEL_ROLE_ITEMS_AFTER_SINGLE_SYNC));
   return response({ jobId: id, retried: changes.length, resolved: (failed.results ?? []).length - changes.length }, 202);
 }
 /** The server as two-way sync needs it: its roles and members loaded once. */
@@ -3683,7 +3859,7 @@ async function discordTwoWayConfirm(request: Request, env: Env, context?: Worker
   const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<Record<string, unknown>>(request);
   const db = requireDatabase(env); const { server, deps } = await discordTwoWayServer(db, await discordConfiguration(env));
   const result = await confirmTwoWay(db, principal.userId, input, server, deps);
-  if (result.jobId && context) context.waitUntil(processDiscordLabelRoleJobs(env, result.jobId));
+  if (result.jobId && context) context.waitUntil(processDiscordLabelRoleJobs(env, result.jobId, DISCORD_LABEL_ROLE_ITEMS_AFTER_TWO_WAY_CONFIRM));
   return response(result);
 }
 /** Turning two-way sync on needs a reviewed reconciliation, so this only switches a label back to Dashboard to Discord. */
@@ -3766,6 +3942,12 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
     if (interaction.guild_id !== config.guildId) return discordEphemeral("Use this command in the Discord server configured for this LancerLogin installation.");
     if (!discordUserId || interaction.data.options !== undefined && (!Array.isArray(interaction.data.options) || interaction.data.options.length > 0)) return discordEphemeral("This attendance-report request is malformed. Try /attendance-report again, or ask an Operator for help.");
     try { return discordEphemeral(await discordAttendanceReport(await attendanceDiscordDatabase(db), discordUserId)); }
+    catch (error) { return discordEphemeral(error instanceof HttpError ? error.message : "Attendance is unavailable. Ask an Admin to review the module."); }
+  }
+  if (interaction.type === 2 && interaction.data?.name === "code") {
+    if (interaction.guild_id !== config.guildId) return discordEphemeral("Use this command in the Discord server configured for this LancerLogin installation.");
+    if (!discordUserId || interaction.data.options !== undefined && (!Array.isArray(interaction.data.options) || interaction.data.options.length > 0)) return discordEphemeral("This code request is malformed. Try /code again, or ask an Operator for help.");
+    try { return discordEphemeral(await issueDiscordKioskCode(await attendanceDiscordDatabase(db), discordUserId)); }
     catch (error) { return discordEphemeral(error instanceof HttpError ? error.message : "Attendance is unavailable. Ask an Admin to review the module."); }
   }
   if (interaction.type === 3 && customId === "lancerlogin-attendance-report") {
@@ -4127,7 +4309,7 @@ const tableColumns = {
   attendance_corrections: ["id", "installation_id", "member_id", "meeting_id", "disposition", "reason", "created_by", "created_at"],
   setup_progress: ["installation_id", "step", "completed_at", "completed_by"],
   pairing_codes: ["id", "installation_id", "code_hash", "expires_at", "redeemed_at", "created_by", "created_at", "purpose", "kiosk_kind", "kiosk_name"],
-  kiosks: ["id", "installation_id", "pairing_code_id", "name", "token_hash", "active", "last_seen_at", "created_at", "reader_online", "release_version", "pending_events", "last_sync_at", "error_category", "pairing_bound", "authentication_method", "configured_authentication_method", "kind", "member_lookup", "require_pin"],
+  kiosks: ["id", "installation_id", "pairing_code_id", "name", "token_hash", "active", "last_seen_at", "created_at", "reader_online", "release_version", "pending_events", "last_sync_at", "error_category", "pairing_bound", "authentication_method", "configured_authentication_method", "kind", "member_lookup", "require_pin", "discord_code", "discord_code_backup"],
   member_pins: ["installation_id", "member_id", "pin_hash", "pin_salt", "pin_iterations", "set_at", "set_kiosk_id", "failed_attempts", "locked_until", "updated_at"],
   simulated_kiosk_sessions: ["installation_id", "pairing_code_id", "name", "active", "online", "last_seen_at", "created_by", "created_at"],
   encrypted_integrations: ["id", "installation_id", "provider", "ciphertext", "iv", "key_version", "updated_at", "verified_at"],
@@ -4186,7 +4368,10 @@ const safeBackupValue = (value: unknown) => value === null || ["string", "number
 // in entire-installation backups. Older backups had one date for every report, so Outreach restores with Attendance's.
 // Schema 51: the early arrival allowance (organization_settings.early_scan_minutes, migration 0099) in entire-installation
 // backups. Older backups restore with the 15-minute default, as the upgrade gives existing installations.
-const backupSchemaVersion = 51;
+// Schema 52: each kiosk's Discord code mode and its backup choice (kiosks.discord_code and discord_code_backup, migration
+// 0100) in entire-installation backups. Older backups restore every kiosk with Discord codes off and the backup choice at
+// offline. The codes themselves last two minutes and the wrong-code throttle is operational, so neither ever travels.
+const backupSchemaVersion = 52;
 /** Exported values computed from other columns: a label paused after a restore is still two-way in a backup. */
 const backupColumnExpressions: Partial<Record<BackupTable, Record<string, string>>> = {
   discord_label_role_mappings: { sync_direction: `CASE WHEN sync_direction = 'to_discord' AND two_way_error = '${twoWayRestorePaused}' THEN 'two_way' ELSE sync_direction END AS sync_direction` },
@@ -4337,7 +4522,7 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   let rows = 0;
   for (const table of requiredTables) {
     const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = schemaVersion < 45 && (table === "member_label_changes" || table === "discord_label_role_mappings") ? tableColumns[table].slice(0, -1) : table === "discord_attendance_contests" && schemaVersion < 41 ? tableColumns.discord_attendance_contests.slice(0, schemaVersion === 1 ? -3 : -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 47 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -6 : schemaVersion < 31 ? -5 : schemaVersion < 40 ? -4 : schemaVersion < 46 ? -3 : -1) : table === "pairing_codes" && schemaVersion < 46 ? tableColumns.pairing_codes.slice(0, -2) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -15) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -13) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -11) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -8) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -6) : schemaVersion < 41 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 47 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -4) : schemaVersion < 51 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
+    const columns = schemaVersion < 45 && (table === "member_label_changes" || table === "discord_label_role_mappings") ? tableColumns[table].slice(0, -1) : table === "discord_attendance_contests" && schemaVersion < 41 ? tableColumns.discord_attendance_contests.slice(0, schemaVersion === 1 ? -3 : -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 52 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -8 : schemaVersion < 31 ? -7 : schemaVersion < 40 ? -6 : schemaVersion < 46 ? -5 : schemaVersion < 47 ? -3 : -2) : table === "pairing_codes" && schemaVersion < 46 ? tableColumns.pairing_codes.slice(0, -2) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -15) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -13) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -11) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -8) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -6) : schemaVersion < 41 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 47 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -4) : schemaVersion < 51 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
     for (const row of tableRows) { if (!isObject(row) || columns.some((column) => !safeBackupValue(row[column])) || (sourceSchemaVersion >= 31 || community22) && Object.keys(row).some((column) => !(columns as readonly string[]).includes(column))) throw new HttpError(400, `Backup table ${table} contains an invalid row`); }
   }
   rows += externalPlan.entries.reduce((total, entry) => total + entry.rows, 0);
@@ -4355,10 +4540,11 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   if (tables.discord_attendance_recipients) tables.discord_attendance_recipients = tables.discord_attendance_recipients.map((row) => ({ delivery_id: null, ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
   if (tables.pairing_codes) tables.pairing_codes = tables.pairing_codes.map((row) => ({ kiosk_kind: "pi", kiosk_name: null, ...row }));
-  if (tables.kiosks) tables.kiosks = tables.kiosks.map((row) => ({ pairing_bound: 0, kind: "pi", member_lookup: "entry", require_pin: 0, ...row, ...(schemaVersion < 31 ? { authentication_method: "fingerprint" } : {}), ...(schemaVersion < 40 ? { configured_authentication_method: tables.organization_settings.find(settings => settings.installation_id === row.installation_id)?.kiosk_authentication_method ?? "fingerprint" } : {}) }));
+  if (tables.kiosks) tables.kiosks = tables.kiosks.map((row) => ({ pairing_bound: 0, kind: "pi", member_lookup: "entry", require_pin: 0, discord_code: 0, discord_code_backup: "offline", ...row, ...(schemaVersion < 31 ? { authentication_method: "fingerprint" } : {}), ...(schemaVersion < 40 ? { configured_authentication_method: tables.organization_settings.find(settings => settings.installation_id === row.installation_id)?.kiosk_authentication_method ?? "fingerprint" } : {}) }));
   if (tables.kiosks.some(row => !kioskAuthenticationMethods.has(row.configured_authentication_method as KioskAuthenticationMethod) || !kioskAuthenticationMethods.has(row.authentication_method as KioskAuthenticationMethod))) throw new HttpError(400, "Backup contains an invalid kiosk authentication method");
   if (tables.kiosks.some(row => !kioskKinds.has(row.kind) || !kioskMemberLookups.has(row.member_lookup) || row.kind === "web" && row.configured_authentication_method !== "member_id") || tables.pairing_codes.some(row => !kioskKinds.has(row.kiosk_kind))) throw new HttpError(400, "Backup contains an invalid kiosk kind or member lookup");
   if (tables.kiosks.some(row => ![0, 1].includes(row.require_pin as number) || row.require_pin === 1 && row.configured_authentication_method !== "member_id")) throw new HttpError(400, "Backup contains an invalid kiosk Require PIN setting");
+  if (tables.kiosks.some(row => ![0, 1].includes(row.discord_code as number) || row.discord_code === 1 && row.configured_authentication_method !== "member_id" || typeof row.discord_code_backup !== "string" || !discordCodeBackups.has(row.discord_code_backup))) throw new HttpError(400, "Backup contains an invalid kiosk Discord code setting");
   if (tables.organization_settings.some(row => !validEarlyScanMinutes(row.early_scan_minutes))) throw new HttpError(400, "Backup early arrival allowance is invalid");
   if (tables.organization_settings.some(row => ![0, 1].includes(row.pin_lockout_enabled as number) || !Number.isInteger(row.pin_lockout_attempts) || Number(row.pin_lockout_attempts) < 3 || Number(row.pin_lockout_attempts) > 20 || !Number.isInteger(row.pin_lockout_minutes) || Number(row.pin_lockout_minutes) < 1 || Number(row.pin_lockout_minutes) > 1440)) throw new HttpError(400, "Backup PIN lockout setting is invalid");
   const pinMembers = new Set(tables.members.map((row) => row.id)); const pinKiosks = new Set(tables.kiosks.map((row) => row.id));
@@ -4588,7 +4774,9 @@ async function deleteData(request: Request, env: Env): Promise<Response> {
   }
   // Installed plugin tables may not cascade from the installation row, so clear them child-first in the same batch, as an
   // installation restore does; otherwise a later first-Admin setup would inherit the deleted installation's plugin data.
-  else await db.batch([...clearExternalModuleStatements(db, installedExternalBackupModules), db.prepare("DELETE FROM installations WHERE id = 'primary'")]);
+  // The fingerprint match and scan integrity tables (migrations 0084 and 0088) have no foreign key to the installation
+  // either, so nothing cascades to them and they are deleted here.
+  else await db.batch([...clearExternalModuleStatements(db, installedExternalBackupModules), ...["kiosk_scan_matches", "kiosk_fingerprint_match_settings", "kiosk_accepted_scans", "kiosk_possible_wrong_matches"].map((table) => db.prepare(`DELETE FROM ${table} WHERE installation_id = 'primary'`)), db.prepare("DELETE FROM installations WHERE id = 'primary'")]);
   return response({ deleted: true, scope: input.scope }, 200, setupResetGrant ? { "set-cookie": `${setupResetCookie}=${setupResetGrant}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${setupResetGrantMs / 1000}` } : undefined);
 }
 /**
@@ -4636,6 +4824,9 @@ async function runSchedulerHousekeeping(env: Env): Promise<JobRunResult> {
   }
   if (!step || step === "prune") {
     try { await pruneAuthProtection(db); } catch { /* Expired throttle rows are pruned on a later round. */ }
+    // One batch: used and expired kiosk codes, and PIN requests, label previews and report ids 30 days past their use.
+    // A schema before 0101 lacks one of its tables, and then the codes are removed alone, as before; one before 0100 has none.
+    try { await pruneStaleRows(db); } catch { try { await pruneDiscordKioskCodes(db); } catch { /* Pruned on a later round. */ } }
     if (step) return { more: true, cursor: "cleanup" };
   }
   return (await runModuleCleanup(db)).status === "progress" ? { more: true, cursor: "cleanup" } : {};

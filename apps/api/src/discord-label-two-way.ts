@@ -4,6 +4,9 @@
 // the scheduled pass. Each paired member has a last agreed state; whichever side differs from it changed since:
 // - only Discord changed: the label follows the role, recorded as a label change from Discord dated today;
 // - the dashboard changed (including both): the role follows the label through the existing role sync job.
+// A member with no agreed state yet (their Discord account was just linked, or they just became active or joined the
+// server) loses nothing on their first check: a role they already hold is adopted as the label, and a label they
+// already have adds the role. Once both sides agree, that state is stored as their baseline.
 // While a role sync job for the label is pending or running the label is skipped, so a push in flight is never read back
 // as a Discord change. Discord users holding the role who are not on the roster are recorded and never changed.
 // The Discord calls themselves stay in the Worker; this module receives the server's state already loaded.
@@ -41,11 +44,14 @@ export type TwoWayAction = "none" | "add_label" | "remove_label" | "add_role" | 
 /**
  * Which side wins for one paired member. `syncedState` is the last state both sides agreed on (undefined when the member
  * has none yet), and `dashboardChanged` reports a label change recorded or taking effect since then, even when it left
- * the label where it was. The dashboard wins whenever it changed; Discord wins only when it alone changed.
+ * the label where it was. The dashboard wins whenever it changed; Discord wins only when it alone changed. With no
+ * agreed state nothing is removed: the first check takes the union, adopting a held role as the label or adding the
+ * role for a label.
  */
 export function decideTwoWay(input: { hasLabel: boolean; hasRole: boolean; syncedState?: boolean; dashboardChanged?: boolean }): TwoWayAction {
   if (input.hasLabel === input.hasRole) return "none";
-  if (input.syncedState === undefined || input.dashboardChanged || input.hasLabel !== input.syncedState) return input.hasLabel ? "add_role" : "remove_role";
+  if (input.syncedState === undefined) return input.hasLabel ? "add_role" : "add_label";
+  if (input.dashboardChanged || input.hasLabel !== input.syncedState) return input.hasLabel ? "add_role" : "remove_role";
   return input.hasRole ? "add_label" : "remove_label";
 }
 
@@ -143,7 +149,8 @@ async function queueRoleChanges(db: D1Database, mapping: TwoWayMapping, guildId:
   return id;
 }
 
-export type TwoWayPollResult = { labelId: string; status: "checked" | "busy" | "syncing" | "error"; labelsAdded: number; labelsRemoved: number; rolesAdded: number; rolesRemoved: number; unmatched: number; jobId?: string; error?: string };
+/** `labelsAdopted` counts the `labelsAdded` that came from a member's first check, where the role they already held became the label. */
+export type TwoWayPollResult = { labelId: string; status: "checked" | "busy" | "syncing" | "error"; labelsAdded: number; labelsRemoved: number; labelsAdopted: number; rolesAdded: number; rolesRemoved: number; unmatched: number; jobId?: string; error?: string };
 
 export async function hasTwoWayLabels(db: D1Database): Promise<boolean> {
   return Boolean(await db.prepare("SELECT 1 FROM discord_label_role_mappings x JOIN member_labels l ON l.id = x.label_id AND l.installation_id = x.installation_id WHERE x.installation_id = 'primary' AND x.sync_direction = 'two_way' AND l.active = 1 LIMIT 1").first());
@@ -167,7 +174,7 @@ export async function pollTwoWayLabels(db: D1Database, server: TwoWayServer, dep
 
 export async function pollTwoWayLabel(db: D1Database, labelId: string, server: TwoWayServer, deps: TwoWayDependencies): Promise<TwoWayPollResult> {
   const now = deps.now?.() ?? new Date(); const at = now.toISOString();
-  const result: TwoWayPollResult = { labelId, status: "checked", labelsAdded: 0, labelsRemoved: 0, rolesAdded: 0, rolesRemoved: 0, unmatched: 0 };
+  const result: TwoWayPollResult = { labelId, status: "checked", labelsAdded: 0, labelsRemoved: 0, labelsAdopted: 0, rolesAdded: 0, rolesRemoved: 0, unmatched: 0 };
   // An overlapping pass that finds the lease held leaves this label alone.
   const claim = await db.prepare("UPDATE discord_label_role_mappings SET two_way_lease_expires_at = ? WHERE installation_id = 'primary' AND label_id = ? AND sync_direction = 'two_way' AND (two_way_lease_expires_at IS NULL OR two_way_lease_expires_at <= ?)").bind(new Date(now.getTime() + 120_000).toISOString(), labelId, at).run();
   if ((claim.meta?.changes ?? 0) !== 1) return { ...result, status: "busy" };
@@ -192,14 +199,17 @@ export async function pollTwoWayLabel(db: D1Database, labelId: string, server: T
       else if (action === "add_label" || action === "remove_label") {
         statements.push(labelChangeStatement(db, pair, labelId, action === "add_label" ? "add" : "remove", state.today, at), snapshotStatement(db, labelId, pair, pair.hasRole, at));
         if (action === "add_label") result.labelsAdded += 1; else result.labelsRemoved += 1;
+        // First check of this member: the role they already held became the label, dated today like any change from Discord.
+        if (action === "add_label" && !snapshot) result.labelsAdopted += 1;
       } else {
+        // No baseline is stored until the role job has run and both sides agree, so a failed push is simply tried again.
         roleChanges.push({ discordUserId: pair.discordUserId, action: action === "add_role" ? "add" : "remove" });
         if (action === "add_role") result.rolesAdded += 1; else result.rolesRemoved += 1;
       }
     }
     for (const memberId of snapshots.keys()) if (!paired.has(memberId)) statements.push(db.prepare("DELETE FROM discord_label_two_way_members WHERE installation_id = 'primary' AND label_id = ? AND member_id = ?").bind(labelId, memberId));
     statements.push(...unmatchedStatements(db, labelId, state.unmatched, at));
-    if (result.labelsAdded + result.labelsRemoved) statements.push(auditStatement(db, null, "discord.label_two_way_applied", labelId, { roleId: mapping.roleId, labelsAdded: result.labelsAdded, labelsRemoved: result.labelsRemoved }, at));
+    if (result.labelsAdded + result.labelsRemoved) statements.push(auditStatement(db, null, "discord.label_two_way_applied", labelId, { roleId: mapping.roleId, labelsAdded: result.labelsAdded, labelsRemoved: result.labelsRemoved, labelsAdopted: result.labelsAdopted }, at));
     await db.batch(statements);
     result.unmatched = state.unmatched.length;
     result.jobId = await queueRoleChanges(db, mapping, server.guildId, roleChanges, null, deps, at);

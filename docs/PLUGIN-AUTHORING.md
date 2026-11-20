@@ -30,14 +30,14 @@ The repository root is the plugin root. Composition refuses symbolic links and s
   "lancerlogin": {
     "moduleId": "example",
     "contract": 1,
-    "core": ">=2.0.0-beta.12 <3.0.0",
+    "core": ">=2.1.0-beta.8 <3.0.0",
     "tablePrefix": "example_",
     "entries": { "manifest": "./src/manifest.ts", "api": "./src/api.ts", "dashboard": "./src/dashboard.tsx" },
     "migrations": "./migrations",
     "adoptedCoreMigrations": []
   },
   "peerDependencies": {
-    "@lancerlogin/module-sdk": "^1.0.0",
+    "@lancerlogin/module-sdk": "^1.6.0",
     "react": "^19.1.1"
   }
 }
@@ -45,7 +45,7 @@ The repository root is the plugin root. Composition refuses symbolic links and s
 
 - `moduleId` is lowercase letters, digits and single hyphens, and never changes once installations use it. It must not be a first-party module ID (`attendance`) or another installed plugin's ID.
 - `contract` is the module contract major, which is also the major version of `@lancerlogin/module-sdk`. Core 2.x implements contract 1.
-- `core` is the range of LancerLogin releases the plugin supports: space-separated `>=`, `>`, `<=`, `<` or `=` comparators, with `||` between alternatives. Composition refuses the plugin for a Core outside it, before an installation build or web update starts. A beta Core sorts just below its release: `>=2.0.0-beta.12 <3.0.0` accepts 2.0.0-beta.12, later 2.0.0 betas, every stable 2.x release and 2.x betas such as 2.1.0-beta.1. An upper bound on a stable release excludes that release's betas, so `<3.0.0` never accepts a 3.0.0 beta, and `>=2.0.0` does not accept a 2.0.0 beta.
+- `core` is the range of LancerLogin releases the plugin supports: space-separated `>=`, `>`, `<=`, `<` or `=` comparators, with `||` between alternatives. Composition refuses the plugin for a Core outside it, before an installation build or web update starts. A beta Core sorts just below its release: `>=2.1.0-beta.8 <3.0.0` accepts 2.1.0-beta.8, later 2.1.0 betas, every stable 2.x release from 2.1.0 and later 2.x betas such as 2.2.0-beta.1. An upper bound on a stable release excludes that release's betas, so `<3.0.0` never accepts a 3.0.0 beta, and `>=2.0.0` does not accept a 2.0.0 beta.
 - `tablePrefix` names every table, index and trigger the plugin owns. It ends in `_` and must not overlap a Core prefix or another module's.
 - `entries.manifest` and `entries.api` are required (`.ts`, `.js` or `.mjs`); `entries.dashboard` is optional (`.tsx`, `.ts`, `.jsx`, `.js` or `.mjs`).
 - `migrations` points at the migrations directory, `adoptedCoreMigrations` lists historical Core migrations a module that moved out of Core adopts, and the optional `upgradeRequiresMigrations` names earlier migrations an installation must already have applied before it can upgrade to this release. See [Migrations](#migrations).

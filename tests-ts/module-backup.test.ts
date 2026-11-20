@@ -15,7 +15,8 @@ import { omitContestResubmissionFields } from "./fixtures/backup-versions.ts";
 import { syntheticAddonModule, syntheticNotesModule } from "./fixtures/synthetic-plugin/external-manifests.ts";
 import { syntheticAddonApiModule, syntheticNotesApiModule } from "./fixtures/synthetic-plugin/external-modules.ts";
 
-// The envelope Core exports now, at schema 51.
+// The envelope Core exports now, at schema 52. Schema 52 added two kiosk columns (migration 0100), which ownership
+// metadata does not list, so the envelope is the schema 51 one.
 const golden = JSON.parse(readFileSync(new URL("./fixtures/first-party-backup-envelope.json", import.meta.url), "utf8"));
 // The envelope Core exported at schema 50, before the early arrival allowance joined installation backups.
 const schema50Golden = JSON.parse(readFileSync(new URL("./fixtures/first-party-backup-envelope-schema-50.json", import.meta.url), "utf8"));
@@ -59,8 +60,8 @@ test("plugin-free builds keep the first-party backup envelope and an empty plugi
   const db = new BackupDatabase(); t.after(() => db.raw.close()); const client = backupClient(worker, db);
   for (const scope of ["meetings", "roster", "installation"] as const) {
     const backup = await client.backup(scope);
-    assert.equal(backup.schemaVersion, 51);
-    assert.deepEqual(backup.ownership, golden[scope].ownership, `${scope} ownership matches the schema 51 envelope`);
+    assert.equal(backup.schemaVersion, 52);
+    assert.deepEqual(backup.ownership, golden[scope].ownership, `${scope} ownership matches the schema 52 envelope`);
     assert.deepEqual(Object.keys(backup.tables), golden[scope].tables);
     // Schema 43 differs from the schema 41 and 42 envelope only by Carpool, and schema 44 from schema 43 only by Outreach:
     // each moved into a plugin with its own section. Schema 48 differs from schema 47 only by the simulator's sessions, and
@@ -106,7 +107,7 @@ test("schema 50 installation backups carry the FIRST credential; older backups r
   db.raw.exec("INSERT INTO first_team_cache(installation_id,program,number,name,location,season,source,checked_ms) VALUES('primary','FRC','321','Test Robotics A','Testville, PA',2026,'events-api',1); INSERT INTO first_seasons VALUES('primary','FRC',2026,1); INSERT INTO first_requests VALUES('primary','events-api','synthetic',1)");
   const credential = db.rows("SELECT * FROM first_credentials")[0];
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 51);
+  assert.equal(backup.schemaVersion, 52);
   assert.deepEqual(backup.tables.first_credentials, [credential]);
   assert.equal(JSON.stringify(backup).includes("synthetic-frc-token"), false, "only the ciphertext travels");
   for (const table of ["first_team_cache", "first_seasons", "first_requests"]) assert.equal(table in backup.tables, false, `${table} is never backed up`);

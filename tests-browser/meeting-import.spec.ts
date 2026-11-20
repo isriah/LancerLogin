@@ -134,6 +134,39 @@ test("the preview lists every row, switches matching rows between Skip and Updat
   await expect(page.getByRole("status").filter({ hasText: "4 meetings imported: 3 added, 1 updated." })).toBeVisible();
 });
 
+test("a failed import shows its error next to the preview's problem rows", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockImport(page);
+  // The import itself is refused; dry runs still answer as usual.
+  await page.route("**/meetings/import", async (route) => {
+    if (route.request().postDataJSON().dryRun) await route.fallback();
+    else await route.fulfill({ status: 409, json: { error: "Meetings changed since this preview. Preview again." } });
+  });
+  await page.goto("/dashboard");
+  const dialog = await openImport(page);
+  await dialog.getByLabel("Meetings CSV or spreadsheet rows").fill(csv);
+  await dialog.getByRole("button", { name: "Preview meetings" }).click();
+  const problems = dialog.getByRole("alert").filter({ hasText: "1 row has a problem and won't be imported." });
+  await expect(problems).toBeVisible();
+  await expect(dialog.getByRole("alert")).toHaveCount(1);
+
+  await dialog.getByRole("button", { name: "Import 3 meetings (skip 1 row with a problem)" }).click();
+  const failure = dialog.getByRole("alert").filter({ hasText: "Import failed." });
+  await expect(failure).toHaveText("Import failed. Meetings changed since this preview. Preview again.");
+  await expect(failure).toBeFocused();
+  // The preview and its problem rows stay, told apart from the failed import.
+  await expect(problems).toContainText("Row 7, Test Scrimmage Prep: overlaps Test Build Session (6:00–8:30 PM).");
+  await expect(dialog.getByRole("table", { name: "Processed meeting import" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Import 3 meetings (skip 1 row with a problem)" })).toBeEnabled();
+
+  // Going back clears the failure; it doesn't follow the file into the next preview.
+  await dialog.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Preview meetings" }).click();
+  await expect(dialog.getByRole("alert")).toHaveCount(1);
+  await expect(failure).toHaveCount(0);
+});
+
 for (const width of [390, 320]) test(`on a ${width}px phone the calendar heading keeps only Add meeting and Import CSV sits below the month navigation`, async ({ page }) => {
   await page.setViewportSize({ width, height: 844 });
   await page.goto("/dashboard");

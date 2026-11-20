@@ -27,6 +27,15 @@ export function compareReleaseVersions(left, right, options = {}) {
   for (let index = 0; index < 2; index++) if (x[index] !== y[index]) return x[index] > y[index] ? 1 : -1;
   return 0;
 }
+// Raspberry Pi kiosks ask for member PINs from this release. An older kiosk ignores Require PIN and sends plain scans,
+// which the Worker refuses, so it would record nothing. Web kiosks run the current dashboard code and always qualify.
+// A kiosk that has not reported an official release (never connected, or a development build) does not qualify.
+export const requirePinFirstKioskRelease = "2.1.0-beta.3";
+export function kioskHonoursRequirePin(kind, releaseVersion) {
+  if (kind === "web") return true;
+  const order = typeof releaseVersion === "string" ? compareReleaseVersions(releaseVersion.trim(), requirePinFirstKioskRelease) : undefined;
+  return order === 0 || order === 1;
+}
 export function releaseAllowed(tag, channel = "stable", prerelease = false) {
   const version = parseReleaseVersion(tag);
   return Boolean(typeof tag === "string" && tag.startsWith("v") && version && ["stable", "beta"].includes(channel)

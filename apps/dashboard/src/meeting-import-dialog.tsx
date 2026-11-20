@@ -29,11 +29,14 @@ export function MeetingImportDialog({ open, timeZone, onClose, onImported }: Pro
   const [csv, setCsv] = useState(""); const [sourceName, setSourceName] = useState(""); const [readingFile, setReadingFile] = useState(false);
   const [rows, setRows] = useState<MeetingCsvRow[]>([]); const [recognised, setRecognised] = useState<MeetingCsvField[]>([]); const [ignored, setIgnored] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]); const [preview, setPreview] = useState<MeetingImportResult>(); const [choices, setChoices] = useState<Record<string, Choice>>({});
+  // A failed import request (a conflict, the network), kept apart from the preview's own problem rows.
+  const [importError, setImportError] = useState("");
   const [busy, setBusy] = useState(false); const dialog = useRef<HTMLDivElement>(null); const fileInput = useRef<HTMLInputElement>(null);
 
-  useModalFocus(dialog, open, busy, () => { if (preview) setPreview(undefined); else close(); });
+  useModalFocus(dialog, open, busy, () => { if (preview) back(); else close(); });
 
-  function close() { if (busy) return; setPreview(undefined); setErrors([]); setChoices({}); onClose(); }
+  function back() { setPreview(undefined); setImportError(""); }
+  function close() { if (busy) return; back(); setErrors([]); setChoices({}); onClose(); }
   function showErrors(next: string[]) { setErrors(next); window.requestAnimationFrame(() => document.getElementById("meeting-import-errors")?.focus()); }
   async function chooseFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
@@ -47,7 +50,7 @@ export function MeetingImportDialog({ open, timeZone, onClose, onImported }: Pro
     finally { setReadingFile(false); }
   }
   async function dryRun(nextRows: MeetingCsvRow[], nextChoices: Record<string, Choice>) {
-    setBusy(true);
+    setBusy(true); setImportError("");
     try { setPreview(await api<MeetingImportResult>("/meetings/import", { method: "POST", body: JSON.stringify({ rows: nextRows, dryRun: true, actions: nextChoices }) })); setErrors([]); return true; }
     catch (error) { setPreview(undefined); showErrors([(error as Error).message]); return false; }
     finally { setBusy(false); }
@@ -64,9 +67,9 @@ export function MeetingImportDialog({ open, timeZone, onClose, onImported }: Pro
   }
   function choose(next: Record<string, Choice>) { setChoices(next); void dryRun(rows, next); }
   async function confirm() {
-    setBusy(true);
+    setBusy(true); setImportError("");
     try { const result = await api<MeetingImportResult>("/meetings/import", { method: "POST", body: JSON.stringify({ rows, dryRun: false, actions: choices }) }); setPreview(undefined); setCsv(""); setSourceName(""); setChoices({}); await onImported(result); onClose(); }
-    catch (error) { showErrors([(error as Error).message]); }
+    catch (error) { setImportError((error as Error).message || "Request failed"); window.requestAnimationFrame(() => document.getElementById("meeting-import-failure")?.focus()); }
     finally { setBusy(false); }
   }
 
@@ -141,10 +144,10 @@ export function MeetingImportDialog({ open, timeZone, onClose, onImported }: Pro
           </tr>;
         })}</tbody>
       </table></div>
-      {problems.length > 0 && <div id="meeting-import-errors" className="inline-messages error" role="alert" tabIndex={-1}><strong>{problems.length === 1 ? "1 row has" : `${problems.length} rows have`} a problem and won't be imported.</strong> Fix the file and preview again, or import the other rows.<ul>{problems.map((row) => <li key={row.rowNumber}>Row {row.rowNumber}{row.meeting ? `, ${row.meeting.title}` : ""}: {sentence(row.error!)}</li>)}</ul></div>}
-      {errors.length > 0 && !problems.length && errorMessages}
+      {problems.length > 0 && <div id="meeting-import-problems" className="inline-messages error" role="alert" tabIndex={-1}><strong>{problems.length === 1 ? "1 row has" : `${problems.length} rows have`} a problem and won't be imported.</strong> Fix the file and preview again, or import the other rows.<ul>{problems.map((row) => <li key={row.rowNumber}>Row {row.rowNumber}{row.meeting ? `, ${row.meeting.title}` : ""}: {sentence(row.error!)}</li>)}</ul></div>}
+      {importError && <div id="meeting-import-failure" className="inline-messages error" role="alert" tabIndex={-1}><strong>Import failed.</strong> {importError}</div>}
       <p className="field-help import-preview-summary" role="status">{parts.join(", ")}.</p>
-      <div className="dialog-actions"><button type="button" disabled={busy} onClick={() => setPreview(undefined)}>Back</button><button className="primary-button" type="button" disabled={busy || !importing} onClick={() => void confirm()}>{busy ? "Working…" : `Import ${plural(importing, "meeting", "meetings")}${problems.length ? ` (skip ${plural(problems.length, "row", "rows")} with a problem)` : ""}`}</button></div>
+      <div className="dialog-actions"><button type="button" disabled={busy} onClick={back}>Back</button><button className="primary-button" type="button" disabled={busy || !importing} onClick={() => void confirm()}>{busy ? "Working…" : `Import ${plural(importing, "meeting", "meetings")}${problems.length ? ` (skip ${plural(problems.length, "row", "rows")} with a problem)` : ""}`}</button></div>
     </>;
   }
   return <div className="dialog-backdrop"><div role="dialog" aria-modal="true" aria-labelledby="meeting-import-title" tabIndex={-1} ref={dialog}><section className="roster-import-dialog" aria-labelledby="meeting-import-title">{content}</section></div></div>;

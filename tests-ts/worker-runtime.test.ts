@@ -467,12 +467,12 @@ test("kiosk authentication configuration is Admin-only, validated, audited, and 
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const status = await worker.fetch(request("/admin/kiosks", undefined, { cookie: await sessionCookie("admin") }), env);
   assert.equal(status.status, 200);
-  assert.deepEqual(await status.json(), { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, authenticationMethod: "fingerprint", configuredAuthenticationMethod: "qr", pairedAt: "2026-09-01T00:00:00.000Z", requirePin: false }] });
+  assert.deepEqual(await status.json(), { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, authenticationMethod: "fingerprint", configuredAuthenticationMethod: "qr", pairedAt: "2026-09-01T00:00:00.000Z", requirePin: false, discordCode: false, discordCodeBackup: "offline" }] });
   assert.equal((await worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", { authenticationMethod: "nfc" }, { method: "PATCH", cookie: await sessionCookie("operator") }), env)).status, 403);
   assert.equal((await worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", { authenticationMethod: "camera" }, { method: "PATCH", cookie: await sessionCookie("admin") }), env)).status, 400);
   const updated = await worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", { authenticationMethod: "nfc" }, { method: "PATCH", cookie: await sessionCookie("admin") }), env);
   assert.equal(updated.status, 200);
-  assert.deepEqual(await updated.json(), { kioskId: "kiosk-1", authenticationMethod: "nfc", memberLookup: "entry", requirePin: false });
+  assert.deepEqual(await updated.json(), { kioskId: "kiosk-1", authenticationMethod: "nfc", memberLookup: "entry", requirePin: false, discordCode: false, discordCodeBackup: "offline" });
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET configured_authentication_method") && call.values[0] === "nfc"));
   assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO audit_log") && call.values.includes("kiosk.authentication_method_updated") && call.values.every((value) => value !== "raw-private-token")));
 });
@@ -489,8 +489,8 @@ test("member search is a lookup of the member ID method, and web kiosks accept o
 
   const pi = setup("pi");
   const search = await patch(pi.env, { authenticationMethod: "member_id", memberLookup: "search" });
-  assert.equal(search.status, 200); assert.deepEqual(await search.json(), { kioskId: "kiosk-1", authenticationMethod: "member_id", memberLookup: "search", requirePin: false });
-  assert.deepEqual(await (await patch(pi.env, { authenticationMethod: "member_id" })).json(), { kioskId: "kiosk-1", authenticationMethod: "member_id", memberLookup: "entry", requirePin: false });
+  assert.equal(search.status, 200); assert.deepEqual(await search.json(), { kioskId: "kiosk-1", authenticationMethod: "member_id", memberLookup: "search", requirePin: false, discordCode: false, discordCodeBackup: "offline" });
+  assert.deepEqual(await (await patch(pi.env, { authenticationMethod: "member_id" })).json(), { kioskId: "kiosk-1", authenticationMethod: "member_id", memberLookup: "entry", requirePin: false, discordCode: false, discordCodeBackup: "offline" });
   assert.equal((await patch(pi.env, { authenticationMethod: "fingerprint", memberLookup: "search" })).status, 400);
   assert.equal((await patch(pi.env, { authenticationMethod: "fingerprint", memberLookup: "entry" })).status, 400);
   assert.equal((await patch(pi.env, { authenticationMethod: "member_id", memberLookup: "email" })).status, 400);
@@ -501,7 +501,7 @@ test("member search is a lookup of the member ID method, and web kiosks accept o
   const web = setup("web");
   for (const authenticationMethod of ["fingerprint", "rfid", "nfc", "qr"]) {
     const refused = await patch(web.env, { authenticationMethod });
-    assert.equal(refused.status, 400); assert.equal((await refused.json() as { error: string }).error, "Web kiosks identify members by member ID or member search.");
+    assert.equal(refused.status, 400); assert.equal((await refused.json() as { error: string }).error, "Web kiosks identify members by Discord code, member ID or member search.");
   }
   assert.equal((await patch(web.env, { authenticationMethod: "member_id", memberLookup: "search" })).status, 200);
   assert.deepEqual(saved(web.database), [["member_id", "search"]]);
@@ -1061,10 +1061,10 @@ test("Require PIN is saved only with the member ID method and cleared by any oth
   const saved = () => database.calls.filter((call) => call.sql.includes("UPDATE kiosks SET configured_authentication_method")).map((call) => call.values.slice(0, 3));
   for (const input of [{ authenticationMethod: "fingerprint", requirePin: true }, { authenticationMethod: "qr", requirePin: true }, { authenticationMethod: "member_id", requirePin: "true" }, { authenticationMethod: "member_id", requirePin: 1 }]) assert.equal((await patch(input)).status, 400, JSON.stringify(input));
   assert.equal((await worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", { authenticationMethod: "member_id", requirePin: true }, { method: "PATCH", cookie: await sessionCookie("operator") }), env)).status, 403);
-  assert.deepEqual(await (await patch({ authenticationMethod: "member_id", requirePin: true })).json(), { kioskId: "kiosk-1", authenticationMethod: "member_id", memberLookup: "entry", requirePin: true });
-  assert.deepEqual(await (await patch({ authenticationMethod: "member_id", memberLookup: "search" })).json(), { kioskId: "kiosk-1", authenticationMethod: "member_id", memberLookup: "search", requirePin: true });
-  assert.deepEqual(await (await patch({ authenticationMethod: "fingerprint" })).json(), { kioskId: "kiosk-1", authenticationMethod: "fingerprint", memberLookup: "entry", requirePin: false });
-  assert.deepEqual(await (await patch({ authenticationMethod: "fingerprint", requirePin: false })).json(), { kioskId: "kiosk-1", authenticationMethod: "fingerprint", memberLookup: "entry", requirePin: false });
+  assert.deepEqual(await (await patch({ authenticationMethod: "member_id", requirePin: true })).json(), { kioskId: "kiosk-1", authenticationMethod: "member_id", memberLookup: "entry", requirePin: true, discordCode: false, discordCodeBackup: "offline" });
+  assert.deepEqual(await (await patch({ authenticationMethod: "member_id", memberLookup: "search" })).json(), { kioskId: "kiosk-1", authenticationMethod: "member_id", memberLookup: "search", requirePin: true, discordCode: false, discordCodeBackup: "offline" });
+  assert.deepEqual(await (await patch({ authenticationMethod: "fingerprint" })).json(), { kioskId: "kiosk-1", authenticationMethod: "fingerprint", memberLookup: "entry", requirePin: false, discordCode: false, discordCodeBackup: "offline" });
+  assert.deepEqual(await (await patch({ authenticationMethod: "fingerprint", requirePin: false })).json(), { kioskId: "kiosk-1", authenticationMethod: "fingerprint", memberLookup: "entry", requirePin: false, discordCode: false, discordCodeBackup: "offline" });
   assert.deepEqual(saved(), [["member_id", "entry", 1], ["member_id", "search", 1], ["fingerprint", "entry", 0], ["fingerprint", "entry", 0]]);
   assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO audit_log") && String(call.values.find((value) => typeof value === "string" && value.includes("requirePin"))).includes('"requirePin":true')));
 });
@@ -1526,7 +1526,7 @@ test("dashboard role picker lists roles, links a label, imports roles as labels,
     const imported = await admin("/admin/integrations/discord/label-roles/from-roles", { roleIds: [roleId] });
     assert.equal(imported.status, 201, await imported.clone().text());
     assert.ok(database.batches.at(-1)?.some((call) => call.sql.includes("INSERT INTO member_labels") && call.values.includes("Robotics")));
-    database.rows.set("SELECT id, name, active FROM member_labels", { id: "label-2", name: "Robotics", active: 0 });
+    database.lists.set("SELECT l.id, l.name, l.active FROM json_each", [{ id: "label-2", name: "Robotics", active: 0 }]);
     const inserts = () => database.calls.filter((call) => /^\s*INSERT/.test(call.sql)).length + database.batches.length;
     const before = inserts();
     assert.match((await (await admin("/admin/integrations/discord/label-roles/from-roles", { roleIds: [roleId] })).json() as { error: string }).error, /Restore the retired label/);
@@ -1535,8 +1535,9 @@ test("dashboard role picker lists roles, links a label, imports roles as labels,
 
     // Sync all loads the server's roles and members once for every linked label.
     database.lists.set("SELECT x.label_id AS labelId, l.name AS labelName FROM discord_label_role_mappings", [{ labelId: "label-1", labelName: "Build Team" }, { labelId: "label-3", labelName: "Pit Crew" }]);
-    database.rows.set("FROM discord_label_role_mappings x JOIN", { labelId: "label-1", labelName: "Build Team", active: 1, guildId, roleId, roleName: "Robotics", createdAt: new Date().toISOString() });
-    database.lists.set("FROM members m WHERE m.installation_id", [{ id: "m1", memberId: "TEST-001", firstName: "Test", lastName: "Student A", discordUserId: "111111111111111111", active: 1, labelAction: "add" }]);
+    database.lists.set("AND x.label_id IN (", ["label-1", "label-3"].map((labelId) => ({ labelId, labelName: labelId === "label-1" ? "Build Team" : "Pit Crew", active: 1, guildId, roleId, roleName: "Robotics", createdAt: new Date().toISOString() })));
+    database.lists.set("FROM members m WHERE m.installation_id", [{ id: "m1", memberId: "TEST-001", firstName: "Test", lastName: "Student A", discordUserId: "111111111111111111", active: 1 }]);
+    database.lists.set("FROM member_label_changes c WHERE", [{ labelId: "label-1", memberId: "m1", action: "add", effectiveDate: "2026-01-01" }]);
     requests.length = 0;
     const previewed = await admin("/admin/integrations/discord/label-roles/preview-all", {});
     assert.equal(previewed.status, 200, await previewed.clone().text());
@@ -3299,7 +3300,7 @@ test("roster backup and restore retain label definitions, dated history, and att
   database.rows.set("SELECT attendance_recent_days AS recentDays", { recentDays: 30, policyActivatedOn: "2026-09-22" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
   const exported = await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env); assert.equal(exported.status, 200);
-  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 51); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
+  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 52); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
   assert.deepEqual(Object.keys(backup.tables).sort(), ["label_attendance_rules", "label_weekly_targets", "member_label_changes", "member_labels", "members"]);
   assert.deepEqual(backup.tables.label_attendance_rules, [{ id: "class-rule", installation_id: "primary", label_id: "mentor:primary", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", excused_handling: "count_missed" }]);
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie }), env)).status, 200);
@@ -3319,7 +3320,7 @@ test("installation backup retains Discord role mappings while roster backup omit
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
   const roster = await (await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env)).json() as { tables: Record<string, unknown[]> };
-  assert.equal(installation.schemaVersion, 51); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.schemaVersion, 52); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
   assert.equal(installation.tables.saved_report_views.length, 1); assert.equal(installation.tables.saved_report_tabs.length, 1);
   assert.equal(Object.hasOwn(roster.tables, "discord_label_role_mappings"), false);
   assert.equal(Object.hasOwn(roster.tables, "saved_report_views"), false);
@@ -3544,7 +3545,7 @@ test("contest backups retain rejected submission history, default schema40 and r
   const history = JSON.stringify([{ messageId: "original-message", createdAt: "2026-10-15T10:00:00Z", status: "rejected", resolvedBy: "admin-1", resolvedAt: "2026-10-15T11:00:00Z", reviewNote: "Original review", submittedByDiscordUserId: "synthetic-discord" }]);
   database.lists.set("FROM discord_attendance_contests WHERE", [{ installation_id: "primary", meeting_id: "meeting", member_id: "member", message_id: "new-message", status: "open", resolved_by: null, resolved_at: null, created_at: "2026-10-15T12:00:00Z", submitted_by_discord_user_id: "synthetic-discord", review_note: null, prior_reviews_json: history }]);
   const backup = await (await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie }), env)).json() as any;
-  assert.equal(backup.schemaVersion, 51); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
+  assert.equal(backup.schemaVersion, 52); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
   const restore = (value: unknown) => worker.fetch(request("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup: value }, { cookie }), env);
   const restored = await restore(backup); assert.equal(restored.status, 200, await restored.clone().text());
   assert.ok(database.batches.at(-1)?.some(call => call.sql.includes("INSERT INTO discord_attendance_contests") && call.values.includes(history)));

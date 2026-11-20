@@ -53,6 +53,9 @@ test("live adapter keeps Worker configuration out of the actual Pages CLI invoca
       assert.equal(await callCount(), 3);
       assert.equal(warnings.length, 1);
       assert.match(warnings[0], /pages_api_binding_failed_403/);
+      // Preparing the same release again is refused as already current, so the warning must not suggest it.
+      assert.doesNotMatch(warnings[0], /run the update again/);
+      assert.match(warnings[0], /Cloudflare Pages: Edit\..*added by the next release update, or by Apply changes for a pending module change\./);
     } finally { globalThis.fetch = originalFetch; console.warn = originalWarn; }
     const [workerArgs, pagesArgs] = (await readFile(join(source, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
     assert.deepEqual(workerArgs, ["deploy", "--message", `Web update ${context.requestId}`, "--config", join(source, ".provision/wrangler.json")]);

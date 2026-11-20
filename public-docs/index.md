@@ -1,12 +1,12 @@
 # LancerLogin guide
 
-LancerLogin is a self-hosted attendance dashboard with Raspberry Pi kiosks, for an organization that runs it in its own GitHub and Cloudflare accounts. The full documentation is at [isriah.github.io/LancerLogin](https://isriah.github.io/LancerLogin/).
+LancerLogin is a self-hosted attendance dashboard with Raspberry Pi kiosks and web kiosks (a touchscreen laptop or tablet running the kiosk page), for an organization that runs it in its own GitHub and Cloudflare accounts. The full documentation is at [isriah.github.io/LancerLogin](https://isriah.github.io/LancerLogin/).
 
 ## Start here
 
 1. [Install](https://isriah.github.io/LancerLogin/setup.html): create a **private** repository from the [LancerLogin template](https://github.com/isriah/LancerLogin), connect Cloudflare, and run the installation workflow.
 2. [First sign-in and setup](https://isriah.github.io/LancerLogin/first-run.html): create the first Admin, choose modules, and complete Attendance setup.
-3. [Set up kiosks](https://isriah.github.io/LancerLogin/kiosk.html): install the kiosk software and pair each Raspberry Pi with a one-time key.
+3. [Set up kiosks](https://isriah.github.io/LancerLogin/kiosk.html): install the kiosk software and pair each Raspberry Pi with a one-time key, or pair a touchscreen laptop or tablet as a web kiosk with a one-time code.
 
 ## Choose a task
 
@@ -21,4 +21,4 @@ Public documentation never contains private repository details, account IDs, bac
 
 ## Screenshot coverage
 
-Screenshots on the documentation site show the GitHub and Cloudflare controls used during installation and use generated example values. Where a screenshot of the LancerLogin dashboard or kiosk has not been captured yet, the text describes the screen instead. The browser simulator demonstrates check-in in software only; it is not a physical kiosk.
+Screenshots on the documentation site show the GitHub and Cloudflare controls used during installation and use generated example values. Where a screenshot of the LancerLogin dashboard or kiosk has not been captured yet, the text describes the screen instead.

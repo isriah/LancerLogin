@@ -1,11 +1,18 @@
 // The web kiosk's calls to the LancerLogin API. It uses the same API base as the dashboard but never the dashboard's
 // cookies: every call omits credentials and sends the kiosk's own bearer token.
+import { scanRefusalFrom, type ScanRefusal } from "../../../kiosk/src/kiosk-presentation.mjs";
 
 export type KioskSettings = {
   organizationName?: string; subtitle?: string; logoData?: string; primaryColor?: string; secondaryColor?: string; logoBackdrop?: string;
   authenticationMethod?: string; kind?: "pi" | "web"; memberLookup?: "entry" | "search";
   /** Members enter a PIN after Confirm (phase 3); the roster then carries each member's PIN hash. */
   requirePin?: boolean; pinLockout?: { enabled?: boolean; attempts?: number; minutes?: number };
+  /**
+   * Members type a 6-digit code from `/code` in Discord instead of looking themselves up. `memberLookup` and
+   * `requirePin` then describe the backup method, offered only while offline or at any time. An older Worker sends
+   * neither field: off, and "offline".
+   */
+  discordCode?: boolean; discordCodeBackup?: "offline" | "always";
 };
 export type KioskConfig = { kiosk: { id: string; name: string }; settings: KioskSettings | null };
 /** A member's PIN as the roster carries it to a Require PIN kiosk: a PBKDF2-SHA256 hash, never the PIN. */
@@ -17,6 +24,8 @@ export type KioskCommand = { id: string; type: string; createdAt?: string };
 export type AttendanceResult = { accepted?: boolean; duplicate?: boolean; eventId?: string; action?: "check_in" | "check_out"; meeting?: { id: string; title: string }; member?: { id: string; externalId?: string; displayName?: string } };
 /** `pin` goes only with a scan sent straight away; a scan queued after the cached hash matched says `pinCheck: "offline"`. */
 export type AttendanceScan = { eventId: string; memberId: string; occurredAt: string; pairingId: string; rescanSupported: true; pin?: string; pinCheck?: "offline" };
+/** A Discord code in place of a member ID. Sent straight away only: it is never queued, and the server finds the member. */
+export type DiscordCodeScan = { eventId: string; discordCode: string; occurredAt: string; pairingId: string; rescanSupported: true };
 export type Heartbeat = { readerOnline: true; authenticationMethod: "member_id"; releaseVersion: string; pendingEvents: number; lastSyncAt?: string };
 export type HeartbeatReply = { ok?: boolean; kioskId?: string; receivedAt?: string };
 /** A refused scan as `POST /kiosk/scan-reviews` takes it: the same evidence a Pi kiosk uploads. */
@@ -31,15 +40,17 @@ export type PinFailureReport = { memberId: string; count: number; lastAt: string
  * What became of one attempt to send a scan:
  * - `accepted`: recorded, or already recorded under the same event ID (`result.duplicate`);
  * - `rejected`: refused on its merits, a 4xx answer with a JSON error body such as "no meeting is accepting scans".
- *   Sending it again can't change that;
+ *   Sending it again can't change that. `refusal` is the Worker's reason when nothing is wrong with the scan itself
+ *   (no meeting open, attendance already settled); an older Worker sends none;
  * - `rescan`: refused because the member scanned on another kiosk moments apart; nothing to record or review;
- * - `credential`: the kiosk's credential was refused (401), so the kiosk needs pairing again;
+ * - `credential`: the Worker says the kiosk's credential is no longer valid (`credentialRevoked`), so the kiosk needs
+ *   pairing again;
  * - `unreachable`: no answer (a network error or timeout); `retry`: an answer that doesn't settle the scan, such as a
- *   5xx, a 429 or a proxy's error page. Both keep the scan queued.
+ *   5xx, a 429, a proxy's error page or any other 401. Both keep the scan queued.
  */
 export type SendOutcome =
   | { kind: "accepted"; result: AttendanceResult }
-  | { kind: "rejected"; status: number; code?: string; message: string; lockedUntil?: string; attemptsLeft?: number }
+  | { kind: "rejected"; status: number; code?: string; message: string; lockedUntil?: string; attemptsLeft?: number; refusal?: ScanRefusal }
   | { kind: "rescan"; status: number; code: string; message: string }
   | { kind: "credential" }
   | { kind: "unreachable" }
@@ -48,7 +59,9 @@ export type SendOutcome =
 /** The API answered with an error status. `code` is the API's machine-readable reason, when it gives one. */
 export class KioskApiError extends Error {
   readonly status: number; readonly code?: string; readonly lockedUntil?: string;
-  constructor(message: string, status: number, code?: string, lockedUntil?: string) { super(message); this.name = "KioskApiError"; this.status = status; this.code = code; if (lockedUntil) this.lockedUntil = lockedUntil; }
+  /** The Worker said this kiosk's credential is no longer valid (see `credentialRevoked`). */
+  readonly credentialRevoked: boolean;
+  constructor(message: string, status: number, code?: string, lockedUntil?: string, credentialRevoked = false) { super(message); this.name = "KioskApiError"; this.status = status; this.code = code; if (lockedUntil) this.lockedUntil = lockedUntil; this.credentialRevoked = credentialRevoked; }
 }
 /** No answer at all: the network or the server couldn't be reached. */
 export class KioskNetworkError extends Error {
@@ -81,45 +94,63 @@ async function call<T>(options: KioskApiOptions, path: string, init: RequestInit
   const reply = await send(options, path, init);
   if (reply.status === 304 && init.allowNotModified) return { body: undefined as T, status: 304, headers: reply.headers };
   const body = await reply.json().catch(() => ({})) as T & { error?: string; details?: string[]; code?: string; lockedUntil?: unknown };
-  if (!reply.ok) throw new KioskApiError(body.details?.join(" ") || body.error || "Request failed", reply.status, body.code, lockedUntilFrom(body.lockedUntil));
+  // Only a JSON answer is the Worker's own word on the credential; a proxy's 401 page never is.
+  if (!reply.ok) throw new KioskApiError(body.details?.join(" ") || body.error || "Request failed", reply.status, body.code, lockedUntilFrom(body.lockedUntil), jsonContent(reply) && credentialRevoked(reply.status, body));
   return { body, status: reply.status, headers: reply.headers };
 }
 
 const json = (value: unknown) => JSON.stringify(value);
+
+/**
+ * The Worker's answer to a kiosk token it no longer accepts, because the kiosk was retired or replaced (`kioskFor` in
+ * apps/api/src/index.ts). It sends no code for this, so the message is the contract.
+ */
+export const revokedCredentialMessage = "Kiosk credential is invalid";
+/**
+ * Whether an answer says this kiosk's credential was revoked: a 401 whose JSON body carries the Worker's message.
+ * Only this forgets the pairing. Any other 401 (a proxy's page, a sign-in wall, a missing header) is a passing failure:
+ * the kiosk keeps its pairing and its unsent scans and tries again.
+ */
+export const credentialRevoked = (status: number, body: unknown) => status === 401 && typeof body === "object" && body !== null && (body as { error?: unknown }).error === revokedCredentialMessage;
 
 const jsonContent = (reply: Response) => /^application\/json(?:\s*;|\s*$)/i.test(reply.headers.get("content-type") ?? "");
 /** Answers that never settle a scan, whatever their body says: the server or a proxy is busy or timed out. */
 const retryStatuses = new Set([408, 425, 429]);
 /** The Worker's code for a member who scanned on another kiosk moments apart: the member just scans again. */
 const rescanCodes = new Set(["possible_wrong_match"]);
-/** A wrong PIN is a 403 with this code. Only a 401 without a code is a refused credential. */
+/** A wrong PIN is a 403 with this code; an older Worker sent it as a 401, which is still not a refused credential. */
 const wrongPinCode = "pin_incorrect";
 /** The member's online PIN tries are throttled: a 429 that answers this scan, unlike a busy server's 429. */
 const pinThrottledCode = "pin_throttled";
+/** Too many wrong Discord codes at this kiosk: the same kind of 429. */
+const codeThrottledCode = "code_throttled";
 function lockedUntilFrom(value: unknown) { return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : undefined; }
 
 /** Sends one scan and says what became of it. It never throws: every answer, or no answer, is a SendOutcome. */
-export async function deliverScan(options: KioskApiOptions, scan: AttendanceScan): Promise<SendOutcome> {
+export async function deliverScan(options: KioskApiOptions, scan: AttendanceScan | DiscordCodeScan): Promise<SendOutcome> {
   let reply: Response;
   try { reply = await send(options, "/kiosk/attendance", { method: "POST", body: json(scan) }); }
   catch { return { kind: "unreachable" }; }
   let body: (AttendanceResult & { error?: unknown; code?: unknown; lockedUntil?: unknown; attemptsLeft?: unknown }) | undefined;
   if (jsonContent(reply)) body = await reply.json().catch(() => undefined);
   else await reply.body?.cancel().catch(() => undefined);
-  if (reply.status === 401 && !(body && typeof body === "object" && body.code === wrongPinCode)) return { kind: "credential" };
+  if (credentialRevoked(reply.status, body)) return { kind: "credential" };
+  // Any other 401 says nothing about this scan or this kiosk, so the scan stays queued.
+  if (reply.status === 401 && !(body && typeof body === "object" && body.code === wrongPinCode)) return { kind: "retry", status: reply.status };
   if (reply.ok) {
     // Only an answer about this scan settles it; anything else (a proxy's page, another event's answer) is retried.
     const settles = body && typeof body === "object" && (body.eventId === undefined || body.eventId === scan.eventId) && (body.accepted === true || body.duplicate === true);
     return settles ? { kind: "accepted", result: { ...body, eventId: scan.eventId } } : { kind: "retry", status: reply.status };
   }
-  const throttled = reply.status === 429 && body && typeof body === "object" && body.code === pinThrottledCode;
+  const throttled = reply.status === 429 && body && typeof body === "object" && (body.code === pinThrottledCode || body.code === codeThrottledCode);
   if (reply.status >= 400 && reply.status < 500 && (!retryStatuses.has(reply.status) || throttled) && body && typeof body === "object" && (typeof body.error === "string" || typeof body.code === "string")) {
     const code = typeof body.code === "string" && body.code ? body.code : undefined;
     const message = typeof body.error === "string" ? body.error.slice(0, 300) : "";
     if (code && rescanCodes.has(code)) return { kind: "rescan", status: reply.status, code, message };
     const lockedUntil = lockedUntilFrom(body.lockedUntil);
     const attemptsLeft = Number.isInteger(body.attemptsLeft) && Number(body.attemptsLeft) >= 0 ? Number(body.attemptsLeft) : undefined;
-    return { kind: "rejected", status: reply.status, ...(code ? { code } : {}), message, ...(lockedUntil ? { lockedUntil } : {}), ...(attemptsLeft !== undefined ? { attemptsLeft } : {}) };
+    const refusal = scanRefusalFrom(body);
+    return { kind: "rejected", status: reply.status, ...(code ? { code } : {}), message, ...(lockedUntil ? { lockedUntil } : {}), ...(attemptsLeft !== undefined ? { attemptsLeft } : {}), ...(refusal ? { refusal } : {}) };
   }
   return { kind: "retry", status: reply.status };
 }
@@ -148,15 +179,18 @@ export function createKioskApi(options: KioskApiOptions & { token: string }) {
     },
     async attendance(scan: AttendanceScan) { return (await call<AttendanceResult>(options, "/kiosk/attendance", { method: "POST", body: json(scan) })).body; },
     /** Sends a scan and classifies the answer, without throwing; the offline queue uses this. */
-    deliver(scan: AttendanceScan) { return deliverScan(options, scan); },
+    deliver(scan: AttendanceScan | DiscordCodeScan) { return deliverScan(options, scan); },
     /** Uploads refused scans for review on the dashboard; the reply says which ones the server now holds. */
     async scanReviews(records: ScanReviewRecord[]) {
       const body = (await call<{ reviews?: ScanReviewAcknowledgement[] }>(options, "/kiosk/scan-reviews", { method: "POST", body: json({ records }) })).body;
       return Array.isArray(body.reviews) ? body.reviews : [];
     },
-    /** Reports wrong PIN tries made offline; the server adds them to each member's count. */
-    async pinFailures(failures: PinFailureReport[]) {
-      return (await call<{ recorded?: number }>(options, "/kiosk/pin-failures", { method: "POST", body: json({ failures }) })).body;
+    /**
+     * Reports wrong PIN tries made offline; the server adds them to each member's count. `reportId` is the same on every
+     * resend of the same report, so the server counts it once; a server from before report ids ignores it.
+     */
+    async pinFailures(failures: PinFailureReport[], reportId?: string) {
+      return (await call<{ recorded?: number }>(options, "/kiosk/pin-failures", { method: "POST", body: json({ ...(reportId ? { reportId } : {}), failures }) })).body;
     },
     /** Asks an Operator to approve a PIN for a member with none: a new request, or the one already waiting. */
     async requestPin(memberId: string) { return (await call<{ request: PinRequest }>(options, "/kiosk/pin-requests", { method: "POST", body: json({ memberId }) })).body.request; },

@@ -480,7 +480,7 @@ export async function createLiveUpgradeIO(context, environment, sourceDirectory,
       // Migrations and the Worker are already live, so a refused binding must not fail the update: the proxy falls back to
       // fetch, as before, and per-client sign-in limits stay shared until a later update adds it.
       try { await bindPagesApi({ accountOrigin, headers: cfHeaders, project: `${context.slug}-dashboard`, worker: `${context.slug}-api` }); }
-      catch (error) { console.warn(`::warning title=Pages API binding not added::${error.message}: all dashboard visitors keep sharing one sign-in limit. Check that the Cloudflare token has Cloudflare Pages: Edit, then run the update again.`); }
+      catch (error) { console.warn(`::warning title=Pages API binding not added::${error.message}: all dashboard visitors keep sharing one sign-in limit. Check that the Cloudflare token has Cloudflare Pages: Edit. Starting the same update again does not help, because it is refused as already current: the binding is added by the next release update, or by Apply changes for a pending module change.`); }
       // Pages rejects custom --config paths; the generated configuration belongs to the Worker only.
       await command(process.execPath, [resolve(source, "node_modules/wrangler/bin/wrangler.js"), "pages", "deploy", "apps/dashboard/dist", `--project-name=${context.slug}-dashboard`, "--branch=main", `--commit-hash=${context.sha}`, "--commit-dirty=false"], source, processEnvironment);
     },

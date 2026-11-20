@@ -15,7 +15,8 @@ h1 { margin: 0; font-size: 22px; letter-spacing: .02em; }
 h2 { margin: 0; font-size: 17px; }
 a { color: #7fd4c1; }
 .links { display: flex; flex-wrap: wrap; gap: 16px; color: var(--muted); font-size: 13px; }
-main { display: grid; gap: 24px; padding: 24px; }
+main, #kiosks { display: grid; gap: 24px; }
+main { padding: 24px; }
 .kiosk { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
 /* The kiosk screen is drawn at a fixed kiosk-display size and scaled to fit, so it lays out as it would on a kiosk. */
 .screen { position: relative; aspect-ratio: 1024 / 600; width: 100%; border: 8px solid #050607; border-radius: 16px; background: #000; overflow: hidden; }
@@ -52,7 +53,15 @@ ol { margin: 0; padding-left: 18px; max-height: 160px; overflow: auto; color: va
   <div><h1>Virtual kiosks</h1><div class="links" id="links"></div></div>
   <div class="row" style="gap:12px"><span>Worker</span><span id="cloud" class="pill ok">Online</span><button id="cloud-toggle" data-testid="cloud-toggle">Go offline</button></div>
 </header>
-<main id="kiosks"><p>Loading…</p></main>
+<main>
+  <section class="card" id="meeting" data-testid="meeting-card">
+    <div class="row"><h2>Meeting</h2><span class="pill" id="meeting-state" data-testid="meeting-state"></span></div>
+    <div class="buttons" id="meeting-buttons"></div>
+    <dl><dt id="meeting-title">Test meeting A</dt><dd id="meeting-times"></dd><dt>Scans accepted</dt><dd id="meeting-window"></dd><dt>A scan now</dt><dd id="meeting-scan" data-testid="meeting-scan"></dd></dl>
+    <p class="hint">Each button saves new start and end times for Test meeting A, as the dashboard's Meetings page does. Test meeting B stays a week out. The Worker picks the meeting when a scan arrives, so the kiosk's next scan sees the change; nothing needs restarting. The kiosk ignores the same finger for 8 seconds after a scan. A refused scan shows why: "Too early", "Meeting ended" or "No meeting today", by the Worker's local day (UTC here), so near midnight UTC "Starts later today" can read "No meeting today". A member who has already arrived and left gets "Already done" during a meeting too, so use another member for a fresh arrival.</p>
+  </section>
+  <div id="kiosks"><p>Loading…</p></div>
+</main>
 <div id="message" role="status" style="padding:0 24px 24px"></div>
 <script type="module">
 const kioskList = document.querySelector("#kiosks"); const message = document.querySelector("#message");
@@ -124,6 +133,24 @@ function renderKiosk(kiosk) {
   field("events").innerHTML = kiosk.events.map((event) => `<li>${time(event.at)} · ${event.message}</li>`).join("");
   renderReader(kiosk, section, field);
   renderSystem(kiosk, section, field);
+}
+const day = (value) => new Date(value).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+function renderMeeting(meeting, states) {
+  const state = document.querySelector("#meeting-state"), buttons = document.querySelector("#meeting-buttons");
+  if (!meeting) { state.textContent = "Unavailable"; state.className = "pill err"; return; }
+  state.textContent = states[meeting.state] ?? "Test meeting A is missing"; state.className = `pill ${meeting.scanAccepted ? "ok" : "warn"}`;
+  const html = Object.entries(states).map(([id, label], index) => `<button data-meeting-state="${id}" class="${id === meeting.state ? "primary" : ""}" aria-pressed="${id === meeting.state}">${label}${index === 0 ? " (default)" : ""}</button>`).join("");
+  if (buttons.dataset.html !== html) {
+    buttons.innerHTML = html; buttons.dataset.html = html;
+    buttons.querySelectorAll("[data-meeting-state]").forEach((button) => button.addEventListener("click", async () => {
+      button.disabled = true; message.textContent = "";
+      try { await post("/api/meeting", { state: button.dataset.meetingState }); } catch (error) { message.textContent = error.message; } finally { button.disabled = false; void refresh(); }
+    }));
+  }
+  document.querySelector("#meeting-title").textContent = meeting.title;
+  document.querySelector("#meeting-times").textContent = meeting.startsAt ? `${day(meeting.startsAt)} to ${day(meeting.endsAt)}` : "Not in the meeting list";
+  document.querySelector("#meeting-window").textContent = meeting.opensAt ? `${day(meeting.opensAt)} to ${day(meeting.closesAt)} (${meeting.earlyScanMinutes} min early, ${meeting.lateScanMinutes} min late)` : "–";
+  document.querySelector("#meeting-scan").textContent = meeting.scanAccepted ? `Recorded for ${meeting.scanMeetingTitle}` : "Refused: no meeting is accepting scans";
 }
 const networkChoices = [{ label: "Ethernet", network: { connection: "ethernet", ssid: null } }, { label: "Wi-Fi: Virtual Lab", network: { connection: "wifi", ssid: "Virtual Lab" } }, { label: "Wi-Fi: Virtual Guest", network: { connection: "wifi", ssid: "Virtual Guest" } }, { label: "No network", network: { connection: "none", ssid: null } }];
 function renderSystem(kiosk, section, field) {
@@ -211,10 +238,11 @@ async function act(index, button) {
 async function refresh() {
   try {
     status = await (await fetch("/api/status")).json();
-    if (kioskList.querySelector("p")) kioskList.innerHTML = "";
+    if (kioskList.querySelector(":scope > p")) kioskList.innerHTML = "";
     const cloud = document.querySelector("#cloud"); cloud.textContent = status.cloudOnline ? "Reachable" : "Unreachable"; cloud.className = `pill ${status.cloudOnline ? "ok" : "err"}`;
     document.querySelector("#cloud-toggle").textContent = status.cloudOnline ? "Make unreachable" : "Make reachable";
     document.querySelector("#links").innerHTML = [status.dashboardUrl ? `<a href="${status.dashboardUrl}" target="_blank">Local dashboard</a> (sign in as ${status.adminUsername})` : "", `Worker <a href="${status.apiUrl}/health" target="_blank">${status.apiUrl}</a>`].filter(Boolean).join(" · ");
+    renderMeeting(status.meeting, status.meetingStates ?? {});
     status.kiosks.forEach(renderKiosk);
   } catch { message.textContent = "The virtual kiosk script isn't responding."; }
 }

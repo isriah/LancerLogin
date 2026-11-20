@@ -495,6 +495,16 @@
       "name": "0099_early_scan_minutes.sql",
       "sha256": "beac8ffe6f4c25a02715ac5a768c5e576ee39be3ddba2c9f2916b49238653b89",
       "forwardCompatible": true
+    },
+    {
+      "name": "0100_discord_kiosk_codes.sql",
+      "sha256": "37da14897797689742d32950eb7787ab7cdc6c8fab568348c1a3630098944d70",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0101_pin_failure_report_ids.sql",
+      "sha256": "58495cdcd23a308d630c027b006c8309ddb06a43d450b833cefb54fc939ea1ae",
+      "forwardCompatible": true
     }
   ]
 }

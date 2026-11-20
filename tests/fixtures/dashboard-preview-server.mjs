@@ -44,18 +44,24 @@ const defaultReportDefinition = { version: 2, dataset: "attendance.members", gro
 const leaderboardReport = { ...report, pagination: { page: 1, pageSize: 25, totalRows: report.members.length, totalPages: 1, rangeStart: 1, rangeEnd: report.members.length }, insights: { policyAlerts: [], trend: completedMeetings.filter((meeting) => meeting.required).map((meeting) => ({ meetingId: meeting.id, title: meeting.title, startsAt: meeting.startsAt, rate: 50 })) } };
 const customReport = { definition: defaultReportDefinition, warnings: [], resolvedPeriod: { to: new Date().toISOString().slice(0, 10) }, columns: [{ id: "core.member.name", key: "core.member.name", label: "Member" }, { id: "attendance.member.regular-rate", key: "attendance.member.regular-rate", label: "Overall rate" }, { id: "attendance.member.assigned-policies", key: "attendance.member.assigned-policies", label: "Last 30 days: policy results (all labels)" }], rows: report.members.map((item) => ({ id: item.member.id, label: `${item.member.firstName} ${item.member.lastName}`, href: `/roster/${item.member.memberId}`, cells: { "core.member.name": { text: `${item.member.firstName} ${item.member.lastName}`, sortValue: item.member.lastName }, "attendance.member.regular-rate": { text: `${item.regularAttendance.rate}%`, sortValue: item.regularAttendance.rate }, "attendance.member.assigned-policies": { text: "No assigned policy", sortValue: null } } })), pagination: { page: 1, pageSize: 25, totalRows: report.members.length, totalPages: 1, rangeStart: 1, rangeEnd: report.members.length } };
 const memberDetail = (member) => ({ member, labels, labelHistory: [], attendancePolicy: report.members.find((item) => item.member.id === member.id), history: [{ meetingId: "past-regular", title: "Completed build session", startsAt: meetings[0].startsAt, endsAt: meetings[0].endsAt, checkedInAt: iso(-4 * 24 * 60 + 5), checkedOutAt: iso(-4 * 24 * 60 + 115), disposition: "present", eligibility: "required", audience: "All", policy: "standard" }] });
-// Kiosk management state for the web kiosk contract. Each browser test sends its own x-preview-scenario header so parallel
+// Kiosk management state for the web kiosk contract. Every kiosk carries discordCode and discordCodeBackup (Discord code
+// mode) as the Worker lists them. The preview has no kiosk device routes (/kiosk/*), so no code is ever redeemed here.
+// Each browser test sends its own x-preview-scenario header so parallel
 // tests never share kiosks; requests without one use a "default" scenario holding only the Pi kiosk below.
 const pairingAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const kioskScenarios = new Map();
+// The Pi kiosk runs a release from before member PINs, which cannot honour Require PIN, except in the kiosk PIN scenarios;
+// a scenario named "...old-pi..." keeps the old release there too.
+const piRelease = (scenario) => scenario.startsWith("kiosk-pins-admin-") && !scenario.includes("old-pi") ? "2.1.0-beta.3" : "0.8.0";
+const pinCapable = (kiosk) => kiosk.kind === "web" || /^2\.1\.0-beta\.([3-9]|\d\d+)$/.test(kiosk.releaseVersion ?? "");
 const seedKiosks = (scenario) => scenario === "default"
-  ? [{ id: "kiosk-1", name: "Front desk", kind: "pi", memberLookup: "entry", requirePin: false, active: 1, lastSeenAt: iso(0), readerOnline: 1, releaseVersion: "0.8.0", pairedAt: iso(-1440) }]
+  ? [{ id: "kiosk-1", name: "Front desk", kind: "pi", memberLookup: "entry", requirePin: false, discordCode: false, discordCodeBackup: "offline", active: 1, lastSeenAt: iso(0), readerOnline: 1, releaseVersion: "0.8.0", pairedAt: iso(-1440) }]
   : [
-    { id: "kiosk-1", name: "Front desk", kind: "pi", active: 1, seenMinutesAgo: 0, readerOnline: 1, configuredAuthenticationMethod: "fingerprint", authenticationMethod: "fingerprint", memberLookup: "entry", requirePin: false, releaseVersion: "0.8.0", pairedAt: iso(-1440) },
-    { id: "web-kiosk-a", name: "Test web kiosk A", kind: "web", active: 1, seenMinutesAgo: 0, readerOnline: 1, configuredAuthenticationMethod: "member_id", authenticationMethod: "member_id", memberLookup: "entry", requirePin: false, releaseVersion: "0.8.0", pendingEvents: 0, pairedAt: iso(-720) },
-    { id: "web-kiosk-b", name: "Test web kiosk B", kind: "web", active: 1, seenMinutesAgo: 45, readerOnline: 1, configuredAuthenticationMethod: "member_id", authenticationMethod: "member_id", memberLookup: "search", requirePin: false, releaseVersion: "0.8.0", pendingEvents: 0, pairedAt: iso(-2880) },
+    { id: "kiosk-1", name: "Front desk", kind: "pi", active: 1, seenMinutesAgo: 0, readerOnline: 1, configuredAuthenticationMethod: "fingerprint", authenticationMethod: "fingerprint", memberLookup: "entry", requirePin: false, discordCode: false, discordCodeBackup: "offline", releaseVersion: piRelease(scenario), pairedAt: iso(-1440) },
+    { id: "web-kiosk-a", name: "Test web kiosk A", kind: "web", active: 1, seenMinutesAgo: 0, readerOnline: 1, configuredAuthenticationMethod: "member_id", authenticationMethod: "member_id", memberLookup: "entry", requirePin: false, discordCode: false, discordCodeBackup: "offline", releaseVersion: "0.8.0", pendingEvents: 0, pairedAt: iso(-720) },
+    { id: "web-kiosk-b", name: "Test web kiosk B", kind: "web", active: 1, seenMinutesAgo: 45, readerOnline: 1, configuredAuthenticationMethod: "member_id", authenticationMethod: "member_id", memberLookup: "search", requirePin: false, discordCode: false, discordCodeBackup: "offline", releaseVersion: "0.8.0", pendingEvents: 0, pairedAt: iso(-2880) },
     // A Debug kiosk from browser OLD1 that stopped checking in, for Debug tools > Open web kiosk on this device.
-    ...(scenario.startsWith("kiosk-debug-") ? [{ id: "debug-kiosk-old1", name: "Debug kiosk OLD1", kind: "web", active: 1, seenMinutesAgo: 60, readerOnline: 1, configuredAuthenticationMethod: "member_id", authenticationMethod: "member_id", memberLookup: "entry", requirePin: false, releaseVersion: "0.8.0", pendingEvents: 0, pairedAt: iso(-1440) }] : []),
+    ...(scenario.startsWith("kiosk-debug-") ? [{ id: "debug-kiosk-old1", name: "Debug kiosk OLD1", kind: "web", active: 1, seenMinutesAgo: 60, readerOnline: 1, configuredAuthenticationMethod: "member_id", authenticationMethod: "member_id", memberLookup: "entry", requirePin: false, discordCode: false, discordCodeBackup: "offline", releaseVersion: "0.8.0", pendingEvents: 0, pairedAt: iso(-1440) }] : []),
   ];
 function kioskScenario(request) {
   const id = String(request.headers["x-preview-scenario"] ?? "default");
@@ -107,12 +113,18 @@ async function kioskRoute(request, path) {
   if (kioskPath[2] === "authentication-method" && request.method === "PATCH") {
     const method = body.authenticationMethod;
     if (!["fingerprint", "rfid", "nfc", "member_id", "qr"].includes(method)) return [400, { error: "Unsupported authentication method" }];
-    if (kiosk.kind === "web" && method !== "member_id") return [400, { error: "Web kiosks identify members by member ID or member search." }];
+    if (kiosk.kind === "web" && method !== "member_id") return [400, { error: "Web kiosks identify members by Discord code, member ID or member search." }];
     if (body.memberLookup !== undefined && (method !== "member_id" || !["entry", "search"].includes(body.memberLookup))) return [400, { error: "Member lookup is entry or search, and only with member ID." }];
     if (body.requirePin !== undefined && (typeof body.requirePin !== "boolean" || body.requirePin && method !== "member_id")) return [400, { error: "Require PIN is a true or false choice, and only with member ID." }];
+    if (body.discordCode !== undefined && (typeof body.discordCode !== "boolean" || body.discordCode && method !== "member_id")) return [400, { error: "Discord codes can be turned on only with the member ID method" }];
+    if (body.discordCodeBackup !== undefined && !["offline", "always"].includes(body.discordCodeBackup)) return [400, { error: "The backup for Discord codes is offline or always" }];
+    // As in the Worker: omitted with member ID, Discord code stays as it was; any other method turns it off. The backup choice is kept.
+    if (method === "member_id" && body.requirePin === true && !kiosk.requirePin && !pinCapable(kiosk)) return [409, { error: "Update this kiosk before turning on Require PIN. Kiosks older than 2.1.0-beta.3 do not ask for a PIN, so every scan would be refused.", code: "kiosk_update_required_for_pin" }];
+    kiosk.discordCode = method === "member_id" ? body.discordCode ?? kiosk.discordCode ?? false : false;
+    kiosk.discordCodeBackup = body.discordCodeBackup ?? kiosk.discordCodeBackup ?? "offline";
     kiosk.configuredAuthenticationMethod = method; kiosk.memberLookup = method === "member_id" ? body.memberLookup ?? "entry" : "entry";
     kiosk.requirePin = method === "member_id" ? body.requirePin ?? kiosk.requirePin ?? false : false;
-    return [200, { kioskId: kiosk.id, authenticationMethod: method, memberLookup: kiosk.memberLookup, requirePin: kiosk.requirePin }];
+    return [200, { kioskId: kiosk.id, authenticationMethod: method, memberLookup: kiosk.memberLookup, requirePin: kiosk.requirePin, discordCode: kiosk.discordCode, discordCodeBackup: kiosk.discordCodeBackup }];
   }
   if (kioskPath[2] === "commands" && request.method === "POST") {
     if (kiosk.kind === "web" && !["reload_display", "reset_network_pin"].includes(body.command)) return [409, { error: "Web kiosks can only reload their display or reset their settings PIN." }];

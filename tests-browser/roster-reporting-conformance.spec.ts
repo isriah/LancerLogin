@@ -1410,10 +1410,12 @@ test("new report filters appear after creation and result dates omit all-time an
   await expect(page.getByText("Only you can access this private report.", { exact: true })).toHaveCount(1);
   await expect(page.getByRole("group", { name: "Filter records", exact: true })).toHaveCount(0);
   await expect(page.getByRole("searchbox", { name: "Search report results" })).toHaveCount(0);
-  await expect(page.getByLabel("Applied report filters")).toHaveCount(0);
+  // Adding filters waits for the first save, but what already limits the draft's rows is shown and can be changed.
+  await expect(page.getByRole("group", { name: "Applied report filters" }).getByRole("button", { name: "Edit filter: Roster: Active members", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Remove filter: Roster: Active members", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Filter Overall rate" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Add filter" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /^Report period:/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Report period:/ })).toHaveCount(1);
   await page.getByRole("button", { name: "Overall rate column options" }).click();
   await expect(page.getByLabel("Minimum", { exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
@@ -1960,4 +1962,33 @@ test("saved report filters live in the results table: column funnels, + Filter, 
   expect((await chip.boundingBox())!.width).toBeGreaterThan(300);
   await expect(table).not.toContainText("Test Student A");
   await expectResponsiveFit(page, responsiveFit);
+});
+
+test("an Admin unlinks the Discord role a retired label still holds, so the role can be linked again", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await useReferenceContext(page);
+  const labelsPayload = { labels: [{ id: "frc-321", name: "FRC 321", active: 1, formulaEnabled: 0 }, { id: "old", name: "Old Club", active: 0, formulaEnabled: 0 }], history: [], periods: [], rules: [], meetingCounts: {}, today: "2026-09-22" };
+  await page.route("**/settings/labels", (route) => route.continue()); await page.route((url) => url.pathname === "/labels", (route) => route.fulfill({ json: labelsPayload }));
+  let linked = true; const unlinkRequests: string[] = [];
+  await page.route("**/admin/integrations/discord/label-roles", (route) => route.fulfill({ json: { integrationAvailable: true, mappings: linked ? [{ labelId: "old", labelName: "Old Club", roleId: "723456789012345678", roleName: "Old Club Role", health: "retired" }] : [] } }));
+  await page.route("**/admin/integrations/discord/label-roles/old", (route) => { unlinkRequests.push(route.request().method()); linked = false; return route.fulfill({ json: { unlinked: true } }); });
+  await page.route("**/admin/integrations/discord/roles", (route) => route.fulfill({ json: { canManageRoles: true, roles: [{ id: "723456789012345678", name: "Old Club Role", manageable: true, ...(linked ? { labelId: "old", labelName: "Old Club" } : {}) }] } }));
+  await page.goto("/settings/labels");
+  // While the retired label holds the role, no active label can take it.
+  await expect(page.locator(".labels-table").getByText("No roles left to link")).toBeVisible();
+  await page.getByText("Retired labels (1)").click();
+  const row = page.locator(".label-period-list li").filter({ hasText: "Old Club" });
+  await expect(row).toContainText("Linked to Discord role Old Club Role");
+  const unlink = row.getByRole("button", { name: "Unlink Old Club Role from Old Club" });
+  await expect(unlink).toHaveText("Unlink role");
+  expect((await unlink.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await expect(row.getByRole("button", { name: "Restore" })).toBeVisible();
+  page.once("dialog", (dialog) => { expect(dialog.message()).toBe("Unlink Old Club from Old Club Role? Existing Discord role assignments will stay in place."); void dialog.accept(); });
+  await unlink.click();
+  await expect(page.getByRole("status").filter({ hasText: "Role unlinked. Existing Discord assignments were not changed." })).toBeVisible();
+  expect(unlinkRequests).toEqual(["DELETE"]);
+  await expect(row).not.toContainText("Linked to Discord role");
+  await expect(row.getByRole("button", { name: /Unlink/ })).toHaveCount(0);
+  await expect(row.getByRole("button", { name: "Restore" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Discord role for FRC 321" }).getByRole("option", { name: "Old Club Role" })).toBeAttached();
 });

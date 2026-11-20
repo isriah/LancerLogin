@@ -62,6 +62,11 @@ test("an idle pass reads maintenance, module state and each integration record o
   assert.equal(count("FROM platform_scheduler_state"), 1, "scheduler state is read once");
   assert.equal(count("FROM platform_modules m"), 1, "one read of every runnable module");
   assert.equal(count("FROM encrypted_integrations i"), 1, "Discord's record is read once and shared");
+  // Housekeeping removes old PIN requests, label previews and report ids in the batch that removes used kiosk codes.
+  const pruning = database.batches.filter((batch) => batch.some((call) => call.sql.includes("DELETE FROM pin_setup_requests")));
+  assert.equal(pruning.length, 1, "one clean-up batch per pass");
+  for (const table of ["pin_setup_requests", "discord_label_two_way_previews", "kiosk_pin_failure_reports", "discord_kiosk_codes"]) assert.equal(pruning[0]!.filter((call) => call.sql.includes(`DELETE FROM ${table}`)).length, 1, table);
+  assert.equal(database.calls.some((call) => call.sql.includes("DELETE FROM discord_kiosk_codes")), false, "and no query of its own for the codes");
   assert.ok(queries.length < 30, `an idle pass costs ${queries.length} D1 queries`);
   assert.deepEqual(logs, [], "nothing is deferred while the pass is idle");
 });

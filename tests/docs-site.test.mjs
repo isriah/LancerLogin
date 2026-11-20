@@ -172,7 +172,8 @@ test("operations guide matches the current navigation and recovery paths", async
   assert.match(operations, /spreadsheet formulas as text/);
   assert.match(operations, /id="discord-commands"/);
   assert.match(operations, /No manual HTTP request or command payload is required/);
-  assert.match(operations, /creates or updates exactly the guild-scoped <code>\/pair<\/code>, <code>\/attendance-report<\/code>, <code>\/label<\/code>, <code>\/outreach-submit<\/code>, and <code>\/outreach-correction<\/code> commands/);
+  assert.match(operations, /creates or updates exactly the guild-scoped <code>\/pair<\/code>, <code>\/attendance-report<\/code>, <code>\/code<\/code>, <code>\/label<\/code>, <code>\/outreach-submit<\/code>, and <code>\/outreach-correction<\/code> commands/);
+  assert.match(operations, /<code>\/code<\/code> gives the member a one-time code to sign in at a kiosk that takes Discord codes\./);
   assert.doesNotMatch(operations, /POST \/applications|"name": "member-id"/);
   assert.match(operations, /ephemeral responses/);
   assert.match(operations, /Exact submission retries reuse the same receipt/);

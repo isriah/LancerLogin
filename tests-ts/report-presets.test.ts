@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { reportPeriodOptions } from "../apps/dashboard/src/report-view.ts";
 import { attendanceByLabelDefinition, attendanceByLabelPreset, attendanceByLabelSummary, presetPeriodOptions } from "../apps/dashboard/src/report-presets.ts";
 import { validateReportDefinition } from "../apps/api/src/report-builder.ts";
 import type { LabelPolicySummary } from "../packages/shared/src/attendance-label-sets.ts";
@@ -38,4 +39,7 @@ test("the preset summary says exactly what it adds", () => {
   assert.match(attendanceByLabelSummary([{ name: "Test Outreach Crew", policy: outreach }]).columns, /\(Weeks met in place of Meetings counted for a meetings-per-week label\)$/);
   assert.equal(attendanceByLabelSummary([]).filter, "Choose at least one label.");
   assert.deepEqual(presetPeriodOptions.map(([value]) => value), ["last_90", "current_month", "last_month", "baseline", "all"]);
+  // The preset names a period as the report's own period chip does.
+  const chipLabels = new Map<string, string>(reportPeriodOptions.map(([value, label]) => [value, label]));
+  for (const [value, label] of presetPeriodOptions) if (value !== "baseline") assert.equal(label, chipLabels.get(value), value);
 });

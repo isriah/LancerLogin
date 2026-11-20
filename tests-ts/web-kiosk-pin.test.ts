@@ -6,7 +6,7 @@ import { displayForAttendanceError, flowReducer, initialFlow, pinIdleSteps, rost
 import { createMemoryQueue, usableQueuedScan } from "../apps/dashboard/src/web-kiosk/kiosk-store.ts";
 import { createMemoryRefusedStore, createScanSync } from "../apps/dashboard/src/web-kiosk/kiosk-sync.ts";
 import {
-  afterOfflineMatch, afterPinFailureReport, choosePinStep, lockoutLine, memberPinProblem, memberPinState, pinFailureReport, pinLockFor, pinLockoutFor, pinOutcomeFor,
+  afterOfflineMatch, afterPinFailureReport, choosePinStep, freezePinFailureReport, lockoutLine, memberPinProblem, memberPinState, pinFailureReport, pinLockFor, pinLockoutFor, pinOutcomeFor,
   recordOfflineFailure, requirePinFor, rosterHasPinData, usablePinFailures, validMemberPin, verifyMemberPin, withoutPinData, type PinFailureLedger,
 } from "../apps/dashboard/src/web-kiosk/member-pin.ts";
 
@@ -107,6 +107,50 @@ test("reported tries leave the ledger once the server has them; tries made meanw
   // 1007's local lock goes with its tries: the server's lock comes back with the roster.
   assert.deepEqual(ledger, [{ memberId: "1008", count: 1, lastAt: new Date(1_000_200).toISOString(), streak: 1 }]);
   assert.deepEqual(afterPinFailureReport(ledger, pinFailureReport(ledger)), []);
+});
+
+test("a report keeps its id and its tries until the server answers; tries made meanwhile go in the next report", () => {
+  const lockout = { enabled: false, attempts: 5, minutes: 15 };
+  let made = 0; const newId = () => `test-report-${made += 1}`;
+  let ledger: PinFailureLedger = [];
+  assert.deepEqual(freezePinFailureReport(ledger, newId), { ledger: [] }); assert.equal(made, 0, "nothing to report, no id");
+  for (let n = 0; n < 2; n += 1) ledger = recordOfflineFailure(ledger, "1007", 1_000_000 + n, lockout).ledger;
+  ledger = recordOfflineFailure(ledger, "1008", 1_000_100, lockout).ledger;
+  const first = freezePinFailureReport(ledger, newId);
+  const expected = { id: "test-report-1", failures: [{ memberId: "1007", count: 2, lastAt: new Date(1_000_001).toISOString() }, { memberId: "1008", count: 1, lastAt: new Date(1_000_100).toISOString() }] };
+  assert.deepEqual(first.report, expected);
+  // The frozen ledger is what the kiosk saves before sending. What comes back from storage after a reload is the same report.
+  ledger = usablePinFailures(JSON.parse(JSON.stringify(first.ledger)));
+  assert.deepEqual(ledger, first.ledger);
+  assert.deepEqual(freezePinFailureReport(ledger, newId), { ledger, report: expected });
+  // The answer is lost. More wrong tries, for a member in the report and for a new one, leave the report as it was sent.
+  ledger = recordOfflineFailure(ledger, "1007", 2_000_000, lockout).ledger;
+  ledger = recordOfflineFailure(ledger, "1009", 2_000_100, lockout).ledger;
+  ledger = afterOfflineMatch(ledger, "1008"); // a right PIN offline keeps the unreported tries and their mark
+  const resend = freezePinFailureReport(ledger, newId);
+  const byMember = (report: { id: string; failures: { memberId: string }[] } | undefined) => report && { id: report.id, failures: [...report.failures].sort((a, b) => a.memberId.localeCompare(b.memberId)) };
+  assert.deepEqual(byMember(resend.report), expected, "the resend is the same report: same id, same tries");
+  assert.equal(resend.ledger, ledger, "and nothing new to save"); assert.equal(made, 1);
+  assert.deepEqual(ledger.map((item) => [item.memberId, item.count, item.report?.count]), [["1008", 1, 1], ["1007", 3, 2], ["1009", 1, undefined]]);
+
+  // The server answers: the reported tries go, with the mark, and the rest are the next report, under a new id.
+  ledger = afterPinFailureReport(ledger, resend.report!.failures);
+  assert.deepEqual(ledger, [{ memberId: "1007", count: 1, lastAt: new Date(2_000_000).toISOString(), streak: 1 }, { memberId: "1009", count: 1, lastAt: new Date(2_000_100).toISOString(), streak: 1 }]);
+  const next = freezePinFailureReport(ledger, newId);
+  assert.deepEqual(next.report, { id: "test-report-2", failures: [{ memberId: "1007", count: 1, lastAt: new Date(2_000_000).toISOString() }, { memberId: "1009", count: 1, lastAt: new Date(2_000_100).toISOString() }] });
+  assert.deepEqual(afterPinFailureReport(next.ledger, next.report!.failures), []);
+  // Every try was in exactly one answered report: 1007 three, 1008 one, 1009 one.
+  const total = new Map<string, number>();
+  for (const report of [resend.report!, next.report!]) for (const item of report.failures) total.set(item.memberId, (total.get(item.memberId) ?? 0) + item.count);
+  assert.deepEqual([...total].sort(), [["1007", 3], ["1008", 1], ["1009", 1]]);
+
+  // A saved mark that is malformed is dropped, so its tries are reported afresh; a stray mark from another report is too.
+  const saved = usablePinFailures([{ memberId: "1010", count: 2, lastAt: "2026-10-30T18:00:00.000Z", streak: 2, report: { id: "", count: 2, lastAt: "2026-10-30T18:00:00.000Z" } }, { memberId: "1011", count: 1, lastAt: "2026-10-30T18:00:00.000Z", streak: 1, report: { id: "test-a", count: 5_000, lastAt: "2026-10-30T18:00:00.000Z" } }]);
+  assert.deepEqual(saved.map((item) => item.report), [undefined, undefined]);
+  const mixed: PinFailureLedger = [{ memberId: "1012", count: 1, lastAt: "2026-10-30T18:00:00.000Z", streak: 1, report: { id: "test-a", count: 1, lastAt: "2026-10-30T18:00:00.000Z" } }, { memberId: "1013", count: 1, lastAt: "2026-10-30T18:00:00.000Z", streak: 1, report: { id: "test-b", count: 1, lastAt: "2026-10-30T18:00:00.000Z" } }];
+  const one = freezePinFailureReport(mixed, newId);
+  assert.deepEqual(one.report, { id: "test-a", failures: [{ memberId: "1012", count: 1, lastAt: "2026-10-30T18:00:00.000Z" }] });
+  assert.deepEqual(one.ledger.map((item) => item.report?.id), ["test-a", undefined]);
 });
 
 test("the report keeps within /kiosk/pin-failures limits, and a saved ledger is checked before use", () => {
@@ -226,7 +270,8 @@ test("the PIN calls use the kiosk endpoints, and the PIN goes only in a request 
   assert.equal((await api.choosePin("req-1", "4821")).status, "used");
   assert.deepEqual(await api.setMemberPin("1008", "5930"), { set: true, setAt: "2026-10-30T18:00:00.000Z" });
   assert.equal(await api.resetMemberPin("1007"), true);
-  assert.deepEqual(await api.pinFailures([{ memberId: "1007", count: 3, lastAt: "2026-10-30T18:00:00.000Z" }]), { recorded: 3 });
+  assert.deepEqual(await api.pinFailures([{ memberId: "1007", count: 3, lastAt: "2026-10-30T18:00:00.000Z" }], "test-report-1"), { recorded: 3 });
+  assert.deepEqual(calls.at(-1)!.body, { reportId: "test-report-1", failures: [{ memberId: "1007", count: 3, lastAt: "2026-10-30T18:00:00.000Z" }] }, "the report carries its id");
   assert.deepEqual(calls.map((call) => `${call.method} ${call.url}`), [
     "POST /api/kiosk/pin-requests", "GET /api/kiosk/pin-requests/req-1", "POST /api/kiosk/pin-requests/req-1/pin", "POST /api/kiosk/pins", "POST /api/kiosk/pins/1007/reset", "POST /api/kiosk/pin-failures",
   ]);

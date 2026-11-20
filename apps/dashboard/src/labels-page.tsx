@@ -5,7 +5,7 @@ import { useModalFocus } from "./modal-focus";
 import { AttendanceSettingsSections } from "./settings-section-navigation";
 import { RouteLink, usePath } from "./router";
 import type { LabelData } from "./member-labels";
-import { sortDiscordRoles } from "./discord-roles";
+import { autoSyncText, linkedSyncText, roleJobPollDelay, sortDiscordRoles, splitBySync } from "./discord-roles";
 import { DiscordLabelReconciliation, type ReconciliationConfirmInput, type ReconciliationPreview } from "./discord-label-reconciliation";
 
 type LabelsData = LabelData & { rules?: { labelId: string }[]; meetingCounts?: Record<string, number> };
@@ -28,11 +28,27 @@ function holderCounts(data: LabelData) {
   return counts;
 }
 
-/** Shown after label changes are applied when a changed label is linked to a Discord role. */
+/**
+ * Shown after label changes are applied when a changed label is linked to a Discord role. A two-way label syncs on its
+ * own, so only the others are said to be out of date. The role links say which is which; if they can't be read, every
+ * label gets the warning.
+ */
 export function DiscordSyncReminder({ labels }: { labels: string[] }) {
   const { path, navigate } = usePath();
-  if (!labels.length) return null;
-  return <p className="ui-status" data-tone="warning" role="status">Discord roles for {labels.join(", ")} may now be out of date. <RouteLink href="/settings/labels" currentPath={path} navigate={navigate}>Review role sync</RouteLink></p>;
+  const [mappings, setMappings] = useState<Mapping[]>();
+  const names = labels.join("\n");
+  useEffect(() => {
+    if (!names) return;
+    let current = true; setMappings(undefined);
+    void api<{ mappings: Mapping[] }>("/admin/integrations/discord/label-roles").then((result) => { if (current) setMappings(result.mappings ?? []); }).catch(() => { if (current) setMappings([]); });
+    return () => { current = false; };
+  }, [names]);
+  if (!labels.length || !mappings) return null;
+  const { automatic, manual } = splitBySync(labels, mappings);
+  return <>
+    {manual.length > 0 && <p className="ui-status" data-tone="warning" role="status">Discord roles for {manual.join(", ")} may now be out of date. <RouteLink href="/settings/labels" currentPath={path} navigate={navigate}>Review role sync</RouteLink></p>}
+    {automatic.length > 0 && <p className="ui-status" role="status">Discord roles for {automatic.join(", ")} update automatically within 5 minutes.</p>}
+  </>;
 }
 
 function RolePreview({ preview }: { preview: Preview }) {
@@ -48,7 +64,6 @@ type SyncIconState = "synced" | "changed" | "syncing" | "failed" | "never" | "in
 function SyncIcon({ state }: { state: SyncIconState }) {
   return <svg className="sync-icon" viewBox="0 0 24 24" aria-hidden="true">{state === "synced" ? <><circle cx="12" cy="12" r="9" /><path d="m8 12 3 3 5-6" /></> : state === "failed" ? <><path d="M12 3 2 20h20L12 3z" /><path d="M12 10v4" /><path d="M12 17h.01" /></> : state === "never" ? <circle cx="12" cy="12" r="9" strokeDasharray="3 3" /> : state === "info" ? <><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 8h.01" /></> : <><path d="M20 12a8 8 0 1 1-2.3-5.6" /><path d="M20 4v4h-4" /></>}</svg>;
 }
-const autoSyncText = "Two-way labels sync automatically every 5 minutes";
 const twoWayPausedText = "Two-way sync paused after a restore. Review differences to turn it back on.";
 const syncedAt = (mapping: Mapping) => mapping.latestJob ? ` Last synced ${new Date(mapping.latestJob.completedAt ?? mapping.latestJob.updatedAt).toLocaleString()}.` : "";
 /** What a linked label's sync icon shows: a running job first, then the link's health, the last job's outcome and label changes since. */
@@ -120,6 +135,8 @@ export function LabelsPage({ role }: { role: "admin" | "operator" }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [reconciling, setReconciling] = useState<ReconciliationPreview>();
+  /** Running syncs the page stopped checking after repeated errors, with the last error. */
+  const [unchecked, setUnchecked] = useState<{ job: Job; error: string }[]>([]);
   const previewSection = useRef<HTMLElement>(null);
   const reconcileSection = useRef<HTMLDivElement>(null);
   async function load() {
@@ -128,18 +145,44 @@ export function LabelsPage({ role }: { role: "admin" | "operator" }) {
     if (admin && discord.integrationAvailable) await api<{ roles: Role[] }>("/admin/integrations/discord/roles").then((result) => { setRoles(sortDiscordRoles(result.roles)); setRolesError(""); }).catch((error: Error) => { setRoles(undefined); setRolesError(error.message); });
   }
   useEffect(() => { void load().catch((error: Error) => setNotice(error.message)); }, []);
+  // A running sync is checked every 4 seconds (an Admin's check also advances it). A check that fails is tried again
+  // after a growing wait and given up after five in a row, so a job that keeps erroring is not asked about forever;
+  // the page then shows the error with Check again. A sync that answers without progress is checked less often.
+  const pollState = useRef(new Map<string, { failures: number; idle: number }>());
+  const [pollTick, setPollTick] = useState(0);
   useEffect(() => {
-    if (!jobs.some(running)) return;
-    const timer = window.setInterval(() => { void Promise.all(jobs.map((job) => running(job) ? api<Job>(`/admin/integrations/discord/label-role-jobs/${encodeURIComponent(job.id)}${admin ? "/advance" : ""}`, admin ? { method: "POST", body: "{}" } : undefined).then((next) => ({ ...next, labelId: next.labelId ?? job.labelId })) : job)).then((next) => { setJobs(next.filter(running)); if (next.some((job) => !running(job))) void load(); }).catch((error: Error) => setNotice(error.message)); }, 4000);
-    return () => window.clearInterval(timer);
-  }, [jobs.map((job) => job.id + job.status).join(), admin]);
+    if (!jobs.some(running)) { pollState.current.clear(); return; }
+    const stateOf = (id: string) => { let state = pollState.current.get(id); if (!state) { state = { failures: 0, idle: 0 }; pollState.current.set(id, state); } return state; };
+    const delays = jobs.filter(running).map((job) => roleJobPollDelay(stateOf(job.id).failures, stateOf(job.id).idle) ?? 0);
+    let current = true;
+    const timer = window.setTimeout(() => { void Promise.all(jobs.map(async (job) => {
+      if (!running(job)) return { job };
+      const state = stateOf(job.id);
+      try {
+        const next = await api<Job>(`/admin/integrations/discord/label-role-jobs/${encodeURIComponent(job.id)}${admin ? "/advance" : ""}`, admin ? { method: "POST", body: "{}" } : undefined);
+        const done = (value: Job) => value.items.filter((item) => item.status !== "pending").length;
+        state.failures = 0; state.idle = next.status === job.status && done(next) === done(job) ? state.idle + 1 : 0;
+        return { job: { ...next, labelId: next.labelId ?? job.labelId } };
+      } catch (error) { state.failures += 1; return roleJobPollDelay(state.failures) === undefined ? { job, stopped: (error as Error).message } : { job }; }
+    })).then((results) => {
+      if (!current) return;
+      const stopped = results.filter((result) => result.stopped !== undefined);
+      for (const result of stopped) pollState.current.delete(result.job.id);
+      if (stopped.length) setUnchecked((old) => [...old.filter((item) => !stopped.some((result) => result.job.id === item.job.id)), ...stopped.map((result) => ({ job: result.job, error: result.stopped! }))]);
+      setJobs(results.filter((result) => result.stopped === undefined && running(result.job)).map((result) => result.job));
+      if (results.some((result) => !running(result.job))) void load().catch((error: Error) => setNotice(error.message));
+      setPollTick((tick) => tick + 1);
+    }); }, Math.max(...delays));
+    return () => { current = false; window.clearTimeout(timer); };
+  }, [jobs.map((job) => job.id + job.status).join(), admin, pollTick]);
+  const checkAgain = (job: Job) => { setUnchecked((old) => old.filter((item) => item.job.id !== job.id)); setJobs((old) => [...old.filter((item) => item.id !== job.id), job]); };
   // A preview opens below the table, so bring it into view from whichever row asked for it.
   useEffect(() => { if (previews) previewSection.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }, [previews]);
   useEffect(() => { if (reconciling) reconcileSection.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }, [reconciling?.previewId]);
   async function act(work: () => Promise<string | void>) { setBusy(true); setNotice(""); try { const message = await work(); if (message) setNotice(message); } catch (error) { setNotice((error as Error).message); } finally { setBusy(false); } }
   const createLabel = (event: FormEvent) => { event.preventDefault(); void act(async () => { await api("/labels", { method: "POST", body: JSON.stringify({ name }) }); setName(""); await load(); return "Label created."; }); };
   const rename = (event: FormEvent) => { event.preventDefault(); if (!renaming) return; void act(async () => { await api("/labels/" + encodeURIComponent(renaming.id), { method: "PATCH", body: JSON.stringify({ name: renaming.name }) }); setRenaming(undefined); await load(); return "Label renamed. Linked Discord roles keep their own names."; }); };
-  const setActive = (label: { id: string; name: string }, active: boolean) => { if (!active && !window.confirm(`Retire ${label.name}? It stops appearing when you assign labels or add attendance policies, and its Discord role can't be synced. Past attendance, label history and audit records stay. You can restore it later.`)) return; void act(async () => { await api("/labels/" + encodeURIComponent(label.id), { method: "PATCH", body: JSON.stringify({ active }) }); await load(); return active ? `${label.name} restored.` : `${label.name} retired. Historical attendance and audit records are preserved.`; }); };
+  const setActive = (label: { id: string; name: string }, active: boolean) => { const linked = mappingFor(label.id); if (!active && !window.confirm(`Retire ${label.name}? It stops appearing when you assign labels or add attendance policies, and its Discord role can't be synced.${linked ? ` ${linked.roleName} stays linked to it; to use that role for another label, unlink it under Retired labels.` : ""} Past attendance, label history and audit records stay. You can restore it later.`)) return; void act(async () => { await api("/labels/" + encodeURIComponent(label.id), { method: "PATCH", body: JSON.stringify({ active }) }); await load(); return active ? `${label.name} restored.` : `${label.name} retired. Historical attendance and audit records are preserved.`; }); };
   const link = (labelId: string, roleId: string) => void act(async () => { const result = await api<{ mapping: { labelName: string; roleName: string } }>("/admin/integrations/discord/label-roles", { method: "POST", body: JSON.stringify({ labelId, roleId }) }); await load(); return `Linked ${result.mapping.labelName} to ${result.mapping.roleName}. Nobody's roles change until you sync.`; });
   const unlink = (mapping: Mapping) => { if (!window.confirm(`Unlink ${mapping.labelName} from ${mapping.roleName}? Existing Discord role assignments will stay in place.`)) return; void act(async () => { await api(`/admin/integrations/discord/label-roles/${encodeURIComponent(mapping.labelId)}`, { method: "DELETE" }); setPreviews(undefined); await load(); return "Role unlinked. Existing Discord assignments were not changed."; }); };
   const importRoles = () => void act(async () => { const result = await api<{ linked: { created: boolean }[] }>("/admin/integrations/discord/label-roles/from-roles", { method: "POST", body: JSON.stringify({ roleIds: importIds }) }); setImportIds([]); await load(); const created = result.linked.filter((item) => item.created).length; return `${plural(created, "label")} created and ${result.linked.length} linked. Nobody's roles change until you sync.`; });
@@ -175,6 +218,7 @@ export function LabelsPage({ role }: { role: "admin" | "operator" }) {
   const paused = mappings.filter((mapping) => mapping.twoWayPaused);
   return <section className="settings-page settings-labels" aria-labelledby="labels-title"><div className="page-intro"><h1 id="labels-title">Labels</h1><p>{admin ? "Create member labels, link them to Discord roles, and keep those roles in sync. Assign labels to members in Roster." : "View member labels, their Discord roles, and role sync status."}</p></div><AttendanceSettingsSections role={role} />
     {notice && <p className="ui-status settings-notice" role="status">{notice}</p>}
+    {unchecked.map(({ job, error }) => { const labelName = data?.labels.find((label) => label.id === job.labelId)?.name ?? "a label"; return <div className="ui-status label-two-way-paused" data-tone="error" role="alert" key={job.id}><p><strong>{labelName}:</strong> The role sync's progress could not be checked: {error} The sync may still be running. This page has stopped checking it.</p><div className="dialog-actions"><button className="ui-button" type="button" aria-label={`Check the role sync for ${labelName} again`} onClick={() => checkAgain(job)}>Check again</button></div></div>; })}
     <section className="task-card ui-card member-labels-panel" aria-labelledby="labels-list-title"><InfoHeading id="labels-list-title" info="Members can hold several labels. Labels decide attendance requirements, meeting audiences, report filters and Discord roles.">Member labels</InfoHeading>
       {admin && <form className="form-grid" onSubmit={createLabel}><label>New label name<input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label><button className="ui-button ui-button--primary" type="submit" disabled={busy}>Create label</button></form>}
       {!data ? <p className="ui-status" role="status">Loading labels…</p> : active.length ? <div className="table-scroll"><table className="data-table labels-table"><thead><tr><th scope="col">Label</th><th scope="col">Members</th><th scope="col">Attendance policy</th><th scope="col">Meetings</th><th scope="col">Discord role</th><th scope="col"><span className="visually-hidden">Actions</span></th></tr></thead><tbody>{active.map((label) => {
@@ -194,12 +238,12 @@ export function LabelsPage({ role }: { role: "admin" | "operator" }) {
           <td className="label-actions"><div className="label-row-actions">{menu.length > 0 ? <RowMenu label={label.name} items={menu} /> : <span className="label-menu-slot" aria-hidden="true" />}</div></td>
         </tr>;
       })}</tbody></table></div> : <p>No labels are configured.</p>}
-      {retired.length > 0 && <details className="settings-disclosure"><summary>Retired labels ({retired.length})</summary><ul className="compact-list label-period-list">{retired.map((label) => <li key={label.id}><span>{label.name}</span>{admin && <button className="ui-button" type="button" disabled={busy} onClick={() => setActive(label, true)}>Restore</button>}</li>)}</ul></details>}
+      {retired.length > 0 && <details className="settings-disclosure"><summary>Retired labels ({retired.length})</summary><ul className="compact-list label-period-list">{retired.map((label) => { const mapping = mappingFor(label.id); return <li key={label.id}><span>{label.name}{mapping && <small className="calc-inline">Linked to Discord role {mapping.roleName}</small>}</span>{admin && mapping && <button className="ui-button ui-button--danger" type="button" disabled={busy || jobs.some((job) => job.labelId === label.id)} aria-label={`Unlink ${mapping.roleName} from ${label.name}`} onClick={() => unlink(mapping)}>Unlink role</button>}{admin && <button className="ui-button" type="button" disabled={busy} onClick={() => setActive(label, true)}>Restore</button>}</li>; })}</ul></details>}
     </section>
     <section className="task-card ui-card member-labels-panel" aria-labelledby="discord-label-role-title"><InfoHeading id="discord-label-role-title" info={<>{admin ? "Link a label to a Discord role here, or with " : "Admins link labels to Discord roles here, or with "}<code>/label @ROLE</code> in Discord. Linking alone changes nobody's roles. Sync to Discord previews every change first, and removes the role from anyone in the server who doesn't hold the label. A Two-way label is checked every 5 minutes instead: a role added or removed in Discord changes the label, and label changes reach Discord.</>}>Discord roles</InfoHeading>
       {!available ? <p className="ui-status" data-tone="warning">Enable and verify Discord in Settings → Integrations to link, preview or sync roles.</p> : <>
         {admin && rolesError && <p className="ui-status" data-tone="warning" role="status">Discord roles could not be loaded: {rolesError}</p>}
-        <p>{mappings.length ? `${mappings.length} ${mappings.length === 1 ? "label is" : "labels are"} linked to Discord roles. Label and pairing changes reach Discord only when you sync.` : "No labels are linked to Discord roles. Choose a role in the Discord role column above."}</p>
+        <p>{mappings.length ? `${mappings.length} ${mappings.length === 1 ? "label is" : "labels are"} linked to Discord roles. ${linkedSyncText(mappings)}` : "No labels are linked to Discord roles. Choose a role in the Discord role column above."}</p>
         {paused.map((mapping) => <div className="ui-status label-two-way-paused" data-tone="warning" role="status" key={mapping.labelId}><p><strong>{mapping.labelName}:</strong> {twoWayPausedText}{admin ? "" : " Ask an Admin to review it."}</p>{admin && <div className="dialog-actions"><button className="ui-button" type="button" disabled={busy} onClick={() => changeDirection(mapping, "to_discord")}>Switch to Dashboard to Discord</button><button className="ui-button ui-button--primary" type="button" disabled={busy || mapping.health !== "ready"} onClick={() => changeDirection(mapping, "two_way")}>{`Review differences for ${mapping.labelName}`}</button></div>}</div>)}
         {admin && <div className="dialog-actions"><button className="ui-button ui-button--primary" type="button" disabled={busy || !syncable.length} onClick={previewAll}>Sync all linked roles</button></div>}
         {admin && importable.length > 0 && <details className="settings-disclosure"><summary>Create labels from Discord roles</summary><p>Creates a label named after each role and links them. An existing unlinked label with the same name is linked instead.</p><div className="quick-label-options">{importable.map((item) => <label className="checkbox-field" key={item.id}><input type="checkbox" checked={importIds.includes(item.id)} onChange={(event) => setImportIds((old) => event.target.checked ? [...old, item.id] : old.filter((id) => id !== item.id))} />{item.name}</label>)}</div><button className="ui-button ui-button--primary" type="button" disabled={busy || !importIds.length} onClick={importRoles}>{`Create and link ${plural(importIds.length, "label")}`}</button></details>}

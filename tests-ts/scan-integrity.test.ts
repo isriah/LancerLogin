@@ -52,6 +52,20 @@ test("a scan matching a member who scanned on another kiosk within 30 seconds is
   assert.equal((await call("/admin/kiosks/possible-wrong-matches", undefined, undefined, undefined, "operator")).status, 403, "Admins only");
 });
 
+test("Delete installation removes the scan integrity and fingerprint match records", async context => {
+  const { database, call, pair } = await fixture(context);
+  const front = await pair("Test Front Kiosk"), side = await pair("Test Side Kiosk");
+  const scan = (device: typeof front, input: Scan) => call("/kiosk/attendance", { memberId: "SYN-001", pairingId: device.pairingId, rescanSupported: true, ...input }, device.kioskToken);
+  assert.equal((await scan(front, { eventId: "front-1", occurredAt: "2026-09-30T12:00:00.000Z", matchScore: 180 })).status, 202);
+  assert.equal((await scan(side, { eventId: "side-4s", occurredAt: "2026-09-30T12:00:04.000Z", matchScore: 46 })).status, 409);
+  database.sqlite.exec("INSERT INTO kiosk_fingerprint_match_settings(installation_id,minimum_score,updated_at) VALUES ('primary',60,'2026-09-30T12:00:00.000Z')");
+  const rows = () => ["kiosk_accepted_scans", "kiosk_possible_wrong_matches", "kiosk_scan_matches", "kiosk_fingerprint_match_settings", "installations"].map(table => Number(database.sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n));
+  assert.deepEqual(rows(), [1, 1, 2, 1, 1]);
+  // None of these tables references the installation row, so nothing cascades to them.
+  assert.equal((await call("/admin/data", { scope: "installation", confirmation: "DELETE INSTALLATION" }, undefined, "DELETE")).status, 200);
+  assert.deepEqual(rows(), [0, 0, 0, 0, 0]);
+});
+
 test("queued uploads are judged by when they happened, before or after the accepted scan", async context => {
   const { call, pair } = await fixture(context);
   const front = await pair("Test Front Kiosk"), side = await pair("Test Side Kiosk");

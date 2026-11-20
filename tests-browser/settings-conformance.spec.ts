@@ -1047,6 +1047,46 @@ for (const view of [{ width: 1280, height: 900, theme: "light" }, { width: 390, 
   await page.screenshot({ path: test.info().outputPath(`access-${view.width}-${view.theme}.png`), fullPage: true });
 });
 
+test("module assignments are read only for active Operators; other accounts get a plain explanation", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await useSettingsContext(page);
+  const users = accessUsers.map((user) => ({ ...user }));
+  await page.route("**/admin/users", (route) => route.fulfill({ json: { users } }));
+  await page.route("**/admin/users/*", (route) => { const id = new URL(route.request().url()).pathname.split("/").at(-1)!; Object.assign(users.find((user) => user.id === id)!, route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
+  // As the Worker answers: assignments exist only for an active Operator, and anyone else is a 404.
+  const read: string[] = [];
+  await page.route("**/admin/modules/assignments/*", (route) => {
+    const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-1)!); read.push(id);
+    const user = users.find((item) => item.id === id);
+    return user?.role === "operator" && user.active ? route.fulfill({ json: { userId: id, revision: 1, capabilities: ["attendance.manage"] } }) : route.fulfill({ status: 404, json: { error: "Active Operator account is unavailable" } });
+  });
+  await page.goto("/settings/access");
+  const card = page.locator(".user-section");
+  await expect(card.locator(".access-table").first().locator("td[data-label='Modules']")).toHaveText(["All", "All", "Attendance"]);
+
+  // An inactive Operator: no "Unavailable", no error, and nothing asked of the server.
+  await card.getByText("Inactive accounts (1)", { exact: true }).click();
+  await expect(card.locator(".access-inactive td[data-label='Modules']")).toHaveText("None while inactive");
+  await card.getByRole("button", { name: "Edit test.operator.c access" }).click();
+  const inactivePanel = card.getByRole("form", { name: "Edit test.operator.c" });
+  await expect(inactivePanel.getByText("Inactive Operators cannot use modules. Modules can be assigned after the account is reactivated.", { exact: true })).toBeVisible();
+  await expect(inactivePanel.getByRole("alert")).toHaveCount(0);
+
+  // An Admin changed to Operator: modules wait for the saved role, then show what the server holds.
+  await card.getByRole("button", { name: "Edit test.admin.z@example.test access" }).click();
+  const panel = card.getByRole("form", { name: "Edit test.admin.z@example.test" });
+  await expect(panel.getByText("Admins can use every enabled module.", { exact: true })).toBeVisible();
+  await panel.getByRole("combobox", { name: "Role for test.admin.z@example.test" }).selectOption("operator");
+  await expect(panel.getByText("Modules can be assigned after the Operator role is saved.", { exact: true })).toBeVisible();
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  expect([...new Set(read)]).toEqual(["operator-b"]);
+  await panel.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(panel.getByRole("status").filter({ hasText: /^Saved$/ })).toBeVisible();
+  await expect(panel.getByRole("checkbox", { name: /Manage Attendance/ })).toBeChecked();
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  expect([...new Set(read)].sort()).toEqual(["admin-z", "operator-b"]);
+});
+
 test("integration setup uses status URLs and guidance when the API provides them", async ({ page }) => {
   await useSettingsContext(page);
   await page.route("**/admin/integrations", (route) => route.fulfill({ json: { integrations: [{ provider: "google", enabled: true, saved: true, configured: false, state: "verification_required", redirectUri: "https://dev.example.test/api/auth/google/callback" }, { provider: "google_calendar", enabled: true, saved: false, authorized: false, configured: false, state: "not_configured", redirectUri: "https://dev.example.test/api/admin/integrations/google-calendar/callback" }, { provider: "resend", enabled: true, saved: false, configured: false, state: "not_configured" }, { provider: "discord", enabled: true, saved: true, configured: false, state: "verification_required", interactionsUrl: "https://dev.example.test/api/discord/interactions" }] } }));

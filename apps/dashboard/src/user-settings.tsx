@@ -21,6 +21,8 @@ const accountName = (user: User) => user.memberId ? `${user.memberFirstName} ${u
 const sameSet = (left: string[], right: string[]) => left.length === right.length && left.every((item) => right.includes(item));
 /** Admins first, then Operators, alphabetical by name within each role. */
 const sortAccounts = (users: User[]) => [...users].sort((left, right) => (left.role === right.role ? 0 : left.role === "admin" ? -1 : 1) || accountName(left).localeCompare(accountName(right), undefined, { sensitivity: "base" }));
+/** Module assignments exist only for an active Operator; the server answers 404 for any other account. */
+const assignable = (user: User) => user.role === "operator" && Boolean(user.active);
 const draftFor = (user: User, grants?: Grants): Draft => ({ role: user.role, memberId: user.memberId ?? "", email: user.email?.toLowerCase() ?? "", capabilities: grants?.state === "ready" ? grants.value.capabilities : [] });
 
 /** Module labels covered by an Operator's grants, for the Modules column. */
@@ -47,7 +49,8 @@ export function UserSettings({ members }: { members: RosterMember[] }) {
     const result = await api<{ users: User[] }>("/admin/users"); setUsers(result.users); setLoading(false);
     const operators = result.users.filter((user) => user.role === "operator");
     if (operators.length) void api<unknown>("/platform/modules").then((value) => setModules([...readModuleSnapshot(value).modules])).catch(() => undefined);
-    for (const user of operators) void loadGrants(user);
+    // The server holds module assignments only for active Operators and answers 404 for anyone else.
+    for (const user of operators.filter(assignable)) void loadGrants(user);
     return result.users;
   }
   useEffect(() => { void load().catch((caught: Error) => { setLoading(false); setError(caught.message); }); return () => window.clearTimeout(savedTimer.current); }, []);
@@ -72,8 +75,7 @@ export function UserSettings({ members }: { members: RosterMember[] }) {
   function openEditor(user: User) {
     if (editing === user.id) { closeEditor(); return; }
     setEditing(user.id); setDraft(draftFor(user, grants[user.id])); setPanelError(""); setSaved(""); setConfirmingActive(false);
-    // Admin rows have no grants loaded yet; read them so switching the role to Operator shows the stored assignments.
-    if (grants[user.id]?.state !== "ready") void loadGrants(user).then((value) => { if (value && editingRef.current === user.id) setDraft((current) => current && { ...current, capabilities: value.capabilities }); });
+    if (assignable(user) && grants[user.id]?.state !== "ready") void loadGrants(user).then((value) => { if (value && editingRef.current === user.id) setDraft((current) => current && { ...current, capabilities: value.capabilities }); });
     window.requestAnimationFrame(() => document.getElementById(`access-role-${user.id}`)?.focus());
   }
   async function save(event: FormEvent, user: User) {
@@ -89,7 +91,11 @@ export function UserSettings({ members }: { members: RosterMember[] }) {
     try {
       if (Object.keys(patch).length) await api(`/admin/users/${encodeURIComponent(user.id)}`, { method: "PATCH", body: JSON.stringify(patch) });
       if (modulesChanged && stored?.state === "ready") { const value = await api<Assignments>(`/admin/modules/assignments/${encodeURIComponent(user.id)}`, { method: "PUT", body: JSON.stringify({ capabilities: draft.capabilities, revision: stored.value.revision }) }); setGrants((current) => ({ ...current, [user.id]: { state: "ready", value } })); }
-      await load(); setDraft((current) => current && { ...current, email: email ?? "" }); setSaved("Saved");
+      const users = await load(); setDraft((current) => current && { ...current, email: email ?? "" });
+      // An account that just became an Operator can now have modules; show what the server holds for it.
+      const now = users.find((item) => item.id === user.id);
+      if (patch.role === "operator" && now && assignable(now)) { const value = await loadGrants(now); if (editingRef.current === user.id) setDraft((current) => current && { ...current, capabilities: value?.capabilities ?? [] }); }
+      setSaved("Saved");
       window.clearTimeout(savedTimer.current); savedTimer.current = window.setTimeout(() => setSaved(""), 4_000);
     } catch (caught) {
       setPanelError((caught as Error).message); window.requestAnimationFrame(() => document.getElementById(`access-edit-error-${user.id}`)?.focus());
@@ -107,7 +113,7 @@ export function UserSettings({ members }: { members: RosterMember[] }) {
   const available = members.filter((member) => member.active && !users.some((user) => user.memberId === member.id));
   const sorted = sortAccounts(users); const active = sorted.filter((user) => user.active); const inactive = sorted.filter((user) => !user.active);
   const operatorPermissions = modules.flatMap((module) => module.permissions.filter((permission) => permission.operator).map((permission) => ({ module, permission })));
-  const modulesCell = (user: User) => { if (user.role === "admin") return "All"; const value = grants[user.id]; return !value || value.state === "loading" ? "Loading…" : value.state === "error" ? "Unavailable" : moduleSummary(value.value.capabilities, modules); };
+  const modulesCell = (user: User) => { if (user.role === "admin") return "All"; if (!user.active) return "None while inactive"; const value = grants[user.id]; return !value || value.state === "loading" ? "Loading…" : value.state === "error" ? "Unavailable" : moduleSummary(value.value.capabilities, modules); };
 
   function editPanel(user: User) {
     if (!draft) return null; const name = accountName(user); const grant = grants[user.id];
@@ -118,7 +124,7 @@ export function UserSettings({ members }: { members: RosterMember[] }) {
         <div className="access-readonly-field"><span id={`access-username-label-${user.id}`}>Local username</span><output aria-labelledby={`access-username-label-${user.id}`} className="account-identifier">{user.localUsername ?? "None"}</output><p className="field-help">Usernames cannot be changed.</p></div>
         <div className="access-email-field"><label htmlFor={`access-google-email-${user.id}`}>Google email<input id={`access-google-email-${user.id}`} name={`access-google-email-${user.id}`} type="email" autoComplete="off" autoCapitalize="off" spellCheck={false} {...passwordManagerIgnore} aria-label={`Google email for ${name}`} aria-invalid={Boolean(panelError)} aria-describedby={`access-email-help-${user.id}`} value={draft.email} disabled={saving} onChange={(event) => setDraft({ ...draft, email: event.target.value })} /></label><p id={`access-email-help-${user.id}`} className="field-help">Used for Sign in with Google. Leave it empty to remove it.</p></div>
       </div>
-      <fieldset className="access-module-fieldset"><legend>Module access</legend>{draft.role === "admin" ? <p className="module-grants-summary">Admins can use every enabled module.</p> : !grant || grant.state === "loading" ? <p className="module-grants-summary" role="status">Loading module assignments…</p> : grant.state === "error" ? <p className="ui-status" data-tone="error" role="alert">Module assignments could not be loaded. {grant.message}</p> : <><p className="field-help">Operators need an explicit assignment for each module. Core roster and account access remain available without one.</p>{!user.active && <p className="field-help">Inactive Operators cannot use module workflows until reactivated.</p>}{operatorPermissions.length ? <div className="access-module-choices">{operatorPermissions.map(({ module, permission }) => <label className="module-choice" key={permission.id}><input type="checkbox" checked={draft.capabilities.includes(permission.id)} disabled={saving || module.phase === "deleting" || module.phase === "deleted"} onChange={() => setDraft({ ...draft, capabilities: draft.capabilities.includes(permission.id) ? draft.capabilities.filter((item) => item !== permission.id) : [...draft.capabilities, permission.id] })} /><span>{permission.label}<small>{module.enabled ? "Module enabled" : "Assignment retained while module is disabled"}</small></span></label>)}</div> : <p className="module-grants-summary">No enabled module offers Operator access.</p>}</>}</fieldset>
+      <fieldset className="access-module-fieldset"><legend>Module access</legend>{draft.role === "admin" ? <p className="module-grants-summary">Admins can use every enabled module.</p> : user.role !== "operator" ? <p className="module-grants-summary">Modules can be assigned after the Operator role is saved.</p> : !user.active ? <p className="module-grants-summary">Inactive Operators cannot use modules. Modules can be assigned after the account is reactivated.</p> : !grant || grant.state === "loading" ? <p className="module-grants-summary" role="status">Loading module assignments…</p> : grant.state === "error" ? <p className="ui-status" data-tone="error" role="alert">Module assignments could not be loaded. {grant.message}</p> : <><p className="field-help">Operators need an explicit assignment for each module. Core roster and account access remain available without one.</p>{operatorPermissions.length ? <div className="access-module-choices">{operatorPermissions.map(({ module, permission }) => <label className="module-choice" key={permission.id}><input type="checkbox" checked={draft.capabilities.includes(permission.id)} disabled={saving || module.phase === "deleting" || module.phase === "deleted"} onChange={() => setDraft({ ...draft, capabilities: draft.capabilities.includes(permission.id) ? draft.capabilities.filter((item) => item !== permission.id) : [...draft.capabilities, permission.id] })} /><span>{permission.label}<small>{module.enabled ? "Module enabled" : "Assignment retained while module is disabled"}</small></span></label>)}</div> : <p className="module-grants-summary">No enabled module offers Operator access.</p>}</>}</fieldset>
       {panelError && <p id={`access-edit-error-${user.id}`} className="inline-messages error" role="alert" tabIndex={-1}>{panelError}</p>}
       <div className="access-edit-actions">
         <div className="access-edit-danger">{confirmingActive ? <div className="access-confirm" role="group" aria-label={user.active ? "Confirm deactivation" : "Confirm reactivation"}><p>{user.active ? `Deactivate ${name}? They are signed out everywhere and cannot sign in until reactivated.` : `Reactivate ${name}? They can sign in again with their existing role.`}</p><button id={`access-confirm-active-${user.id}`} className={user.active ? "danger-button" : "primary-button"} type="button" disabled={saving} onClick={() => void changeActive(user)}>{user.active ? "Confirm deactivate" : "Confirm reactivate"}</button><button type="button" disabled={saving} onClick={() => { setConfirmingActive(false); window.requestAnimationFrame(() => document.getElementById(`access-active-${user.id}`)?.focus()); }}>Keep as is</button></div> : <button id={`access-active-${user.id}`} className="danger-button" type="button" disabled={saving} onClick={() => { setConfirmingActive(true); window.requestAnimationFrame(() => document.getElementById(`access-confirm-active-${user.id}`)?.focus()); }}>{user.active ? "Deactivate account" : "Reactivate account"}</button>}</div>

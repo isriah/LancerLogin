@@ -32,14 +32,14 @@ test("Open web kiosk on this device creates a web code named after this browser 
   const address = await expectOpensRealTab(page, openButton(panel), kioskAddress, undefined, { attempts: 1 });
   expect(pairings.map((request) => request.postDataJSON())).toEqual([{ kioskName: "Debug kiosk TEST", kind: "web" }]);
   expect(new URL(address).pathname).toBe("/kiosk");
-  await expect(panel.getByRole("status")).toHaveText("Debug kiosk TEST opened in a new tab. It pairs on its own and appears in the kiosk list once it checks in.");
+  await expect(panel.getByRole("status")).toHaveText("Debug kiosk TEST opened in a new tab with its pairing code filled in. Tap Pair there and choose a settings PIN. It appears in the kiosk list once it checks in.");
 });
 
 test("Open web kiosk on this device retires and replaces this browser's debug kiosk that stopped checking in", async ({ page }, testInfo) => {
   const pairings = await useDebugScenario(page, testInfo.testId, "OLD1");
   const panel = await debugKioskPanel(page);
   // Without a real tab: the blank tab is refused as a popup blocker would, so the kiosk address opens on its own.
-  const opened = await recordWindowOpen(page, openButton(panel), undefined, () => expect(panel.getByRole("status")).toContainText("Debug kiosk OLD1 opened in a new tab."));
+  const opened = await recordWindowOpen(page, openButton(panel), undefined, () => expect(panel.getByRole("status")).toContainText("Debug kiosk OLD1 opened in a new tab with its pairing code filled in."));
   expect(opened).toEqual([["about:blank", "_blank"], [expect.stringMatching(kioskAddress), "_blank", "noopener"]]);
   expect(pairings.map((request) => request.postDataJSON())).toEqual([{ kioskName: "Debug kiosk OLD1", kind: "web" }, { kioskName: "Debug kiosk OLD1", kind: "web", replaceKioskId: "debug-kiosk-old1" }]);
 });

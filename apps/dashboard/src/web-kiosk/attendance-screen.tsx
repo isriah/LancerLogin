@@ -1,5 +1,6 @@
 // The paired kiosk: member ID entry or member search, the confirm step, the PIN step at a Require PIN kiosk, the result,
-// and maintenance. In the background it refreshes its config and roster, sends heartbeats, syncs its offline queue
+// and maintenance. In Discord code mode it starts at the code screen instead, and the lookup is its backup method.
+// In the background it refreshes its config and roster, sends heartbeats, syncs its offline queue
 // and the wrong PIN tries made offline, and runs commands from the Kiosks page. The last config and roster are kept on
 // the device, so the kiosk also starts without a network.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from "react";
@@ -7,13 +8,14 @@ import { kioskState } from "../../../kiosk/src/kiosk-presentation.mjs";
 import { KioskApiError, KioskNetworkError, type KioskApi, type KioskConfig, type RosterMember } from "./kiosk-api.ts";
 import { createKioskClock, usableClockOffset, type KioskClock } from "./kiosk-clock.ts";
 import {
-  commandActionFor, commandPollMs, configRefreshMs, confirmTimeoutMs, connectionStatus, credentialRejected, displayForQueuedScan, displayForScanFate,
-  flowReducer, heartbeatMs, initialFlow, kioskBrandStyle, memberLookupFor, memberName, pinIdleSteps, rosterChanged, rosterRefreshMs, type Flow, type KioskMember, type PinStart,
+  backupButtonLabel, codeIdleSteps, codeOutcomeFor, commandActionFor, commandPollMs, configRefreshMs, confirmTimeoutMs, connectionStatus, credentialRejected, discordCodeBackupFor, discordCodeFor,
+  displayForCodeScan, displayForQueuedScan, displayForScanFate, flowReducer, heartbeatMs, idleModeFor, initialFlow, kioskBrandStyle, maintenanceIdleTimeoutMs, memberLookupFor, memberName, offlineCodeNote, pinIdleSteps,
+  rosterChanged, rosterRefreshMs, type Flow, type FlowAction, type KioskMember, type PinStart,
 } from "./kiosk-flow.ts";
 import { stateKeys, type KioskStore, type QueuedScan, type StoredPairing } from "./kiosk-store.ts";
 import { createScanSync, type RefusedScan, type ScanSync } from "./kiosk-sync.ts";
 import {
-  afterOfflineMatch, afterPinFailureReport, choosePinStep, memberPinState, pinFailureReport, pinIdleTimeoutMs, pinLockFor, pinLockoutFor, pinOutcomeFor, pinRequestPollMs,
+  afterOfflineMatch, afterPinFailureReport, choosePinStep, freezePinFailureReport, memberPinState, pinIdleTimeoutMs, pinLockFor, pinLockoutFor, pinOutcomeFor, pinRequestPollMs,
   recordOfflineFailure, requirePinFor, rosterHasPinData, usablePinFailures, verifyMemberPin, withoutPinData, type PinFailureLedger, type PinOutcome,
 } from "./member-pin.ts";
 import type { SettingsPinHash } from "./settings-pin.ts";
@@ -21,6 +23,7 @@ import { usePhysicalKeys, type PhysicalKeyHandlers } from "./on-screen-keys.tsx"
 import { KioskFrame, ResultView } from "./kiosk-parts.tsx";
 import { ChooseSettingsPin, EnterSettingsPin } from "./settings-pin-screens.tsx";
 import { EntryView, SearchView } from "./lookup-views.tsx";
+import { CodeInvalidView, DiscordCodeView } from "./discord-code-screens.tsx";
 import { ChoosePinPad, MemberPinEntry, MemberPinMaintenance, NoPinView, PinLockedView, WaitingView, WrongPinView } from "./member-pin-screens.tsx";
 
 type Maintenance = "pin" | "choose" | "menu" | "confirm_unpair" | "member_set" | "member_reset";
@@ -57,7 +60,10 @@ export function AttendanceScreen({ api, store, pairing, releaseVersion, onPairin
     if (value && was === false) reconnected.current();
   }, []);
   const [pending, setPending] = useState(0); const [refused, setRefused] = useState<RefusedScan[]>([]);
-  const [flow, dispatch] = useReducer(flowReducer, initialFlow);
+  // What the kiosk returns to between members: the Discord code screen while it can reach the server, else the lookup.
+  const home = idleModeFor(config, online);
+  const reducer = useMemo(() => (current: Flow, action: FlowAction) => flowReducer(current, action, home), [home]);
+  const [flow, dispatch] = useReducer(reducer, initialFlow);
   const [maintenance, setMaintenance] = useState<Maintenance>(); const [maintenanceError, setMaintenanceError] = useState("");
   const [secondsLeft, setSecondsLeft] = useState(0);
   const pairingRef = useRef(pairing); pairingRef.current = pairing;
@@ -146,12 +152,17 @@ export function AttendanceScreen({ api, store, pairing, releaseVersion, onPairin
   /** Reports wrong PIN tries made offline, then reloads the roster, which carries any lock they started. */
   const pinReporting = useRef(false);
   const reportPinFailures = useCallback(async () => {
-    const report = pinFailureReport(pinFailures.current);
-    if (!report.length || pinReporting.current) return;
+    if (pinReporting.current) return;
+    // The report is frozen with its id and saved before it is sent, so a resend after a lost answer or a reload is the
+    // same report and the server counts it once.
+    const frozen = freezePinFailureReport(pinFailures.current, () => crypto.randomUUID());
+    const report = frozen.report;
+    if (!report) return;
     pinReporting.current = true;
     try {
-      if (!await track(() => api.pinFailures(report))) return;
-      await savePinFailures(afterPinFailureReport(pinFailures.current, report));
+      if (frozen.ledger !== pinFailures.current) await savePinFailures(frozen.ledger);
+      if (!await track(() => api.pinFailures(report.failures, report.id))) return;
+      await savePinFailures(afterPinFailureReport(pinFailures.current, report.failures));
       await loadRoster();
     } finally { pinReporting.current = false; }
   }, [api, track, savePinFailures, loadRoster]);
@@ -236,7 +247,11 @@ export function AttendanceScreen({ api, store, pairing, releaseVersion, onPairin
 
   const lookup = memberLookupFor(config);
   const requirePin = requirePinFor(config);
-  useEffect(() => { dispatch({ type: "reset" }); }, [lookup, requirePin]);
+  const discordCode = discordCodeFor(config);
+  const codeBackup = discordCodeBackupFor(config);
+  useEffect(() => { dispatch({ type: "reset" }); }, [lookup, requirePin, discordCode, codeBackup]);
+  // Going offline or coming back changes the start screen; a member midway through a step stays on it.
+  useEffect(() => { dispatch({ type: "home" }); }, [home]);
 
   // The confirm step goes back to the start after 15 seconds; the result after its display time. A layout effect, so
   // the countdown starts at 15 on the confirm screen's first paint.
@@ -251,14 +266,27 @@ export function AttendanceScreen({ api, store, pairing, releaseVersion, onPairin
     return undefined;
   }, [flow]);
 
-  // The PIN screens go back to the start after 30 seconds with no tap or key.
+  // The PIN screens go back to the start after 30 seconds with no tap or key. So do a half-typed code, "Code not
+  // recognized" and the backup method's lookup at a Discord code kiosk.
+  const idles = pinIdleSteps.has(flow.step) || home === "code" && codeIdleSteps.has(flow.step) && !(flow.step === "code" && !flow.digits);
   useEffect(() => {
-    if (maintenance || !pinIdleSteps.has(flow.step)) return undefined;
+    if (maintenance || !idles) return undefined;
     let timer = window.setTimeout(() => dispatch({ type: "timeout" }), pinIdleTimeoutMs);
     const activity = () => { window.clearTimeout(timer); timer = window.setTimeout(() => dispatch({ type: "timeout" }), pinIdleTimeoutMs); };
     window.addEventListener("keydown", activity, true); window.addEventListener("pointerdown", activity, true);
     return () => { window.clearTimeout(timer); window.removeEventListener("keydown", activity, true); window.removeEventListener("pointerdown", activity, true); };
-  }, [flow, maintenance]);
+  }, [flow, maintenance, idles]);
+
+  // Maintenance (its settings PIN, menu and PIN tasks) closes after a minute with no tap or key, so a kiosk left in
+  // maintenance goes back to the start screen instead of offering Unpair to the next member.
+  useEffect(() => {
+    if (!maintenance) return undefined;
+    const close = () => setMaintenance(undefined);
+    let timer = window.setTimeout(close, maintenanceIdleTimeoutMs);
+    const activity = () => { window.clearTimeout(timer); timer = window.setTimeout(close, maintenanceIdleTimeoutMs); };
+    window.addEventListener("keydown", activity, true); window.addEventListener("pointerdown", activity, true);
+    return () => { window.clearTimeout(timer); window.removeEventListener("keydown", activity, true); window.removeEventListener("pointerdown", activity, true); };
+  }, [maintenance]);
 
   // The waiting screen asks every 3 seconds whether an Operator decided, and gives up once the request runs out.
   const waitingRequest = flow.step === "waiting" && !maintenance ? flow.requestId : undefined;
@@ -389,6 +417,24 @@ export function AttendanceScreen({ api, store, pairing, releaseVersion, onPairin
     dispatch({ type: "sent", display: displayForQueuedScan(member, before) });
   }
 
+  /**
+   * Sends a Discord code for the server to check and record. The code is never saved or queued, and there is no
+   * offline check: when the server can't be reached the kiosk shows its backup method instead.
+   */
+  async function sendCodeScan(code: string) {
+    if (flowRef.current.step !== "code") return;
+    dispatch({ type: "code_submit" });
+    // Scans already waiting go first, so the server sees them in the order they were taken.
+    if (await sync.pending().catch(() => 0) > 0) await Promise.race([sync.sync({ force: true }).catch(() => undefined), wait(scanAnswerWaitMs)]);
+    const outcome = await api.deliver({ eventId: crypto.randomUUID(), discordCode: code, occurredAt: clockRef.current.occurredAt(), pairingId: pairingRef.current.pairingId, rescanSupported: true });
+    if (outcome.kind === "credential") { handlers.current.onCredentialRejected(); return; }
+    const refusal = codeOutcomeFor(outcome);
+    setOnline(refusal?.kind !== "unreachable");
+    // The mode was turned off on the dashboard: load the new config, which also sets the start screen.
+    if (refusal?.kind === "not_enabled") void loadConfig();
+    dispatch(refusal ? { type: "code_refused", outcome: refusal } : { type: "sent", display: displayForCodeScan(outcome) });
+  }
+
   function enterPin(member: KioskMember, pin: string) {
     dispatch({ type: "pin_entered" });
     void sendPinScan(member, pin);
@@ -467,7 +513,7 @@ export function AttendanceScreen({ api, store, pairing, releaseVersion, onPairin
     </div>
   </div>;
   else if (maintenance === "member_set" || maintenance === "member_reset") body = <MemberPinMaintenance key={maintenance} task={maintenance === "member_set" ? "set" : "reset"} api={api} roster={roster} lookup={lookup} online={online}
-    onChanged={() => void loadRoster()} onBack={() => setMaintenance("menu")} />;
+    onChanged={() => void loadRoster()} onBack={() => setMaintenance("menu")} onExit={() => setMaintenance(undefined)} />;
   else if (maintenance === "confirm_unpair") body = <div className="wk-centered wk-menu">
     <h1 className="wk-title">Unpair this kiosk?</h1>
     <p className="wk-sub">It forgets its pairing and stops recording attendance. To use it again, create a new code on the Kiosks page. Retire the old kiosk there too.</p>
@@ -492,10 +538,18 @@ export function AttendanceScreen({ api, store, pairing, releaseVersion, onPairin
   else if (flow.step === "waiting") body = <WaitingView flow={flow} onCancel={cancel} />;
   else if (flow.step === "choose_pin") { const current = flow; body = <ChoosePinPad first={current.first} error={current.error} onSubmit={(pin) => void choosePin(current, pin)} onCancel={cancel} hint={current.first === undefined ? `Approved for ${memberName(current.member)}` : undefined} />; }
   else if (flow.step === "sending") body = <ResultView display={kioskState("processing", { message: "Recording attendance", detail: memberName(flow.member) })} />;
+  else if (flow.step === "code") body = <DiscordCodeView digits={flow.digits} dispatch={dispatch} onSubmit={(code) => void sendCodeScan(code)}
+    backupLabel={codeBackup === "always" ? backupButtonLabel(lookup) : undefined} onBackup={() => dispatch({ type: "use_backup" })} />;
+  else if (flow.step === "code_sending") body = <ResultView display={kioskState("processing", { message: "Recording attendance", detail: "Checking your code" })} />;
+  else if (flow.step === "code_invalid") body = <CodeInvalidView onTryAgain={() => dispatch({ type: "try_again" })} />;
   else if (flow.step === "result") body = <ResultView display={flow.display} />;
   else if (!roster) body = <ResultView display={kioskState("processing", { message: online === false ? "Couldn't reach the server" : "Getting ready", detail: online === false ? "This kiosk keeps trying." : "Loading the roster" })} />;
-  else if (lookup === "search") body = <SearchView text={flow.text} roster={roster} dispatch={dispatch} />;
-  else body = <EntryView text={flow.text} roster={roster} dispatch={dispatch} />;
+  else {
+    // At a Discord code kiosk the lookup is the backup method: offline it says why, and online it can be left again.
+    const backup = !discordCode ? {} : home === "code" ? { onCancel: cancel, cancelLabel: "Back to Discord code" }
+      : online === false ? { note: <p className="wk-note wk-note-warning" role="status">{offlineCodeNote(lookup)}</p> } : {};
+    body = lookup === "search" ? <SearchView text={flow.text} roster={roster} dispatch={dispatch} {...backup} /> : <EntryView text={flow.text} roster={roster} dispatch={dispatch} {...backup} />;
+  }
 
   return <div className="wk-root" style={style} data-step={maintenance ? "maintenance" : flow.step}>
     <KioskFrame brand={brand} onHold={maintenance ? undefined : openMaintenance} footerName={config?.kiosk.name ?? pairing.name} footerStatus={status} online={online}>{body}</KioskFrame>

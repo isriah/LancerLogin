@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mapRosterHeader, normaliseRosterHeader, parseRosterText, rosterFieldFor, rosterTemplateCsv } from "../apps/dashboard/src/roster-csv.ts";
+import { mapRosterHeader, parseRosterText, rosterFieldFor, rosterTemplateCsv } from "../apps/dashboard/src/roster-csv.ts";
 
 test("roster headers normalise case, spaces, underscores, hyphens and dots", () => {
-  assert.equal(normaliseRosterHeader(" Member_ID "), "memberid");
-  assert.equal(normaliseRosterHeader("E-mail.Address"), "emailaddress");
+  assert.equal(rosterFieldFor(" Member_ID "), "memberId");
+  assert.equal(rosterFieldFor("E-mail.Address"), "email");
   for (const header of ["memberId", "Member ID", "member_id", "MEMBER-ID", "id", "Student ID", "member"]) assert.equal(rosterFieldFor(header), "memberId", header);
   for (const header of ["firstName", "First Name", "first", "Given name"]) assert.equal(rosterFieldFor(header), "firstName", header);
   for (const header of ["lastName", "Last name", "last", "Surname", "family_name"]) assert.equal(rosterFieldFor(header), "lastName", header);

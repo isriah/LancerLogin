@@ -98,7 +98,7 @@ test("a web kiosk with Require PIN sets up a PIN with an Operator's approval, re
   await identify(page, "1007", "Test Student G");
   await expect(page.getByRole("heading", { name: "You don't have a PIN yet" })).toBeVisible();
   await page.getByRole("button", { name: "Ask for approval", exact: true }).click();
-  await expect(page.getByText("Waiting for an Operator · or an Operator can approve here from maintenance")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Waiting for an Operator to approve on this kiosk's Manage page in the dashboard")).toBeVisible({ timeout: 20_000 });
   let requestId = "";
   await expect.poll(async () => {
     const { requests } = await api.get(`/admin/kiosks/${kioskId}/pin-requests`);
@@ -140,8 +140,10 @@ test("a web kiosk with Require PIN sets up a PIN with an Operator's approval, re
   await pressAll(page, pinH);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("heading", { name: "PIN set" })).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("button", { name: "Back to maintenance", exact: true }).click();
-  await page.getByRole("button", { name: "Back", exact: true }).click();
+  // The member holds the kiosk by now, so Done goes to the start screen and never shows them the maintenance menu.
+  await expect(page.getByRole("button", { name: "Back to maintenance", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(page.getByRole("heading", { name: /Enter your\s*member ID/ })).toBeVisible();
   const rosterH = await rosterIdFor("1008");
   expect((await api.get(`/admin/members/${rosterH}/pin`)).pin).toMatchObject({ set: true });
   await expect.poll(async () => Boolean((await cachedMember(page, "1008"))?.pin), { timeout: 30_000 }).toBe(true);

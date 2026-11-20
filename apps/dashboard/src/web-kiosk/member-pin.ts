@@ -81,8 +81,15 @@ export function memberPinState(member: RosterMember | undefined): "set" | "none"
 /**
  * One member's wrong tries made offline. `count` is what the server hasn't been told yet; `streak` counts toward the
  * local lock and starts again after a local lock runs out, as the server's count does.
+ *
+ * `report` marks the tries that are in the report on its way to the server: its id, and the count and time it carries
+ * for this member. It is saved with the entry and stays until the server answers, so every resend of the report, after
+ * a lost answer or a reload, carries the same id and the same tries, and the server does not count them twice. Tries
+ * made meanwhile add to `count` only and go in the next report.
  */
-export type PinFailure = { memberId: string; count: number; lastAt: string; streak: number; lockedUntil?: string };
+export type PinFailure = { memberId: string; count: number; lastAt: string; streak: number; lockedUntil?: string; report?: { id: string; count: number; lastAt: string } };
+/** A report for `/kiosk/pin-failures`: the id it keeps on every resend, and its tries. */
+export type FrozenPinFailureReport = { id: string; failures: PinFailureReport[] };
 export type PinFailureLedger = PinFailure[];
 
 const timestamp = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value));
@@ -95,7 +102,10 @@ export function usablePinFailures(value: unknown): PinFailureLedger {
     if (!record || typeof record !== "object" || typeof record.memberId !== "string" || !record.memberId || !timestamp(record.lastAt)) return [];
     const count = Number.isInteger(record.count) && record.count! >= 0 ? record.count! : 0;
     const streak = Number.isInteger(record.streak) && record.streak! >= 0 ? record.streak! : count;
-    return [{ memberId: record.memberId, count, lastAt: record.lastAt, streak, ...(timestamp(record.lockedUntil) ? { lockedUntil: record.lockedUntil } : {}) }];
+    const sent = record.report as Partial<NonNullable<PinFailure["report"]>> | undefined;
+    const report = sent && typeof sent === "object" && typeof sent.id === "string" && sent.id && sent.id.length <= 128 && Number.isInteger(sent.count) && sent.count! >= 1 && sent.count! <= maxPinFailureCount && timestamp(sent.lastAt)
+      ? { id: sent.id, count: sent.count!, lastAt: sent.lastAt } : undefined;
+    return [{ memberId: record.memberId, count, lastAt: record.lastAt, streak, ...(timestamp(record.lockedUntil) ? { lockedUntil: record.lockedUntil } : {}), ...(report ? { report } : {}) }];
   });
 }
 
@@ -109,7 +119,8 @@ export function recordOfflineFailure(ledger: PinFailureLedger, memberId: string,
   const streak = (lockRanOut ? 0 : previous?.streak ?? 0) + 1;
   const stillLocked = previous?.lockedUntil !== undefined && !lockRanOut ? previous.lockedUntil : undefined;
   const lockedUntil = stillLocked ?? (lockout.enabled && streak >= lockout.attempts ? new Date(now + lockout.minutes * 60_000).toISOString() : undefined);
-  const entry: PinFailure = { memberId, count: Math.min((previous?.count ?? 0) + 1, 1_000_000), lastAt: new Date(now).toISOString(), streak, ...(lockedUntil ? { lockedUntil } : {}) };
+  // A report on its way keeps the tries it carries; this try is for the next one.
+  const entry: PinFailure = { memberId, count: Math.min((previous?.count ?? 0) + 1, 1_000_000), lastAt: new Date(now).toISOString(), streak, ...(lockedUntil ? { lockedUntil } : {}), ...(previous?.report ? { report: previous.report } : {}) };
   return { ledger: [...ledger.filter((item) => item.memberId !== memberId), entry], ...(lockedUntil ? { lockedUntil } : {}) };
 }
 
@@ -122,6 +133,25 @@ export function afterOfflineMatch(ledger: PinFailureLedger, memberId: string): P
   });
 }
 
+/**
+ * The report to send, and the ledger to save before sending it. A report already on its way (entries marked with
+ * `report`) is returned again exactly as it was first sent. Otherwise the tries waiting now, within the limits of
+ * `pinFailureReport`, are frozen under `newId()` and marked in the returned ledger. With nothing to report there is no
+ * report and the ledger is returned as it is.
+ */
+export function freezePinFailureReport(ledger: PinFailureLedger, newId: () => string): { ledger: PinFailureLedger; report?: FrozenPinFailureReport } {
+  const id = ledger.find((item) => item.report)?.report?.id;
+  if (id !== undefined) {
+    // One report is on its way at a time; a mark with another id cannot be part of it, and is dropped.
+    const kept: PinFailureLedger = ledger.some((item) => item.report && item.report.id !== id) ? ledger.map((item): PinFailure => { if (!item.report || item.report.id === id) return item; const { report: _other, ...rest } = item; return rest; }) : ledger;
+    return { ledger: kept, report: { id, failures: kept.flatMap((item) => item.report ? [{ memberId: item.memberId, count: item.report.count, lastAt: item.report.lastAt }] : []) } };
+  }
+  const failures = pinFailureReport(ledger);
+  if (!failures.length) return { ledger };
+  const fresh = newId(); const sent = new Map(failures.map((item) => [item.memberId, item]));
+  return { ledger: ledger.map((item) => { const report = sent.get(item.memberId); return report ? { ...item, report: { id: fresh, count: report.count, lastAt: report.lastAt } } : item; }), report: { id: fresh, failures } };
+}
+
 /** The tries to report to `/kiosk/pin-failures`, within its limits (200 members, 1 to 1000 tries each). */
 export function pinFailureReport(ledger: PinFailureLedger): PinFailureReport[] {
   return ledger.filter((item) => item.count > 0).slice(0, maxPinFailureReports).map((item) => ({ memberId: item.memberId, count: Math.min(item.count, maxPinFailureCount), lastAt: item.lastAt }));
@@ -130,7 +160,7 @@ export function pinFailureReport(ledger: PinFailureLedger): PinFailureReport[] {
 /**
  * The ledger once the server has answered a report: a member whose tries were all reported is removed, lock and all,
  * because the server's count (and its lock, which comes back with the roster) now covers them. Tries made while the
- * report was on its way stay.
+ * report was on its way stay, without the report's mark.
  */
 export function afterPinFailureReport(ledger: PinFailureLedger, reported: readonly PinFailureReport[]): PinFailureLedger {
   const sent = new Map(reported.map((item) => [item.memberId, item]));
@@ -138,7 +168,9 @@ export function afterPinFailureReport(ledger: PinFailureLedger, reported: readon
     const report = sent.get(item.memberId);
     if (!report) return [item];
     const count = item.count - report.count;
-    return count > 0 ? [{ ...item, count, streak: count }] : [];
+    // The mark of the report goes with its tries: what is left is for the next report.
+    const { report: _answered, ...rest } = item;
+    return count > 0 ? [{ ...rest, count, streak: count }] : [];
   });
 }
 

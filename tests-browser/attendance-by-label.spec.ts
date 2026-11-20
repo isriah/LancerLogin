@@ -178,6 +178,9 @@ test("on a phone the column sets scroll inside the table with their headings and
     await page.goto("/reports");
     await page.getByLabel("Label group").selectOption({ label: "Test Robotics Class" });
     const row = page.getByRole("table", { name: "Attendance leaderboard" }).getByRole("row").filter({ hasText: "Test Student C" });
+    // Choosing the label switches the column to pills at once, but the rows keep the Overall-rate order (with a "No policy"
+    // pill) until the label's results arrive and re-rank them. Measure only after that, or the row moves between reads.
+    await expect(row.locator(".ui-status")).toHaveText("Below target");
     const pill = await row.locator(".ui-status").boundingBox(); const name = await row.getByRole("link").boundingBox();
     expect(Math.abs(pill!.y + pill!.height / 2 - (name!.y + name!.height / 2))).toBeLessThan(12);
     await expectResponsiveFit(page, { controls: ".leaderboard-card button, .leaderboard-card a[href], .leaderboard-card select, .report-filters select", scrollers: ".report-tabs" });

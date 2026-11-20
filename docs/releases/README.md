@@ -11,6 +11,7 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 ## LancerLogin 2 beta releases
 
+- [v2.1.0-beta.9](v2.1.0-beta.9.md) - Discord codes at the kiosk, notices that say why a scan wasn't taken, Require PIN and kiosk queue fixes, and bulk Discord role sync on the free plan
 - [v2.1.0-beta.8](v2.1.0-beta.8.md) - Early arrival allowance, per-visitor sign-in limits, authenticated module release lookups and Outreach activity CSV import
 - [v2.1.0-beta.7](v2.1.0-beta.7.md) - Password hashing in the browser, PIN throttle, background work in small steps, report column filters, Attendance by label and meeting CSV import
 - [v2.1.0-beta.6](v2.1.0-beta.6.md) - Check for updates reads GitHub straight away, Try again when the dashboard cannot reach its server, and steadier updates

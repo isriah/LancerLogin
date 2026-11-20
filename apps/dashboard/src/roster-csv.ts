@@ -1,4 +1,4 @@
-import { csvFieldFor, delimiterFor, mapCsvHeader, normaliseCsvHeader, parseDelimited } from "./csv-import.ts";
+import { csvFieldFor, delimiterFor, mapCsvHeader, parseDelimited } from "./csv-import.ts";
 
 export type RosterField = "memberId" | "firstName" | "lastName" | "email" | "discordUserId";
 export type RosterRecord = { memberId: string; firstName: string; lastName: string; email?: string; discordUserId?: string };
@@ -26,10 +26,6 @@ const rosterAliases: Record<string, RosterField> = {
 };
 
 const rosterHeaderSpec = { aliases: rosterAliases, labels: rosterFieldLabels, required: requiredRosterFields };
-
-export function normaliseRosterHeader(value: string): string {
-  return normaliseCsvHeader(value);
-}
 
 export function rosterFieldFor(header: string): RosterField | undefined {
   return csvFieldFor(rosterAliases, header);

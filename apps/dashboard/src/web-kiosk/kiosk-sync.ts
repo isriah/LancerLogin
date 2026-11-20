@@ -8,6 +8,7 @@
 //   next try, doubling the wait each time up to 5 minutes.
 // Kept free of React and the browser so it can be tested with a fake transport and an in-memory queue.
 import type { AttendanceResult, ScanReviewAcknowledgement, ScanReviewRecord, SendOutcome } from "./kiosk-api.ts";
+import type { ScanRefusal } from "../../../kiosk/src/kiosk-presentation.mjs";
 import type { QueuedScan, ScanQueue } from "./kiosk-store.ts";
 
 /** A scan the server refused, kept on the device. `cloud` is the review status the server last acknowledged. */
@@ -22,7 +23,7 @@ export interface RefusedScanStore { list(): Promise<RefusedScan[]>; save(scans: 
 /** What happened to a scan this session: settled one way or another, or still waiting. */
 export type ScanFate =
   | { kind: "accepted"; result: AttendanceResult }
-  | { kind: "rejected"; status: number; code?: string; message: string }
+  | { kind: "rejected"; status: number; code?: string; message: string; refusal?: ScanRefusal }
   | { kind: "rescan"; status: number; code: string; message: string };
 
 /** Why a sync pass stopped before the queue was empty. */

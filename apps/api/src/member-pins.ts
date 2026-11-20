@@ -88,12 +88,20 @@ async function memberPin(db: D1Database, memberId: unknown, activeOnly: boolean)
 const hasPin = (row: PinRow) => typeof row.pinHash === "string" && typeof row.pinSalt === "string";
 const activeLock = (row: { lockedUntil?: string | null }, now: string) => typeof row.lockedUntil === "string" && row.lockedUntil > now ? row.lockedUntil : null;
 const activeThrottle = (row: { throttleUntil?: string | null }, now: string) => typeof row.throttleUntil === "string" && row.throttleUntil > now ? row.throttleUntil : null;
+/**
+ * SQL that is true while a member's PIN row takes an online try: no lock and no throttle wait is running at the time in
+ * the given parameter. The write that claims a try carries it, so the row as it is when that write runs decides.
+ */
+const takesOnlineTry = (nowParameter: number) => `(locked_until IS NULL OR locked_until <= ?${nowParameter}) AND (throttle_until IS NULL OR throttle_until <= ?${nowParameter})`;
 
 /** "Too many wrong PINs. Try again in 30 seconds.": whole seconds under a minute, then whole minutes, rounded up. */
 export function pinThrottleMessage(seconds: number) {
+  return `Too many wrong PINs. Try again in ${throttleWaitText(seconds)}.`;
+}
+/** "30 seconds", "2 minutes": the wait in a throttle message. Shared with the Discord code throttle. */
+export function throttleWaitText(seconds: number) {
   const whole = Math.max(1, Math.ceil(seconds)), minutes = Math.ceil(whole / 60);
-  const wait = whole < 60 ? `${whole} ${whole === 1 ? "second" : "seconds"}` : `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
-  return `Too many wrong PINs. Try again in ${wait}.`;
+  return whole < 60 ? `${whole} ${whole === 1 ? "second" : "seconds"}` : `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
 /** The refusal for a try made while the throttle's wait runs. It says nothing about whether the PIN was right. */
 function throttled(retryAt: string, now: number) {
@@ -115,71 +123,184 @@ function auditStatement(db: D1Database, action: string, actorUserId: string | nu
 /**
  * Adds wrong tries to a member's count. A lock that has run out starts a fresh count. With lockout on, reaching the
  * limit locks for the configured minutes (an active lock is never extended); with it off, tries are only counted.
- * An online try (`online`) also counts toward the throttle, in the same statement; tries reported from offline checks
- * never do. Audits member_pin.locked when this call started the lock.
+ * The online throttle is not counted here: checkScanPin counts it when it claims the try, before the PIN is checked.
+ *
+ * Audits member_pin.locked when this call started the lock. The audit is written in the same batch, by a statement that
+ * reads the row before the count changes it, so of several tries counted at the same moment only the one that started
+ * the lock audits it. Queries: one batch.
  */
-async function recordFailedTries(db: D1Database, rosterId: string, count: number, lockout: PinLockout, metadata: Record<string, unknown>, notBefore?: string, online = false) {
+async function recordFailedTries(db: D1Database, rosterId: string, count: number, lockout: PinLockout, metadata: Record<string, unknown>, notBefore?: string) {
   const now = new Date(); const nowText = now.toISOString(); const lockUntil = new Date(now.getTime() + lockout.minutes * 60_000).toISOString();
   const nextCount = "MIN(CASE WHEN locked_until IS NOT NULL AND locked_until <= ?1 THEN ?2 ELSE failed_attempts + ?2 END, ?6)";
-  const throttle = online ? `throttle_until = ${throttleUntilSql(9)}, throttle_failures = MIN(throttle_failures + 1, ?6), ` : "";
-  const waits = online ? PIN_THROTTLE_SECONDS.map((seconds) => new Date(now.getTime() + seconds * 1000).toISOString()) : [];
-  const row = await db.prepare(`UPDATE member_pins SET
-      locked_until = CASE WHEN locked_until IS NOT NULL AND locked_until > ?1 THEN locked_until WHEN ?3 = 1 AND ${nextCount} >= ?4 THEN ?5 ELSE NULL END,
-      ${throttle}failed_attempts = ${nextCount}, updated_at = ?1
-    WHERE installation_id = 'primary' AND member_id = ?7 AND (?8 IS NULL OR set_at <= ?8)
-    RETURNING failed_attempts AS failedAttempts, locked_until AS lockedUntil, throttle_until AS throttleUntil`)
-    .bind(nowText, count, lockout.enabled ? 1 : 0, lockout.attempts, lockUntil, MAX_FAILED_ATTEMPTS, rosterId, notBefore ?? null, ...waits).first<{ failedAttempts: number; lockedUntil: string | null; throttleUntil: string | null }>();
-  if (!row) return null;
-  if (row.lockedUntil === lockUntil) await auditStatement(db, "member_pin.locked", null, "member", rosterId, { ...metadata, failedAttempts: row.failedAttempts, lockedUntil: lockUntil, minutes: lockout.minutes }, nowText).run();
-  return row;
+  const lockStarts = `NOT (locked_until IS NOT NULL AND locked_until > ?1) AND ?3 = 1 AND ${nextCount} >= ?4`;
+  const member = "installation_id = 'primary' AND member_id = ?7 AND (?8 IS NULL OR set_at <= ?8)";
+  const values = [nowText, count, lockout.enabled ? 1 : 0, lockout.attempts, lockUntil, MAX_FAILED_ATTEMPTS, rosterId, notBefore ?? null];
+  const results = await db.batch([
+    db.prepare(`INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at)
+      SELECT ?9, 'primary', NULL, 'member_pin.locked', 'member', member_id, json_patch(?10, json_object('failedAttempts', ${nextCount}, 'lockedUntil', ?5, 'minutes', ?11)), ?1
+      FROM member_pins WHERE ${member} AND ${lockStarts}`).bind(...values, crypto.randomUUID(), JSON.stringify(metadata), lockout.minutes),
+    db.prepare(`UPDATE member_pins SET
+        locked_until = CASE WHEN locked_until IS NOT NULL AND locked_until > ?1 THEN locked_until WHEN ${lockStarts} THEN ?5 ELSE NULL END,
+        failed_attempts = ${nextCount}, updated_at = ?1
+      WHERE ${member}
+      RETURNING failed_attempts AS failedAttempts, locked_until AS lockedUntil, throttle_until AS throttleUntil`).bind(...values),
+  ]);
+  return (results[1]?.results?.[0] as { failedAttempts: number; lockedUntil: string | null; throttleUntil: string | null } | undefined) ?? null;
+}
+
+type ReportedTries = { memberId: string; count: number; lastAt: string };
+/** How long a kiosk report id is remembered. A kiosk resends a report whose answer it lost as soon as it is next online. */
+const REPORT_ID_DAYS = 30;
+/**
+ * A subquery over one JSON parameter, [[memberId, count, lastAt], ...]: the tries that count, added up per roster member.
+ * memberId is a roster id or a member ID (the roster id wins). Entries for no one on the roster, for a member with no
+ * PIN, or last made before the member's current PIN was set (against an older PIN) are left out.
+ */
+const reportedTriesSql = (parameter: number) => `SELECT p.member_id AS memberId, SUM(r.tries) AS tries
+  FROM (SELECT (SELECT m.id FROM members m WHERE m.installation_id = 'primary' AND (m.id = json_extract(j.value, '$[0]') OR m.external_id = json_extract(j.value, '$[0]')) ORDER BY m.id = json_extract(j.value, '$[0]') DESC LIMIT 1) AS rosterId,
+      json_extract(j.value, '$[1]') AS tries, json_extract(j.value, '$[2]') AS lastAt FROM json_each(?${parameter}) j) r
+  CROSS JOIN member_pins p ON p.installation_id = 'primary' AND p.member_id = r.rosterId AND p.set_at <= r.lastAt
+  GROUP BY p.member_id`;
+
+/**
+ * Adds a kiosk's report of wrong tries made offline to each member's count, by the rules of recordFailedTries. The
+ * tries never count toward the online throttle.
+ *
+ * Queries: the lockout read, then one batch, whatever the size of the report, so 200 entries fit the Workers Free
+ * plan's 50 subrequests. The batch is one transaction: a report is applied whole or not at all, so a kiosk that got an
+ * error and sends the report again cannot have part of it counted twice. Returns the number of tries counted.
+ *
+ * A report that was applied but whose answer never reached the kiosk is sent again too. A kiosk that names its report
+ * (`reportId`, the same on every resend) is protected from that: the batch also records the id for this kiosk
+ * (kiosk_pin_failure_reports, migration 0101) with the number of tries counted, and counts nothing when the id is
+ * already there. A repeat is answered with the number recorded the first time. A kiosk from before report ids sends
+ * none, and its report is applied exactly as before, with the same three statements.
+ *
+ * The same batch removes ids older than REPORT_ID_DAYS, so the table stays a few rows per kiosk. Still one batch: two
+ * D1 subrequests with or without an id, whatever the size of the report.
+ */
+async function recordReportedTries(db: D1Database, kiosk: PinKiosk, failures: ReportedTries[], reportId?: string): Promise<number> {
+  if (!failures.length) return 0;
+  const lockout = await readPinLockout(db);
+  const now = new Date(); const nowText = now.toISOString(); const lockUntil = new Date(now.getTime() + lockout.minutes * 60_000).toISOString();
+  const report = JSON.stringify(failures.map((failure) => [failure.memberId, failure.count, new Date(failure.lastAt).toISOString()]));
+  // The same sums as recordFailedTries. `pins` names the member's row as it is before this report; `t` is reportedTriesSql.
+  const nextCount = (pins: string) => `MIN(CASE WHEN ${pins}.locked_until IS NOT NULL AND ${pins}.locked_until <= ?1 THEN t.tries ELSE ${pins}.failed_attempts + t.tries END, ?5)`;
+  const lockStarts = (pins: string) => `NOT (${pins}.locked_until IS NOT NULL AND ${pins}.locked_until > ?1) AND ?2 = 1 AND ${nextCount(pins)} >= ?3`;
+  const uuid = "lower(printf('%s-%s-%s-%s-%s', hex(randomblob(4)), hex(randomblob(2)), hex(randomblob(2)), hex(randomblob(2)), hex(randomblob(6))))";
+  // With a report id, the two writes do nothing when this kiosk's report was applied before. Without one, no condition
+  // and no extra parameter: the statements are the ones kiosks have always been answered with.
+  const firstTime = (kioskParameter: number, idParameter: number) => reportId === undefined ? "" : ` AND NOT EXISTS (SELECT 1 FROM kiosk_pin_failure_reports a WHERE a.installation_id = 'primary' AND a.kiosk_id = ?${kioskParameter} AND a.report_id = ?${idParameter})`;
+  const named = <T>(...values: T[]) => reportId === undefined ? [] : values;
+  const results = await db.batch([
+    db.prepare(`SELECT COALESCE(SUM(t.tries), 0) AS recorded FROM (${reportedTriesSql(1)}) t`).bind(report),
+    // Audits member_pin.locked for each lock this report starts. It reads the rows before the next statement changes them.
+    db.prepare(`INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at)
+      SELECT ${uuid}, 'primary', NULL, 'member_pin.locked', 'member', p.member_id, json_object('kioskId', ?7, 'via', 'offline_report', 'failedAttempts', ${nextCount("p")}, 'lockedUntil', ?4, 'minutes', ?8), ?1
+      FROM (${reportedTriesSql(6)}) t CROSS JOIN member_pins p ON p.installation_id = 'primary' AND p.member_id = t.memberId WHERE ${lockStarts("p")}${firstTime(7, 9)}`)
+      .bind(nowText, lockout.enabled ? 1 : 0, lockout.attempts, lockUntil, MAX_FAILED_ATTEMPTS, report, kiosk.id, lockout.minutes, ...named(reportId)),
+    db.prepare(`UPDATE member_pins SET
+        locked_until = CASE WHEN member_pins.locked_until IS NOT NULL AND member_pins.locked_until > ?1 THEN member_pins.locked_until WHEN ${lockStarts("member_pins")} THEN ?4 ELSE NULL END,
+        failed_attempts = ${nextCount("member_pins")}, updated_at = ?1
+      FROM (${reportedTriesSql(6)}) t WHERE member_pins.installation_id = 'primary' AND member_pins.member_id = t.memberId${firstTime(7, 8)}`)
+      .bind(nowText, lockout.enabled ? 1 : 0, lockout.attempts, lockUntil, MAX_FAILED_ATTEMPTS, report, ...named(kiosk.id, reportId)),
+    ...(reportId === undefined ? [] : [
+      // After the writes above, which look for the id: records it with what was counted. A repeat keeps the first row.
+      db.prepare(`INSERT OR IGNORE INTO kiosk_pin_failure_reports (installation_id, kiosk_id, report_id, recorded, applied_at)
+        SELECT 'primary', ?2, ?3, COALESCE(SUM(t.tries), 0), ?4 FROM (${reportedTriesSql(1)}) t`).bind(report, kiosk.id, reportId, nowText),
+      db.prepare("SELECT recorded FROM kiosk_pin_failure_reports WHERE installation_id = 'primary' AND kiosk_id = ? AND report_id = ?").bind(kiosk.id, reportId),
+      db.prepare("DELETE FROM kiosk_pin_failure_reports WHERE installation_id = 'primary' AND applied_at < ?").bind(new Date(now.getTime() - REPORT_ID_DAYS * 86_400_000).toISOString()),
+    ]),
+  ]);
+  // With an id, the row's count: this report's when it was just applied, the first one's when it is a repeat.
+  const recorded = (index: number) => (results[index]?.results?.[0] as { recorded?: number } | undefined)?.recorded;
+  return Number((reportId === undefined ? undefined : recorded(4)) ?? recorded(0) ?? 0);
+}
+
+/**
+ * Whether a scan sent with no PIN was made before Require PIN was last turned on for its kiosk. Such a scan waited in
+ * the kiosk's queue while an Admin changed the setting: the kiosk could not have asked for a PIN, so it is recorded as
+ * a normal scan instead of being refused, which older kiosks would resend forever. The kiosk credential may already
+ * skip the check with pinCheck "offline", so this trusts it with nothing new.
+ *
+ * The time comes from the audit of the kiosk's method change, the only record of it. It is written just after the
+ * setting, so a scan made between the two is also let through. With no such audit the scan is refused as before.
+ * Queries: one read, made only for a scan with neither pin nor pinCheck at a Require PIN kiosk.
+ */
+async function scanPredatesRequirePin(db: D1Database, kioskId: string, occurredAt: unknown): Promise<boolean> {
+  const scannedAt = typeof occurredAt === "string" ? Date.parse(occurredAt) : Number.NaN;
+  if (!Number.isFinite(scannedAt)) return false;
+  const row = await db.prepare("SELECT MAX(created_at) AS turnedOnAt FROM audit_log WHERE installation_id = 'primary' AND action = 'kiosk.authentication_method_updated' AND target_type = 'kiosk' AND target_id = ? AND json_extract(metadata_json, '$.requirePin') = 1 AND json_extract(metadata_json, '$.previousRequirePin') = 0").bind(kioskId).first<{ turnedOnAt?: string | null }>();
+  const turnedOnAt = typeof row?.turnedOnAt === "string" ? Date.parse(row.turnedOnAt) : Number.NaN;
+  return Number.isFinite(turnedOnAt) && scannedAt < turnedOnAt;
 }
 
 /**
  * The PIN step of a scan at a kiosk with Require PIN. Online, the kiosk sends the PIN and the server checks it. A scan
  * queued offline after the kiosk checked its cached hash says pinCheck "offline" and is recorded without one, even when
- * the member has been locked since: the device already accepted it. Offline checks are not throttled.
+ * the member has been locked since: the device already accepted it. Offline checks are not throttled. A scan with
+ * neither is refused with pin_required, unless it was made before Require PIN was turned on (scanPredatesRequirePin).
  *
- * Queries: one read of the member and their PIN row. Then, on a correct PIN, at most one write, which also rehashes a
- * PIN stored at another iteration count; on a wrong PIN, the lockout read, one write, and an audit if it locked. A
- * refusal for a lock or for the throttle's wait is the read alone, with no hashing.
+ * The throttle holds for tries sent at the same time. Before the PIN is checked, one write claims the try: it counts
+ * the try toward the throttle as if it were wrong, and sets the wait that follows it, but only on a row with no lock
+ * and no wait running when the write runs. A try that cannot claim is refused without its PIN being checked, and says
+ * nothing about the PIN. A correct PIN then clears the count; a wrong one leaves it. So of any number of tries sent at
+ * once, no more are checked than would be one after another: the free tries, then one for each wait. (A try that was
+ * claimed just before a lock started is still checked, so with lockout set below the free tries a burst can have up to
+ * the free tries checked, never more.)
+ *
+ * Queries: the claim, which also reads the member's PIN. Then, on a correct PIN, one write, which also rehashes a PIN
+ * stored at another iteration count; on a wrong PIN, the lockout read and one batch that counts it and audits a lock
+ * it started. A try that
+ * could not claim makes one read, for its reason (no such member, no PIN, locked, waiting), and hashes nothing.
  */
-export async function checkScanPin(db: D1Database, kiosk: PinKiosk, input: { memberId?: unknown; pin?: unknown; pinCheck?: unknown }): Promise<void> {
+export async function checkScanPin(db: D1Database, kiosk: PinKiosk, input: { memberId?: unknown; pin?: unknown; pinCheck?: unknown; occurredAt?: unknown }): Promise<void> {
   if (!kiosk.requirePin) return;
   if (input.pinCheck !== undefined && input.pinCheck !== "offline") throw new HttpError(400, "pinCheck must be offline", undefined, "invalid_pin_check");
   if (input.pinCheck === "offline") return;
-  if (input.pin === undefined || input.pin === null || input.pin === "") throw new HttpError(400, "This kiosk requires a PIN.", undefined, "pin_required");
+  if (input.pin === undefined || input.pin === null || input.pin === "") {
+    if (await scanPredatesRequirePin(db, kiosk.id, input.occurredAt)) return;
+    throw new HttpError(400, "This kiosk requires a PIN.", undefined, "pin_required");
+  }
   const pin = requirePinValue(input.pin);
-  let member: PinRow;
-  // A scan for someone who is not an active member fails in the attendance step with its usual reason.
-  try { member = await memberPin(db, input.memberId, true); } catch (error) { if (error instanceof HttpError && error.status === 404) return; throw error; }
-  const now = new Date().toISOString();
-  if (!hasPin(member)) throw new HttpError(409, "This member has no PIN yet.", undefined, "pin_not_set");
-  const locked = activeLock(member, now);
-  if (locked) throw new HttpError(423, "This PIN is locked after too many wrong tries.", undefined, "pin_locked", { lockedUntil: locked });
-  const waiting = activeThrottle(member, now);
-  if (waiting) throw throttled(waiting, Date.parse(now));
-  const iterations = Number(member.pinIterations);
-  if (await verifyPin(pin, { hash: member.pinHash!, salt: member.pinSalt!, iterations })) {
-    const clear = "failed_attempts = 0, locked_until = NULL, throttle_failures = 0, throttle_until = NULL, updated_at = ?";
+  if (!identifier(input.memberId)) throw new HttpError(400, "Choose a roster member.", undefined, "invalid_member");
+  const nowMs = Date.now(); const now = new Date(nowMs).toISOString();
+  const waits = PIN_THROTTLE_SECONDS.map((seconds) => new Date(nowMs + seconds * 1000).toISOString());
+  // The claim. The member is found as memberPin finds them: active, by roster id or member ID, the roster id winning.
+  const claimed = await db.prepare(`UPDATE member_pins SET throttle_until = ${throttleUntilSql(4)}, throttle_failures = MIN(throttle_failures + 1, ?3)
+    WHERE installation_id = 'primary' AND member_id = (SELECT m.id FROM members m WHERE m.installation_id = 'primary' AND (m.id = ?2 OR m.external_id = ?2) AND m.active = 1 ORDER BY m.id = ?2 DESC LIMIT 1) AND ${takesOnlineTry(1)}
+    RETURNING member_id AS rosterId, pin_hash AS pinHash, pin_salt AS pinSalt, pin_iterations AS pinIterations, throttle_until AS throttleUntil`)
+    .bind(now, input.memberId, MAX_FAILED_ATTEMPTS, ...waits).first<{ rosterId: string; pinHash: string; pinSalt: string; pinIterations: number; throttleUntil: string | null }>();
+  if (!claimed) {
+    let member: PinRow;
+    // A scan for someone who is not an active member fails in the attendance step with its usual reason.
+    try { member = await memberPin(db, input.memberId, true); } catch (error) { if (error instanceof HttpError && error.status === 404) return; throw error; }
+    if (!hasPin(member)) throw new HttpError(409, "This member has no PIN yet.", undefined, "pin_not_set");
+    const locked = activeLock(member, now);
+    if (locked) throw new HttpError(423, "This PIN is locked after too many wrong tries.", undefined, "pin_locked", { lockedUntil: locked });
+    // Neither is running now only when one ran out, or the PIN was set, between the two statements: try again at once.
+    throw throttled(activeThrottle(member, now) ?? new Date(nowMs + 1000).toISOString(), nowMs);
+  }
+  const iterations = Number(claimed.pinIterations);
+  if (await verifyPin(pin, { hash: claimed.pinHash, salt: claimed.pinSalt, iterations })) {
+    // Clears the claim with the rest. A PIN reset or set since the claim (another hash) is left alone.
+    const clear = "failed_attempts = 0, locked_until = NULL, throttle_failures = 0, throttle_until = NULL, updated_at = ?1 WHERE installation_id = 'primary' AND member_id = ?2 AND pin_hash = ?3";
     if (iterations !== PIN_ITERATIONS) {
       // The same PIN at the current cost, with a new salt. set_at stays: the member did not set a PIN. The hash change
-      // bumps the kiosk roster revision, so kiosks fetch the new hash; until then their cached one still matches this
-      // PIN. A PIN reset or set since the read changed pin_hash, and is left alone.
+      // bumps the kiosk roster revision, so kiosks fetch the new hash; until then their cached one still matches this PIN.
       const fresh = await hashPin(pin);
-      await db.prepare(`UPDATE member_pins SET pin_hash = ?, pin_salt = ?, pin_iterations = ?, ${clear} WHERE installation_id = 'primary' AND member_id = ? AND pin_hash = ?`).bind(fresh.hash, fresh.salt, fresh.iterations, now, member.rosterId, member.pinHash).run();
-    } else if (Number(member.failedAttempts ?? 0) !== 0 || member.lockedUntil || Number(member.throttleFailures ?? 0) !== 0 || member.throttleUntil) {
-      await db.prepare(`UPDATE member_pins SET ${clear} WHERE installation_id = 'primary' AND member_id = ?`).bind(now, member.rosterId).run();
-    }
+      await db.prepare(`UPDATE member_pins SET pin_hash = ?4, pin_salt = ?5, pin_iterations = ?6, ${clear}`).bind(now, claimed.rosterId, claimed.pinHash, fresh.hash, fresh.salt, fresh.iterations).run();
+    } else await db.prepare(`UPDATE member_pins SET ${clear}`).bind(now, claimed.rosterId, claimed.pinHash).run();
     return;
   }
   const lockout = await readPinLockout(db);
-  const counted = await recordFailedTries(db, member.rosterId, 1, lockout, { kioskId: kiosk.id, via: "kiosk" }, undefined, true);
+  const counted = await recordFailedTries(db, claimed.rosterId, 1, lockout, { kioskId: kiosk.id, via: "kiosk" });
   const lockedUntil = counted ? activeLock(counted, now) : null;
   const extra: Record<string, string | number> = {};
   if (lockout.enabled) extra.attemptsLeft = lockedUntil ? 0 : Math.max(0, lockout.attempts - Number(counted?.failedAttempts ?? 0));
   if (lockedUntil) extra.lockedUntil = lockedUntil;
   // The next try has to wait: say until when, so a kiosk can tell the member.
-  const retryAt = counted ? activeThrottle(counted, now) : null;
+  const retryAt = activeThrottle(counted ?? claimed, now);
   if (retryAt) extra.retryAt = retryAt;
   throw new HttpError(403, "Wrong PIN.", undefined, "pin_incorrect", extra); // Not 401: kiosks treat a 401 as a revoked credential.
 }
@@ -197,28 +318,22 @@ const requestStatus = (row: RequestRow, now: string) => (row.status === "pending
 const kioskRequestView = (row: RequestRow, now: string) => ({ id: row.id, status: requestStatus(row, now), expiresAt: row.expiresAt });
 const requestColumns = "r.id, r.kiosk_id AS kioskId, r.member_id AS memberRosterId, r.status, r.created_at AS createdAt, r.expires_at AS expiresAt, r.decided_at AS decidedAt";
 
-async function insertPin(db: D1Database, member: PinRow, pin: string, kioskId: string | null) {
-  const hashed = await hashPin(pin); const now = new Date().toISOString();
-  return { hashed, now, statement: db.prepare("INSERT INTO member_pins (installation_id, member_id, pin_hash, pin_salt, pin_iterations, set_at, set_kiosk_id, failed_attempts, locked_until, updated_at) VALUES ('primary', ?, ?, ?, ?, ?, ?, 0, NULL, ?) ON CONFLICT(installation_id, member_id) DO NOTHING").bind(member.rosterId, hashed.hash, hashed.salt, hashed.iterations, now, kioskId, now) };
+/** A new PIN hashed, and the time it is set at. Each route writes it with its own guarded INSERT. */
+async function newPin(pin: string) {
+  return { hashed: await hashPin(pin), now: new Date().toISOString() };
 }
 
 /** Kiosk routes under /kiosk/pin-requests, /kiosk/pins and /kiosk/pin-failures. Returns undefined for other paths. */
 export async function kioskPinRoute(request: Request, path: string, context: { db: D1Database; kiosk: PinKiosk; readJson: ReadJson; respond: Json }): Promise<Response | undefined> {
   const { db, kiosk, readJson, respond } = context; const method = request.method;
   if (path === "/kiosk/pin-failures" && method === "POST") {
-    const input = await readJson<{ failures?: unknown }>(request, 65_536);
+    const input = await readJson<{ failures?: unknown; reportId?: unknown }>(request, 65_536);
+    // reportId is optional: kiosks from before report ids send none. One that is sent must be usable as a key.
+    if (object(input) && input.reportId !== undefined && input.reportId !== null && !identifier(input.reportId)) throw new HttpError(400, "reportId is 1 to 128 characters", undefined, "invalid_pin_failures");
     if (!object(input) || !Array.isArray(input.failures) || input.failures.length > 200 || input.failures.some((item) => !object(item) || !identifier(item.memberId) || !Number.isInteger(item.count) || Number(item.count) < 1 || Number(item.count) > 1000 || typeof item.lastAt !== "string" || item.lastAt.length > 64 || !Number.isFinite(Date.parse(item.lastAt)))) throw new HttpError(400, "Report up to 200 failures as { memberId, count, lastAt }", undefined, "invalid_pin_failures");
     // Tries reported after Require PIN was turned off are dropped, so the kiosk can clear its queue.
     if (!kiosk.requirePin) return respond({ recorded: 0 });
-    const lockout = await readPinLockout(db); let recorded = 0;
-    for (const failure of input.failures as { memberId: string; count: number; lastAt: string }[]) {
-      let member: PinRow;
-      try { member = await memberPin(db, failure.memberId, false); } catch (error) { if (error instanceof HttpError && error.status === 404) continue; throw error; }
-      if (!hasPin(member)) continue;
-      // Tries made before the member's current PIN was set were against an older PIN, and do not count.
-      if (await recordFailedTries(db, member.rosterId, failure.count, lockout, { kioskId: kiosk.id, via: "offline_report" }, new Date(failure.lastAt).toISOString())) recorded += failure.count;
-    }
-    return respond({ recorded });
+    return respond({ recorded: await recordReportedTries(db, kiosk, input.failures as ReportedTries[], identifier(input.reportId) ? input.reportId : undefined) });
   }
   if (path === "/kiosk/pin-requests" && method === "POST") {
     requirePinKiosk(kiosk);
@@ -242,7 +357,7 @@ export async function kioskPinRoute(request: Request, path: string, context: { d
     if (requestStatus(row, now) !== "approved") throw new HttpError(409, "This PIN request has not been approved, or its approval ran out.", undefined, "pin_request_not_approved");
     const member = await memberPin(db, row.memberRosterId, true);
     if (hasPin(member)) throw new HttpError(409, "This member already has a PIN.", undefined, "pin_already_set");
-    const created = await insertPin(db, member, pin, kiosk.id);
+    const created = await newPin(pin);
     // The PIN is stored only while the approval still holds, and the request is used only by the PIN this call stored.
     const stored = "EXISTS (SELECT 1 FROM member_pins WHERE installation_id = 'primary' AND member_id = ? AND pin_hash = ?)";
     const results = await db.batch([
@@ -260,9 +375,9 @@ export async function kioskPinRoute(request: Request, path: string, context: { d
     const input = await readJson<{ memberId?: unknown; pin?: unknown }>(request, 4096); if (!object(input)) throw new HttpError(400, "Choose a roster member and a PIN.");
     const pin = requirePinValue(input.pin); const member = await memberPin(db, input.memberId, true);
     if (hasPin(member)) throw new HttpError(409, "This member already has a PIN. Reset it first.", undefined, "pin_already_set");
-    const created = await insertPin(db, member, pin, kiosk.id);
+    const created = await newPin(pin);
     const results = await db.batch([
-      created.statement,
+      db.prepare("INSERT INTO member_pins (installation_id, member_id, pin_hash, pin_salt, pin_iterations, set_at, set_kiosk_id, failed_attempts, locked_until, updated_at) VALUES ('primary', ?, ?, ?, ?, ?, ?, 0, NULL, ?) ON CONFLICT(installation_id, member_id) DO NOTHING").bind(member.rosterId, created.hashed.hash, created.hashed.salt, created.hashed.iterations, created.now, kiosk.id, created.now),
       db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', NULL, 'member_pin.set', 'member', ?, ?, ? WHERE EXISTS (SELECT 1 FROM member_pins WHERE installation_id = 'primary' AND member_id = ? AND pin_hash = ?)")
         .bind(crypto.randomUUID(), member.rosterId, JSON.stringify({ via: "kiosk_maintenance", kioskId: kiosk.id, kioskName: kiosk.name }), created.now, member.rosterId, created.hashed.hash),
     ]);

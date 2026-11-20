@@ -1,6 +1,6 @@
 // Lists the flaky browser tests (failed, then passed on retry) from a Playwright JSON report as Markdown, for the CI
 // job summary. The gate keeps one retry, so a flaky test passes the gate; this makes it visible so it can be recorded
-// in the release evidence and fixed before the next beta (private/BETA-RELEASE.md step 4).
+// in the release evidence and fixed before the next beta.
 //
 //   node scripts/browser-test-summary.mjs <report.json> [title]
 //

@@ -99,7 +99,7 @@ class Database {
   sqlite = new DatabaseSync(":memory:");
   pairingRace?: { reads: number; ready: Promise<void>; release(): void };
   constructor(legacySchema = false) {
-    for (const name of readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql") && (!legacySchema || (Number.parseInt(name, 10) <= 53 || name.startsWith("0073_") || name.startsWith("0081_") || name.startsWith("0090_") || name.startsWith("0091_")))).sort()) {
+    for (const name of readdirSync("apps/api/migrations").filter(name => name.endsWith(".sql") && (!legacySchema || (Number.parseInt(name, 10) <= 53 || name.startsWith("0073_") || name.startsWith("0081_") || name.startsWith("0090_") || name.startsWith("0091_") || name.startsWith("0100_")))).sort()) {
       this.sqlite.exec(readFileSync(join("apps/api/migrations", name), "utf8"));
     }
     this.sqlite.exec(`
@@ -456,7 +456,7 @@ test("authentication choices are isolated per kiosk across configuration, combin
   const badge = kiosks.find((item: any) => item.id === second.kioskId);
   assert.equal(badge.configuredAuthenticationMethod, "nfc"); assert.equal(badge.authenticationMethod, "rfid");
   const audit = database.sqlite.prepare("SELECT target_id, metadata_json FROM audit_log WHERE action='kiosk.authentication_method_updated'").get();
-  assert.equal(audit?.target_id, second.kioskId); assert.deepEqual(JSON.parse(String(audit?.metadata_json)), { previousMethod: "fingerprint", authenticationMethod: "nfc", previousMemberLookup: "entry", memberLookup: "entry", previousRequirePin: false, requirePin: false });
+  assert.equal(audit?.target_id, second.kioskId); assert.deepEqual(JSON.parse(String(audit?.metadata_json)), { previousMethod: "fingerprint", authenticationMethod: "nfc", previousMemberLookup: "entry", memberLookup: "entry", previousRequirePin: false, requirePin: false, previousDiscordCode: false, discordCode: false, previousDiscordCodeBackup: "offline", discordCodeBackup: "offline" });
   assert.equal((await call(`/admin/kiosks/${second.kioskId}`, { confirmation: "RETIRE KIOSK" }, undefined, "DELETE")).status, 200);
   assert.equal((await update(second.kioskId, "qr")).status, 404);
   database.sqlite.exec("UPDATE platform_modules SET phase='disabled' WHERE module_id='attendance'");
@@ -685,6 +685,78 @@ test("real SQLite member PINs: Require PIN, setup by approval and at the kiosk, 
   assert.equal(await pinCode(await scan({})), undefined, "without Require PIN the scan goes straight to attendance");
 });
 
+test("Require PIN turns on only at a Pi kiosk whose reported release asks for PINs; web kiosks, turning it off and other saves are never blocked", async context => {
+  const { database, call, pair } = await fixture(context);
+  const patch = (id: string, body: Record<string, unknown>) => call(`/admin/kiosks/${id}/authentication-method`, { authenticationMethod: "member_id", ...body }, undefined, "PATCH");
+  const stored = (id: string) => ({ ...database.sqlite.prepare("SELECT require_pin AS requirePin, member_lookup AS lookup, discord_code AS discordCode FROM kiosks WHERE id = ?").get(id) });
+  const audits = () => Number(database.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'kiosk.authentication_method_updated'").get()?.n);
+  const refused = async (id: string, body: Record<string, unknown>, why: string) => {
+    const before = [stored(id), audits()]; const result = await patch(id, body);
+    assert.equal(result.status, 409, why);
+    assert.deepEqual(await result.json(), { error: "Update this kiosk before turning on Require PIN. Kiosks older than 2.1.0-beta.3 do not ask for a PIN, so every scan would be refused.", code: "kiosk_update_required_for_pin" }, why);
+    assert.deepEqual([stored(id), audits()], before, `${why}: nothing is saved or audited`);
+  };
+  const saved = async (id: string, body: Record<string, unknown>, requirePin: boolean, why: string) => {
+    const result = await patch(id, body); assert.equal(result.status, 200, `${why}: ${await result.clone().text()}`);
+    assert.equal((await result.json() as { requirePin: boolean }).requirePin, requirePin, why); assert.equal(stored(id).requirePin, requirePin ? 1 : 0, why);
+  };
+  const pi = await pair("Test Pi Kiosk A");
+  const reports = async (releaseVersion: string) => assert.equal((await call("/kiosk/heartbeat", { readerOnline: true, releaseVersion }, pi.kioskToken)).status, 200);
+
+  // Unknown: the kiosk has not reported a release yet. Everything but turning Require PIN on still saves.
+  await refused(pi.kioskId, { requirePin: true }, "no reported release");
+  await saved(pi.kioskId, { memberLookup: "search" }, false, "another field");
+  await saved(pi.kioskId, { requirePin: false }, false, "leaving it off");
+  assert.equal((await call(`/admin/kiosks/${pi.kioskId}/authentication-method`, { authenticationMethod: "nfc" }, undefined, "PATCH")).status, 200);
+  await saved(pi.kioskId, {}, false, "back to member ID");
+  // Releases from before member PINs on the Pi, with or without the v, and builds that are not an official release.
+  for (const release of ["1.2.6", "2.0.1", "2.1.0-beta.1", "2.1.0-beta.2", "v2.1.0-beta.2", "development", "2.1.0-dev.pin-gate.abcdef0"]) {
+    await reports(release); await refused(pi.kioskId, { requirePin: true }, release);
+    // "Require PIN for the backup method" on a Discord code kiosk is the same setting.
+    await refused(pi.kioskId, { discordCode: true, requirePin: true }, `${release} with Discord code`);
+  }
+  // The first release with member PINs on the Pi, and everything after it, including later prereleases and stable.
+  for (const release of ["2.1.0-beta.3", "v2.1.0-beta.3", "2.1.0-beta.4", "2.1.0-beta.10", "2.1.0", "2.1.1", "2.2.0-beta.1", "3.0.0"]) {
+    await reports(release); await saved(pi.kioskId, { requirePin: true }, true, release); await saved(pi.kioskId, { requirePin: false }, false, `${release} off`);
+  }
+  // A kiosk that already has Require PIN on is never forced off: other saves keep it, and it can still be turned off.
+  await saved(pi.kioskId, { requirePin: true }, true, "on while current"); await reports("2.0.1");
+  await saved(pi.kioskId, { memberLookup: "entry" }, true, "a save that leaves it out");
+  await saved(pi.kioskId, { requirePin: true, memberLookup: "search" }, true, "a save that repeats it");
+  await saved(pi.kioskId, { requirePin: false }, false, "turning it off");
+  await refused(pi.kioskId, { requirePin: true }, "turning it back on at the old release");
+
+  // Web kiosks run the current dashboard code, so they are never blocked, whatever they report or before they report.
+  const { code } = await (await call("/admin/pairing-codes", { kioskName: "Test Web Kiosk A", kind: "web" })).json() as { code: string };
+  const web = await (await call("/kiosk/pair", { code })).json() as { kioskId: string; kioskToken: string };
+  await saved(web.kioskId, { requirePin: true }, true, "web kiosk with no reported release"); await saved(web.kioskId, { requirePin: false }, false, "web off");
+  assert.equal((await call("/kiosk/heartbeat", { readerOnline: true, authenticationMethod: "member_id", releaseVersion: "2.0.0-beta.20" }, web.kioskToken)).status, 200);
+  await saved(web.kioskId, { requirePin: true }, true, "web kiosk reporting an old release");
+});
+
+test("a kiosk keeps member search when a save leaves the lookup out, and starts on entry after another method", async context => {
+  const { database, call, pair } = await fixture(context); const kiosk = await pair("Test Lookup Kiosk");
+  assert.equal((await call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "2.1.0-beta.3" }, kiosk.kioskToken)).status, 200);
+  const save = async (body: Record<string, unknown>) => { const result = await call(`/admin/kiosks/${kiosk.kioskId}/authentication-method`, body, undefined, "PATCH"); assert.equal(result.status, 200, await result.clone().text()); return (await result.json() as { memberLookup: string }).memberLookup; };
+  const stored = () => database.sqlite.prepare("SELECT member_lookup AS lookup FROM kiosks WHERE id = ?").get(kiosk.kioskId)?.lookup;
+  const lastAudit = () => { const row = JSON.parse(String(database.sqlite.prepare("SELECT metadata_json FROM audit_log WHERE action = 'kiosk.authentication_method_updated' ORDER BY created_at DESC, rowid DESC LIMIT 1").get()?.metadata_json)); return [row.previousMemberLookup, row.memberLookup]; };
+  assert.equal(await save({ authenticationMethod: "member_id" }), "entry", "a kiosk new to member ID starts on entry");
+  assert.equal(await save({ authenticationMethod: "member_id", memberLookup: "search" }), "search"); assert.equal(stored(), "search");
+  // Saves that leave the lookup out, as a save of Require PIN alone does, keep member search.
+  assert.equal(await save({ authenticationMethod: "member_id", requirePin: true }), "search");
+  assert.equal(await save({ authenticationMethod: "member_id" }), "search");
+  assert.equal(stored(), "search"); assert.deepEqual(lastAudit(), ["search", "search"]);
+  assert.equal(await save({ authenticationMethod: "member_id", memberLookup: "entry" }), "entry", "naming entry still changes it");
+  assert.equal(await save({ authenticationMethod: "member_id" }), "entry");
+  // Another method resets the lookup, so member ID starts on entry again.
+  assert.equal(await save({ authenticationMethod: "member_id", memberLookup: "search" }), "search");
+  assert.equal(await save({ authenticationMethod: "nfc" }), "entry"); assert.equal(stored(), "entry");
+  assert.equal(await save({ authenticationMethod: "member_id" }), "entry");
+  // An older row that kept "search" under another method does not bring it back.
+  database.sqlite.prepare("UPDATE kiosks SET configured_authentication_method = 'nfc', member_lookup = 'search' WHERE id = ?").run(kiosk.kioskId);
+  assert.equal(await save({ authenticationMethod: "member_id" }), "entry");
+});
+
 test("real SQLite member PINs: 2,000 iterations, rehash of older PINs on a correct PIN, and the online throttle", async context => {
   const { database, call } = await fixture(context);
   const { code } = await (await call("/admin/pairing-codes", { kioskName: "Test Web Kiosk A", kind: "web" })).json() as { code: string };
@@ -731,9 +803,11 @@ test("real SQLite member PINs: 2,000 iterations, rehash of older PINs on a corre
   assert.notEqual(rosterAfter.headers.get("etag"), rosterBefore);
   assert.deepEqual((await json(rosterAfter)).members.find((member: { memberId: string }) => member.memberId === "SYN-001").pin, { hash: rehashed.pin_hash, salt: rehashed.pin_salt, iterations: 2_000 });
   assert.equal(await verifyCachedPin("2468", { hash: legacy.pin_hash, salt: legacy.pin_salt, iterations: 100_000 }), true, "a kiosk's older cached hash still matches until it syncs");
-  // A correct PIN already at 2,000 with nothing to clear writes nothing.
+  // A correct PIN already at 2,000 with nothing to clear: the write that claims the try before the PIN is checked, and the
+  // write that clears the claim. The hash is not written again, and the throttle ends where it was.
   writes.length = 0;
-  assert.equal(await pinCode(await scan("2468")), undefined, "the PIN step passed"); assert.deepEqual(writes, []); assert.equal(row().pin_hash, rehashed.pin_hash);
+  assert.equal(await pinCode(await scan("2468")), undefined, "the PIN step passed"); assert.equal(writes.length, 2); assert.equal(writes.some(sql => /pin_hash = ?|pin_salt = ?d/.test(sql.split("WHERE")[0])), false); assert.equal(row().pin_hash, rehashed.pin_hash);
+  assert.deepEqual([row().failed_attempts, row().locked_until, row().throttle_failures, row().throttle_until], [0, null, 0, null]);
 
   // The throttle: five wrong PINs in a row are free, then each try waits 30 s, 1 min, then 5 min, repeating.
   for (let attempt = 1; attempt <= 4; attempt += 1) assert.deepEqual(await json(await scan("1111")), { error: "Wrong PIN.", code: "pin_incorrect" });
@@ -743,7 +817,7 @@ test("real SQLite member PINs: 2,000 iterations, rehash of older PINs on a corre
     const hashes = derived.mock.callCount(); writes.length = 0; const before = row();
     const refused = await scan(pin); assert.equal(refused.status, 429);
     assert.deepEqual(await json(refused), { error: message, code: "pin_throttled", retryAt: before.throttle_until, retryAfterSeconds: seconds });
-    assert.equal(derived.mock.callCount(), hashes, "refused before any PBKDF2 work"); assert.deepEqual(writes, [], "a refused try changes nothing"); assert.deepEqual(row(), before);
+    assert.equal(derived.mock.callCount(), hashes, "refused before any PBKDF2 work"); assert.deepEqual(writes.map(sql => /^UPDATE member_pins SET throttle_until = CASE/.test(sql)), [true], "only the claim is sent, and it finds no row to claim"); assert.deepEqual(row(), before, "a refused try changes nothing");
   };
   // Refused the same way whether the PIN is right or wrong.
   await refuse("2468", 30, "Too many wrong PINs. Try again in 30 seconds.");
@@ -835,7 +909,7 @@ test("real SQLite installation backups carry member PINs, Require PIN and lockou
 
   const exported = await call("/admin/data/backup?scope=installation"); assert.equal(exported.status, 200, await exported.clone().text());
   const backup = await exported.json() as any;
-  assert.equal(backup.schemaVersion, 51);
+  assert.equal(backup.schemaVersion, 52);
   assert.deepEqual(backup.tables.member_pins, [pin]);
   assert.equal(backup.tables.kiosks[0].require_pin, 1);
   assert.deepEqual([backup.tables.organization_settings[0].pin_lockout_enabled, backup.tables.organization_settings[0].pin_lockout_attempts, backup.tables.organization_settings[0].pin_lockout_minutes], [1, 4, 30]);

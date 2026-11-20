@@ -11,6 +11,7 @@ import { createPinFailureStore, normalizeMemberSettings, normalizePinLockout, pi
 import { createRosterCache, visibleMember } from "../apps/kiosk/src/roster-cache.mjs";
 import { identityReadyState } from "../apps/kiosk/src/identity-methods.mjs";
 import { sendAttendance } from "../apps/kiosk/src/cloud-client.mjs";
+import { createFileQueue } from "../apps/kiosk/src/file-queue.mjs";
 import { searchMembers } from "../packages/shared/src/member-lookup.mjs";
 import { createNetworkPinStore } from "../apps/kiosk/src/network-pin.mjs";
 
@@ -39,9 +40,9 @@ test("cached PIN hashes verify like the server's PBKDF2-SHA256 and malformed one
 });
 
 test("member lookup and Require PIN apply only to member ID kiosks, with the server's lockout defaults", () => {
-  assert.deepEqual(normalizeMemberSettings({ authenticationMethod: "member_id", memberLookup: "search", requirePin: true, pinLockout: { enabled: true, attempts: 4, minutes: 30 } }), { memberLookup: "search", requirePin: true, pinLockout: { enabled: true, attempts: 4, minutes: 30 } });
-  assert.deepEqual(normalizeMemberSettings({ authenticationMethod: "fingerprint", memberLookup: "search", requirePin: true }), { memberLookup: "entry", requirePin: false, pinLockout: { enabled: false, attempts: 5, minutes: 15 } });
-  assert.deepEqual(normalizeMemberSettings(undefined), { memberLookup: "entry", requirePin: false, pinLockout: { enabled: false, attempts: 5, minutes: 15 } });
+  assert.deepEqual(normalizeMemberSettings({ authenticationMethod: "member_id", memberLookup: "search", requirePin: true, pinLockout: { enabled: true, attempts: 4, minutes: 30 } }), { memberLookup: "search", requirePin: true, pinLockout: { enabled: true, attempts: 4, minutes: 30 }, discordCode: false, discordCodeBackup: "offline" });
+  assert.deepEqual(normalizeMemberSettings({ authenticationMethod: "fingerprint", memberLookup: "search", requirePin: true }), { memberLookup: "entry", requirePin: false, pinLockout: { enabled: false, attempts: 5, minutes: 15 }, discordCode: false, discordCodeBackup: "offline" });
+  assert.deepEqual(normalizeMemberSettings(undefined), { memberLookup: "entry", requirePin: false, pinLockout: { enabled: false, attempts: 5, minutes: 15 }, discordCode: false, discordCodeBackup: "offline" });
   assert.deepEqual(normalizePinLockout({ enabled: true, attempts: 2, minutes: 2000 }), { enabled: true, attempts: 5, minutes: 15 });
   assert.deepEqual(identityReadyState("member_id", { memberLookup: "search" }), { message: "Find your name", detail: "Search by name, member ID or email" });
   assert.deepEqual(identityReadyState("member_id", { memberLookup: "entry" }), { message: "Enter member ID", detail: "Use the touch keyboard below" });
@@ -66,10 +67,13 @@ test("wrong PIN tries made offline are counted owner-only, lock at the limit, an
   assert.deepEqual(await reopened.recordFailure("1009", lockout), { attemptsLeft: 2 });
   assert.deepEqual(await reopened.recordFailure("1010", { enabled: false }), {});
   // Tries counted while a report is on its way stay for the next one.
-  const sent = [];
-  assert.equal(await reportPinFailures(reopened, async failures => { sent.push(failures); await reopened.recordFailure("1010", { enabled: false }); }), 2);
-  assert.deepEqual(sent[0].map(item => [item.memberId, item.count]), [["1009", 4], ["1010", 1]]);
-  assert.deepEqual((await reopened.pending()).map(item => [item.memberId, item.count]), [["1010", 1]]);
+  // They follow in a report of their own, under another id, in the same call.
+  const sent = [], ids = [];
+  assert.equal(await reportPinFailures(reopened, async (failures, reportId) => { sent.push(failures); ids.push(reportId); if (sent.length === 1) await reopened.recordFailure("1010", { enabled: false }); }), 3);
+  assert.deepEqual(sent.map(failures => failures.map(item => [item.memberId, item.count])), [[["1009", 4], ["1010", 1]], [["1010", 1]]]);
+  assert.equal(new Set(ids).size, 2); for (const id of ids) assert.match(id, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(await reopened.pending(), []);
+  await reopened.recordFailure("1010", { enabled: false });
   await assert.rejects(reportPinFailures(reopened, async () => { throw new Error("offline"); }));
   assert.deepEqual((await reopened.pending()).map(item => [item.memberId, item.count]), [["1010", 1]], "a failed report keeps the tries");
   // A right PIN ends the run of wrong tries; setting or resetting a PIN forgets the member.
@@ -139,12 +143,42 @@ test("a scan sent with a PIN carries it, PIN refusals come back to the screen, a
   assert.deepEqual(await sendAttendance(config, { ...event, pin: "1111" }, { fetchImpl }), { accepted: false, duplicate: false, pinRefused: true, status: 429, code: "pin_throttled", error: "Too many wrong PINs. Try again in 30 seconds." });
   reply = { status: 409, body: { error: "No PIN", code: "pin_not_set" } };
   assert.equal((await sendAttendance(config, { ...event, pin: "1111" }, { fetchImpl })).code, "pin_not_set");
-  // A queued scan never has a PIN; a PIN refusal for one is not treated as a PIN answer.
+  // A queued scan never has a PIN.
   reply = { status: 200, body: { eventId: "synthetic-event", accepted: true } };
   await sendAttendance(config, { ...event, pinCheck: "offline" }, { fetchImpl });
   assert.equal(bodies.at(-1).pinCheck, "offline"); assert.equal("pin" in bodies.at(-1), false);
+  // A PIN refusal for a scan without a PIN is no PIN answer for the screen, and is never retried: it is a rejection.
   reply = { status: 400, body: { error: "This kiosk requires a PIN.", code: "pin_required" } };
+  for (const scan of [event, { ...event, pinCheck: "offline" }])
+    assert.deepEqual(await sendAttendance(config, scan, { fetchImpl }), { accepted: false, rejected: true, status: 400, code: "pin_required", error: "This kiosk requires a PIN." });
+  reply = { status: 423, body: { error: "Locked", code: "pin_locked", lockedUntil: "2026-10-30T12:15:00.000Z" } };
+  assert.deepEqual(await sendAttendance(config, event, { fetchImpl }), { accepted: false, rejected: true, status: 423, code: "pin_locked", error: "Locked" });
+  // Other refusals the kiosk does not know still stay queued.
+  reply = { status: 400, body: { error: "Bad request", code: "made_up_reason" } };
   await assert.rejects(sendAttendance(config, event, { fetchImpl }), error => error.transient === true);
+});
+
+test("a queued scan the Worker refuses for want of a PIN never holds up the queue: it is kept for review and later scans sync", async t => {
+  const root = await scratch(t); const path = join(root, "attendance-queue.json"); const sent = [];
+  // A Worker that requires a PIN: it refuses a scan with neither pin nor pinCheck, as it does for one made after the change.
+  const fetchImpl = async (url, options) => {
+    const input = JSON.parse(options.body); sent.push(input.eventId);
+    const refused = input.pin === undefined && input.pinCheck !== "offline";
+    return new Response(JSON.stringify(refused ? { error: "This kiosk requires a PIN.", code: "pin_required" } : { eventId: input.eventId, accepted: true }), { status: refused ? 400 : 202, headers: { "content-type": "application/json" } });
+  };
+  const config = { apiUrl: "http://127.0.0.1:9", kioskToken: "synthetic-token" };
+  const queue = createFileQueue(path);
+  await queue.enqueue({ eventId: "synthetic-plain-1", memberId: "1009", occurredAt: "2026-10-30T12:00:00.000Z", pairingId: "synthetic-pairing" });
+  await queue.enqueue({ eventId: "synthetic-plain-2", memberId: "1010", occurredAt: "2026-10-30T12:01:00.000Z", pairingId: "synthetic-pairing" });
+  await queue.enqueue({ eventId: "synthetic-checked", memberId: "1011", occurredAt: "2026-10-30T12:02:00.000Z", pairingId: "synthetic-pairing", pinCheck: "offline" });
+  assert.deepEqual(await queue.flush(item => sendAttendance(config, item, { fetchImpl })), ["synthetic-plain-1", "synthetic-plain-2", "synthetic-checked"]);
+  assert.deepEqual(sent, ["synthetic-plain-1", "synthetic-plain-2", "synthetic-checked"], "each scan was sent once");
+  const reopened = createFileQueue(path);
+  assert.deepEqual(await reopened.pending(), []);
+  assert.deepEqual((await reopened.rejections()).map(record => [record.eventId, record.memberId, record.occurredAt, record.reasonCode, record.httpStatus, record.reviewStatus]), [
+    ["synthetic-plain-1", "1009", "2026-10-30T12:00:00.000Z", "pin_required", 400, "open"],
+    ["synthetic-plain-2", "1010", "2026-10-30T12:01:00.000Z", "pin_required", 400, "open"],
+  ]);
 });
 
 // ---- The real kiosk service, with a synthetic Worker ----
@@ -152,7 +186,7 @@ test("a scan sent with a PIN carries it, PIN refusals come back to the screen, a
 async function pinRuntime(t, { settings }) {
   const root = await mkdtemp(join(tmpdir(), "kiosk-pin-runtime-")); await chmod(root, 0o700);
   const pins = new Map([["1009", serverHash("4321", 1000)], ["1011", serverHash("2468", 1000)]]);
-  const world = { online: true, settings, attendance: [], failures: [] };
+  const world = { online: true, settings, attendance: [], failures: [], reportIds: [] };
   const roster = [["1009", "I"], ["1010", "J"], ["1011", "K"]].map(([memberId, letter]) => ({ memberId, rosterId: `roster-${memberId}`, firstName: "Test Student", lastName: letter, email: `test.student.${letter.toLowerCase()}@example.test` }));
   const cloud = createServer(async (request, response) => {
     if (!world.online) { request.socket.destroy(); return; }
@@ -172,7 +206,7 @@ async function pinRuntime(t, { settings }) {
         else if (!await verifyCachedPin(input.pin, pins.get(input.memberId))) { status = 403; data = { error: "Wrong PIN.", code: "pin_incorrect", attemptsLeft: 4 }; }
       }
       if (status === 200) { world.attendance.push(input); data = { eventId: input.eventId, accepted: true, action: "check_in", member: { displayName: "Test Student" } }; }
-    } else if (request.url === "/kiosk/pin-failures") world.failures.push(...input.failures), data = { recorded: input.failures.length };
+    } else if (request.url === "/kiosk/pin-failures") world.failures.push(...input.failures), world.reportIds.push(input.reportId), data = { recorded: input.failures.length };
     else if (request.url === "/kiosk/commands") data = { command: null };
     else if (request.url === "/kiosk/enrollment") data = { enrollment: null };
     response.statusCode = status; response.end(JSON.stringify(data));
@@ -211,7 +245,7 @@ test("a Require PIN kiosk confirms, checks PINs online and offline, counts offli
   assert.equal(display.memberLookup, "search"); assert.equal(display.requirePin, true); assert.equal(display.memberIdKeypad, true);
   assert.equal(display.display.message, "Find your name");
   const saved = JSON.parse(await readFile(join(f.root, "authentication.json"), "utf8"));
-  assert.deepEqual(saved, { authenticationMethod: "member_id", memberLookup: "search", requirePin: true, pinLockout: { enabled: true, attempts: 3, minutes: 15 } });
+  assert.deepEqual(saved, { authenticationMethod: "member_id", memberLookup: "search", requirePin: true, pinLockout: { enabled: true, attempts: 3, minutes: 15 }, discordCode: false, discordCodeBackup: "offline" });
 
   // Search matches emails but shows only names and member IDs; the display never carries emails or hashes.
   const found = await kiosk.json("/identity/search", { query: "test.student.j" });
@@ -259,7 +293,12 @@ test("a Require PIN kiosk confirms, checks PINs online and offline, counts offli
   await until(() => f.world.attendance.some(event => event.memberId === "1011") && f.world.failures.length > 0, "the offline scan and tries reached the server");
   const offlineScan = f.world.attendance.find(event => event.memberId === "1011");
   assert.equal(offlineScan.pinCheck, "offline"); assert.equal("pin" in offlineScan, false);
-  assert.deepEqual(f.world.failures.map(item => [item.memberId, item.count]), [["1009", 3]]);
+  // The first try was frozen into a report when the kiosk tried to send it while offline; the two tries made after
+  // that follow in the next report. Each try reaches the server once.
+  await until(() => f.world.failures.reduce((sum, item) => sum + item.count, 0) >= 3, "every offline try reached the server");
+  assert.deepEqual([...new Set(f.world.failures.map(item => item.memberId))], ["1009"]);
+  assert.equal(f.world.failures.reduce((sum, item) => sum + item.count, 0), 3);
+  assert.equal(new Set(f.world.reportIds).size, f.world.reportIds.length, "one id for each report"); assert.ok(f.world.reportIds.every(id => typeof id === "string" && id.length === 36));
 
   // Turning off Require PIN and search wipes the cached hashes, the offline tries and the emails.
   f.world.settings = { authenticationMethod: "member_id", memberLookup: "entry", requirePin: false, pinLockout: { enabled: true, attempts: 3, minutes: 15 } };
@@ -287,4 +326,57 @@ test("unpairing wipes cached PIN hashes instead of archiving them", { timeout: 3
   assert.equal(archives.length, 1);
   const archived = await readFile(join(f.root, "reassociation", archives[0], "roster-cache.json"), "utf8");
   assert.match(archived, /Test Student/); assert.equal(archived.includes("\"pin\""), false);
+});
+
+test("a wrong-PIN report keeps its id and its tries until the server answers it, across resends and restarts", async t => {
+  const root = await scratch(t); const path = join(root, "pin-failures.json"); let clock = Date.parse("2026-10-30T12:00:00.000Z");
+  let made = 0; const newId = () => `test-report-${made += 1}`;
+  const store = createPinFailureStore(path, { now: () => clock, newId }); const off = { enabled: false };
+  assert.equal(await store.report(), null, "nothing to report");
+  await store.recordFailure("1009", off); await store.recordFailure("1009", off); await store.recordFailure("1010", off);
+  const sends = [];
+  // The report reaches the server, but its answer is lost: to the kiosk the send failed.
+  const lost = async (failures, reportId) => { sends.push({ reportId, failures }); throw new Error("the answer was lost"); };
+  await assert.rejects(reportPinFailures(store, lost));
+  assert.deepEqual(sends[0], { reportId: "test-report-1", failures: [{ memberId: "1009", count: 2, lastAt: "2026-10-30T12:00:00.000Z" }, { memberId: "1010", count: 1, lastAt: "2026-10-30T12:00:00.000Z" }] });
+  assert.equal(JSON.parse(await readFile(path, "utf8")).report.id, "test-report-1", "the report is saved with its id before it is sent");
+  if (process.platform !== "win32") assert.equal((await stat(path)).mode & 0o077, 0);
+
+  // More wrong tries while it waits, for a member in the report and for a new one: the report does not change.
+  clock += 60_000;
+  await store.recordFailure("1009", off); await store.recordFailure("1011", off);
+  await assert.rejects(reportPinFailures(store, lost));
+  assert.deepEqual(sends[1], sends[0], "the resend is the same report: same id, same tries");
+  // Still the same after a restart.
+  const restarted = createPinFailureStore(path, { now: () => clock, newId });
+  await assert.rejects(reportPinFailures(restarted, lost));
+  assert.deepEqual(sends[2], sends[0]);
+  assert.equal(made, 1, "no new id while the report is unanswered");
+  assert.deepEqual((await restarted.pending()).map(item => [item.memberId, item.count]), [["1009", 3], ["1010", 1], ["1011", 1]], "nothing is dropped meanwhile");
+
+  // The server answers. The tries made since go in the next report, under a new id, and nothing is sent twice.
+  const answered = [];
+  assert.equal(await reportPinFailures(restarted, async (failures, reportId) => { answered.push({ reportId, failures }); }), 4);
+  assert.deepEqual(answered.map(report => [report.reportId, report.failures.map(item => [item.memberId, item.count])]), [["test-report-1", [["1009", 2], ["1010", 1]]], ["test-report-2", [["1009", 1], ["1011", 1]]]]);
+  assert.deepEqual(await restarted.pending(), []); assert.equal(await restarted.report(), null);
+  assert.equal("report" in JSON.parse(await readFile(path, "utf8")), false);
+  // Every try was sent in exactly one answered report.
+  const total = {}; for (const report of answered) for (const item of report.failures) total[item.memberId] = (total[item.memberId] ?? 0) + item.count;
+  assert.deepEqual(total, { 1009: 3, 1010: 1, 1011: 1 });
+
+  // A PIN set or reset forgets the member's tries; a report already on its way is left as it was sent (the server leaves
+  // out tries older than the member's PIN). Its answer then has nothing left to remove for that member.
+  await restarted.recordFailure("1012", off);
+  await assert.rejects(reportPinFailures(restarted, lost));
+  await restarted.forget("1012");
+  const afterForget = [];
+  assert.equal(await reportPinFailures(restarted, async (failures, reportId) => { afterForget.push([reportId, failures.length]); }), 1);
+  assert.deepEqual(afterForget, [["test-report-3", 1]]); assert.equal(await restarted.report(), null);
+  // Turning Require PIN off clears a waiting report with the tries.
+  await restarted.recordFailure("1013", off); await assert.rejects(reportPinFailures(restarted, lost));
+  await restarted.clear(); assert.equal(await restarted.report(), null);
+  // A file from before report ids, and one with a malformed report, load without one.
+  await writeFile(path, JSON.stringify({ version: 1, members: { 1014: { unreported: 2, lastAt: "2026-10-30T12:00:00.000Z", streak: 2, lockedUntil: null } }, report: { id: "", failures: "none" } }));
+  const older = createPinFailureStore(path, { now: () => clock, newId });
+  assert.deepEqual(await older.report(), { id: "test-report-5", failures: [{ memberId: "1014", count: 2, lastAt: "2026-10-30T12:00:00.000Z" }] });
 });

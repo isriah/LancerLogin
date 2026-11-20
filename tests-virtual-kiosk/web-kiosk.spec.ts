@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { adminApi, status } from "./virtual-kiosk";
+import { adminApi, setMeetingState, status } from "./virtual-kiosk";
 
 // A web kiosk against the real local Worker and dashboard: paired with a code from the Kiosks page API, used with member
 // ID entry and member search, and told to pair again once retired. Test Students D (1004) and E (1005) are scanned only here.
@@ -42,6 +42,20 @@ test("a web kiosk pairs with a one-time code, takes a member ID scan, searches t
   await page.getByRole("button", { name: "Confirm", exact: true }).click();
   await expect(page.getByText("Welcome")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("Test Student D")).toBeVisible();
+
+  // With the meeting moved to tomorrow, the next scan is refused with the reason as a notice, not an error.
+  try {
+    await setMeetingState(request, "none_today");
+    await expect(page.getByRole("heading", { name: /Enter your\s*member ID/ })).toBeVisible({ timeout: 20_000 });
+    await pressAll(page, "1004");
+    await page.getByRole("button", { name: "Enter", exact: true }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "No meeting today" })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("Nothing to scan in for right now")).toBeVisible();
+    await expect(page.locator(".wk-result")).toHaveAttribute("data-tone", "notice");
+    await expect(page.locator(".wk-result")).toHaveAttribute("data-state", "scan_notice");
+  } finally { await setMeetingState(request, "in_progress"); }
+  await expect(page.getByRole("heading", { name: /Enter your\s*member ID/ })).toBeVisible({ timeout: 20_000 });
 
   // Member search, set from the dashboard and picked up when the page loads its settings.
   const kioskId = (await api.get("/admin/kiosks")).kiosks.find((item: { name: string; active: number }) => item.name === "Test web kiosk B" && item.active).id;

@@ -47,7 +47,11 @@ test("the side that changed wins, the dashboard wins when both changed, and agre
   assert.equal(decideTwoWay({ hasLabel: true, hasRole: false, syncedState: false }), "add_role", "label added in the dashboard");
   assert.equal(decideTwoWay({ hasLabel: false, hasRole: true, syncedState: true }), "remove_role", "label removed in the dashboard");
   assert.equal(decideTwoWay({ hasLabel: true, hasRole: false, syncedState: true, dashboardChanged: true }), "add_role", "both changed: the dashboard wins");
-  assert.equal(decideTwoWay({ hasLabel: false, hasRole: true }), "remove_role", "no baseline yet: the dashboard wins");
+  // No baseline yet: nothing is removed on either side. The first check takes the union.
+  assert.equal(decideTwoWay({ hasLabel: false, hasRole: true }), "add_label", "a role already held is adopted as the label");
+  assert.equal(decideTwoWay({ hasLabel: true, hasRole: false }), "add_role", "a label already held adds the role");
+  assert.equal(decideTwoWay({ hasLabel: false, hasRole: true, dashboardChanged: true }), "add_label", "still nothing to compare a change with");
+  assert.equal(decideTwoWay({ hasLabel: true, hasRole: true }), "none"); assert.equal(decideTwoWay({ hasLabel: false, hasRole: false }), "none");
 });
 
 test("Discord role pickers sort by name, ignoring case and accents", () => {
@@ -120,7 +124,7 @@ test("the scheduled check follows Discord, pushes dashboard changes, never ping-
   const poll = async (minutes: number) => (await pollTwoWayLabels(db, discord, deps(minutes)))[0];
 
   // Nothing changed: no label change, no role job.
-  assert.deepEqual(await poll(5), { labelId: "label-build", status: "checked", labelsAdded: 0, labelsRemoved: 0, rolesAdded: 0, rolesRemoved: 0, unmatched: 1, jobId: undefined });
+  assert.deepEqual(await poll(5), { labelId: "label-build", status: "checked", labelsAdded: 0, labelsRemoved: 0, labelsAdopted: 0, rolesAdded: 0, rolesRemoved: 0, unmatched: 1, jobId: undefined });
   assert.deepEqual((await unmatchedRoleMembers(db)).labels.map((label) => [label.labelName, label.users.map((user) => user.discordUserId)]), [["Build Team", [ids.stranger]]]);
 
   // Role added in Discord adds the label; role removed in Discord removes it. Both are recorded as from Discord.
@@ -164,6 +168,67 @@ test("the scheduled check follows Discord, pushes dashboard changes, never ping-
   await disableTwoWay(db, "admin-1", "label-build");
   assert.deepEqual(await pollTwoWayLabels(db, discord, deps(55)), []);
   assert.equal((db.sqlite.prepare("SELECT COUNT(*) AS count FROM discord_label_unmatched_role_members").get() as { count: number }).count, 0);
+});
+
+test("a member's first check removes nothing: a role already held becomes the label, and a label already held adds the role", async () => {
+  const db = seed(); const ian = "777777777777777777";
+  // Hal and Ian are on the roster without the label; Hal has no Discord account yet and Ian is inactive. Eve has the label
+  // and no account. The visitor and Ian's account hold the role, and so do Ada, Cy and Gus, who have the label.
+  const member = db.sqlite.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, discord_user_id, active, created_at) VALUES (?, 'primary', ?, 'Test Student', ?, ?, ?, '2026-09-01T00:00:00Z')");
+  member.run("m-hal", "T-HAL", "H", null, 1); member.run("m-ian", "T-IAN", "I", ian, 0);
+  const holders = new Set([ids.ada, ids.cy, ids.gus, ids.visitor, ian]);
+  const discord = server(holders, [ids.ada, ids.bo, ids.cy, ids.di, ids.fay, ids.gus, ids.stranger, ids.visitor, ian]);
+  await confirmTwoWay(db, "admin-1", { previewId: (await previewTwoWay(db, "admin-1", "label-build", discord, deps(0))).previewId }, discord, deps(1));
+  const poll = async (minutes: number) => (await pollTwoWayLabels(db, discord, deps(minutes)))[0];
+  const baseline = (memberId: string) => (db.sqlite.prepare("SELECT synced_state AS state FROM discord_label_two_way_members WHERE member_id = ?").get(memberId) as { state: number } | undefined)?.state;
+  const unmatched = async () => (await unmatchedRoleMembers(db)).labels[0].users.map((user) => user.discordUserId);
+  const quiet = await poll(5);
+  assert.equal(quiet.labelsAdded + quiet.rolesAdded + quiet.rolesRemoved + quiet.labelsRemoved, 0, "unlinked and inactive role holders are left alone");
+  assert.deepEqual(await unmatched(), [ids.visitor]); assert.equal(labelState(db, "m-ian"), undefined); assert.equal(baseline("m-hal"), undefined);
+
+  // Hal links the visitor's account (/pair), which already holds the role: he gets the label, and the role stays.
+  db.sqlite.prepare("UPDATE members SET discord_user_id = ? WHERE id = 'm-hal'").run(ids.visitor);
+  const adopted = await poll(10);
+  assert.deepEqual([adopted.labelsAdded, adopted.labelsAdopted, adopted.labelsRemoved, adopted.rolesAdded, adopted.rolesRemoved, adopted.jobId], [1, 1, 0, 0, 0, undefined]);
+  assert.equal(jobs(db).length, 0, "no role is removed"); assert.ok(holders.has(ids.visitor));
+  // Recorded like any label change from Discord: dated today, with no dashboard user, and counted in the audit entry.
+  assert.deepEqual({ ...db.sqlite.prepare("SELECT action, source, effective_date AS effectiveDate, created_by AS createdBy FROM member_label_changes WHERE member_id = 'm-hal'").get() }, { action: "add", source: "discord", effectiveDate: "2026-10-30", createdBy: null });
+  assert.deepEqual(JSON.parse((db.sqlite.prepare("SELECT metadata_json AS metadata FROM audit_log WHERE action = 'discord.label_two_way_applied' ORDER BY created_at DESC LIMIT 1").get() as { metadata: string }).metadata), { roleId, labelsAdded: 1, labelsRemoved: 0, labelsAdopted: 1 });
+  assert.equal(baseline("m-hal"), 1, "the union is the baseline"); assert.deepEqual(await unmatched(), []);
+  const settled = await poll(15);
+  assert.equal(settled.labelsAdded + settled.labelsAdopted + settled.rolesAdded + settled.rolesRemoved + settled.labelsRemoved, 0);
+
+  // Eve has the label and links an account without the role: the role is added, and her label is left alone.
+  db.sqlite.prepare("UPDATE members SET discord_user_id = ? WHERE id = 'm-eve'").run(ids.stranger);
+  const pushed = await poll(20);
+  assert.deepEqual([pushed.labelsAdded, pushed.labelsRemoved, pushed.rolesAdded, pushed.rolesRemoved], [0, 0, 1, 0]); assert.ok(pushed.jobId);
+  assert.deepEqual(jobs(db).map((row) => [row.discordUserId, row.action]), [[ids.stranger, "add"]]); assert.deepEqual(labelState(db, "m-eve"), { action: "add", source: "dashboard" });
+  assert.equal(baseline("m-eve"), undefined, "no baseline until the role is there");
+  finishJobs(db); holders.add(ids.stranger);
+  assert.equal((await poll(25)).rolesAdded, 0); assert.equal(baseline("m-eve"), 1);
+
+  // With a baseline the usual rules apply: removing Hal's role in Discord removes his label, and a label removed in the
+  // dashboard removes the role.
+  holders.delete(ids.visitor);
+  const later = await poll(30);
+  assert.deepEqual([later.labelsRemoved, later.labelsAdopted], [1, 0]); assert.deepEqual(labelState(db, "m-hal"), { action: "remove", source: "discord" });
+  addChange(db, "m-eve", "remove", "2026-10-30", at(31).toISOString());
+  assert.equal((await poll(35)).rolesRemoved, 1);
+  finishJobs(db); holders.delete(ids.stranger); await poll(40);
+
+  // Linking a different account starts over for that member: Bo moves to an account that holds the role and keeps it.
+  holders.add(ids.visitor); db.sqlite.exec("UPDATE members SET discord_user_id = NULL WHERE id = 'm-hal'");
+  await poll(45);
+  db.sqlite.prepare("UPDATE members SET discord_user_id = ? WHERE id = 'm-bo'").run(ids.visitor);
+  const moved = await poll(50);
+  assert.deepEqual([moved.labelsAdded, moved.labelsAdopted, moved.rolesRemoved], [1, 1, 0]); assert.deepEqual(labelState(db, "m-bo"), { action: "add", source: "discord" });
+
+  // A member the sync skips is never adopted: Ian is inactive, and a label paused after a restore is not checked at all.
+  assert.equal(labelState(db, "m-ian"), undefined);
+  db.sqlite.exec("UPDATE discord_label_role_mappings SET sync_direction = 'to_discord', two_way_error = 'restore_review_required'; DELETE FROM discord_label_two_way_members; UPDATE members SET active = 1 WHERE id = 'm-ian'");
+  assert.deepEqual(await pollTwoWayLabels(db, discord, deps(55)), []); assert.equal(labelState(db, "m-ian"), undefined);
+  // Reviewing it again lists Ian as a difference for the Admin to decide, as for any label being turned on.
+  assert.deepEqual((await previewTwoWay(db, "admin-1", "label-build", discord, deps(56))).mismatches.map((row) => [row.memberId, row.hasLabel, row.hasRole]), [["T-IAN", false, true]]);
 });
 
 test("a role the bot can no longer manage pauses the label instead of clearing it", async () => {

@@ -12,9 +12,6 @@ export type ReportMember = { member: { id: string; memberId: string; firstName: 
 export type AttendanceReport = { meetings: Meeting[]; members: ReportMember[]; labels: Label[]; baseline: string | null; timeZone: string };
 export type ReportFilters = { useBaseline?: boolean; from?: string; to?: string; meetingType?: "all" | "required" | "optional"; roster?: "active" | "all"; labelId?: string; membership?: "current" | "historical"; memberId?: string };
 
-export const percent = (top: number, bottom: number) => bottom ? Math.round(top / bottom * 100) : 0;
-export const completedReportMeetings = (meetings: Meeting[], now = Date.now()) => meetings.filter((meeting) => !meeting.isTest && Date.parse(meeting.attendanceClosesAt) <= now).sort((a, b) => a.startsAt.localeCompare(b.startsAt));
-export const reportingPeriodMeetings = (meetings: Meeting[], from = "", to = "") => meetings.filter((meeting) => (!from || meeting.startsAt.slice(0, 10) >= from) && (!to || meeting.startsAt.slice(0, 10) <= to));
 export function reportQuery(filters: ReportFilters = {}): string { const query = new URLSearchParams(); for (const [key, value] of Object.entries(filters)) if (value) query.set(key, String(value)); return query.toString(); }
 export async function loadReportAttendance(request: <T>(path: string) => Promise<T>, filters: ReportFilters = {}): Promise<AttendanceReport> { const query = reportQuery(filters); return request<AttendanceReport>(`/reports/attendance${query ? `?${query}` : ""}`); }
 export const attendanceRateText = (rate: number | null) => rate === null ? "N/A" : `${rate}%`;

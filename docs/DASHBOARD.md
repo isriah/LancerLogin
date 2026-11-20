@@ -13,18 +13,18 @@ Admins see these settings pages:
 | Organization | Name, subtitle, logo and colors. |
 | Modules | **Manage modules** (turn modules on or off, **Add module**, update or remove modules, **Apply changes**, module access), **Attendance**, and one page per module that has settings. Attendance has the tabs Attendance rules, Labels, Meeting configuration, Fingerprint sharing, Fingerprint recovery and Attendance setup. |
 | Access | Admin and Operator accounts, their roster links and the modules each Operator can use. |
-| Integrations | Google sign-in, Google Calendar, Resend and Discord. |
+| Integrations | Google sign-in, Google Calendar, Resend, FIRST and Discord. |
 | Data | Category backups, restores and typed-confirmation deletion. |
-| Updates | Update track, dashboard updates and module deployment status. |
+| Updates | Update track, dashboard release updates and their setup status. Module changes are deployed from **Modules > Manage modules**. |
 
 Operators see their own session settings and the modules they are assigned to.
 
 | Area | Administrator | Operator assigned to Attendance |
 | --- | --- | --- |
 | Meetings and meeting workspaces | Create, edit, duplicate and delete meetings; manage attendance | Same |
-| Roster | Manage members, labels and imports | View |
+| Roster | Manage members, labels and imports; reset or unlock a member's kiosk PIN | View; reset or unlock a member's kiosk PIN |
 | Reports | Create private or shared reports; export | Same |
-| Kiosks | Pair, rename, retire, configure and send maintenance commands | View status and diagnostics |
+| Kiosks | Pair, rename, retire, configure and send maintenance commands; approve or decline PIN requests | View status and diagnostics; approve or decline PIN requests |
 | Settings | Full access | Session settings only |
 
 Roster membership never grants dashboard access. Accounts are managed in **Settings > Access**.
@@ -33,7 +33,7 @@ Roster membership never grants dashboard access. Accounts are managed in **Setti
 
 First-visit walkthroughs introduce Meetings, Roster, member detail, Reports, the meeting workspace, Kiosks and module pages that provide one. Settings pages have none. Walkthroughs use practice previews that cannot save or delete records and never send provider actions or device commands; the Kiosks tour shows a labelled example device when none is paired. **Not now** postpones the invitation and **Don't show automatically again** stops it for that page. Progress follows the signed-in account across browsers.
 
-Every user can turn on **Debug mode** in the Settings navigation. It reveals diagnostic history such as member label history and recent roster imports, and a **Reset page walkthrough** button on pages with a walkthrough, for that user only.
+Admins can turn on **Debug mode** in the Settings navigation; Operators do not have it. It reveals diagnostic history such as member label history and recent roster imports, **Debug tools** on the Kiosks page, **Settings > Background scheduler**, and a **Reset page walkthrough** button on pages with a walkthrough. The choice is remembered in that browser, not in the account: it starts off in every new browser and is never sent to the server.
 
 ## Meetings and attendance
 

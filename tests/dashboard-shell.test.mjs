@@ -652,9 +652,12 @@ test("Kiosks refresh hides redundant success while preserving actionable feedbac
   assert.match(source, /load\(\{ preserveNotice: true \}\)/);
   assert.match(source, /visiblePoll\(\(\) => load\(\), 30_000, \(error\) => setNotice\(\{ message: error\.message, tone: "error" \}\), true\)/);
   assert.match(source, /notice\.message && <p className="setup-status ui-status kiosk-notice"/);
-  for (const result of ["Kiosk renamed.", "Kiosk retired.", "queued. The kiosk normally receives it within five seconds."]) {
+  for (const result of ["Kiosk renamed.", "Kiosk retired."]) {
     assert.match(source, new RegExp(result.replaceAll(".", "\\.")));
   }
+  // Pi kiosks ask for commands every five seconds and web kiosks every ten (commandPollMs).
+  assert.match(source, /queued\. The kiosk normally receives it within \$\{active\.kind === "web" \? "ten" : "five"\} seconds\./);
+  assert.match(await readFile("apps/dashboard/src/web-kiosk/kiosk-flow.ts", "utf8"), /export const commandPollMs = 10_000;/);
 });
 
 test("integration setup distinguishes saved credentials from verified connections", async () => {
@@ -781,7 +784,8 @@ test("a label's Discord role, sync direction and that direction's action form on
   assert.match(page, /<td className="label-actions"><div className="label-row-actions">\{menu\.length > 0 \? <RowMenu/);
   assert.doesNotMatch(page, /label-action-slot/);
   // Two-way shows a quiet note in the same slot, described for assistive technology and on hover.
-  assert.match(page, /const autoSyncText = "Two-way labels sync automatically every 5 minutes";/);
+  assert.match(await readFile("apps/dashboard/src/discord-roles.ts", "utf8"), /export const autoSyncText = "Two-way labels sync automatically every 5 minutes";/);
+  assert.match(page, /import \{ autoSyncText, [^}]*\} from "\.\/discord-roles";/);
   assert.match(page, /twoWay \? <><span className="label-auto-sync" role="note" title=\{autoSyncText\} aria-describedby=\{`label-auto-sync-\$\{label\.id\}`\}><SyncIcon state="syncing" \/><span>Every 5 min<\/span><\/span><span id=\{`label-auto-sync-\$\{label\.id\}`\} hidden>\{autoSyncText\}<\/span><\/>/);
   assert.match(styles, /\.labels-table \.label-role-action \{[^}]*inline-size: 9\.5rem;/);
   assert.match(styles, /\.labels-table \.label-role-action > \* \{ inline-size: 100%; \}/);

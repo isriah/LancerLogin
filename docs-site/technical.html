@@ -17,7 +17,7 @@
   <div class="task-grid">
     <article class="task-card"><span>P</span><h3>Cloudflare Pages</h3><p>The React dashboard plus a same-origin <code>/api</code> proxy, so sign-in cookies stay on your dashboard's own address. Pages holds no Cloudflare token.</p></article>
     <article class="task-card"><span>W</span><h3>Worker and D1</h3><p>The API Worker handles authorization, validation, attendance, reports, exports, integrations, and scheduled work. D1 stores the installation's data.</p></article>
-    <article class="task-card"><span>K</span><h3>Raspberry Pi kiosks</h3><p>Each kiosk reads its input device, keeps its pairing, local links, and offline queue on the Pi, and sends scans to the Worker.</p></article>
+    <article class="task-card"><span>K</span><h3>Kiosks</h3><p>A Raspberry Pi kiosk reads its input device and keeps its pairing, local links, and offline queue on the Pi. A web kiosk is the dashboard's kiosk page in a laptop or tablet browser and keeps its pairing, roster cache, and offline queue in that browser. Both send scans to the Worker.</p></article>
   </div>
   <p>Modules add pages, routes, settings, and data to this structure. Attendance is built in; plugins are composed into the dashboard and Worker when the installation is built.</p>
 
@@ -30,8 +30,10 @@
     <li>Integration secrets are encrypted with AES-256-GCM using an installation-specific key and are never returned to the browser.</li>
     <li>Pairing codes and kiosk credentials are stored only as hashes.</li>
     <li>Meeting attendance windows cannot overlap, so each scan matches at most one meeting.</li>
-    <li>Kiosks accept six fixed, kiosk-specific commands from the dashboard and never a shell command or arbitrary argument.</li>
-    <li>Kiosk maintenance is available only on the kiosk's own screen, behind a rate-limited local PIN.</li>
+    <li>Raspberry Pi kiosks accept six fixed, kiosk-specific commands from the dashboard and never a shell command or arbitrary argument. A web kiosk takes only <strong>Reload display</strong> and <strong>Reset settings PIN</strong>.</li>
+    <li>Kiosk maintenance is available only on the kiosk's own screen, behind a local settings PIN, rate-limited on a Raspberry Pi. On a web kiosk the pairing lives in the browser and that PIN is only a screen lock, so pair web kiosks only on devices your team controls.</li>
+    <li>Member PINs are stored only as salted hashes, and one-time Discord kiosk codes only as hashes that expire after 2 minutes. A paired kiosk is trusted to record scans it checked offline and to set or reset member PINs.</li>
+    <li>A scan that matches a member recorded at a different kiosk less than 30 seconds apart is refused, and the member is asked to scan again.</li>
     <li>Dashboard updates install only complete official releases, pinned to an exact commit, after an entire-installation backup.</li>
     <li>CSV exports store values that look like spreadsheet formulas as text.</li>
   </ul>

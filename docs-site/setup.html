@@ -90,7 +90,7 @@
     <li>Select <strong>Run workflow</strong>. If the environment has required reviewers, approve the pending <code>production</code> deployment.</li>
   </ol>
   <figure class="annotated compact-shot"><img src="assets/github-run-workflow.png" alt="GitHub Actions page for Install or upgrade LancerLogin with the Run workflow panel open: branch main, operation create, release latest stable, and installation slug example-robotics-team."><figcaption>Run the workflow with operation create.</figcaption></figure>
-  <p>Before it creates anything, the run checks your inputs and secrets with read-only requests: the token's permissions, that the account has a <code>workers.dev</code> subdomain, and that the dashboard address is free. It then builds LancerLogin and creates the Cloudflare resources only after the builds succeed. If a check fails, the run stops with an error that names the problem and the fix; see <a href="troubleshooting.html#install">Troubleshoot the installation workflow</a>.</p>
+  <p>Before it creates anything, the run checks your inputs and secrets with read-only requests: the token's permissions, that the account has a <code>workers.dev</code> subdomain, and that nothing in your account already uses the names for this slug. It then builds LancerLogin and creates the Cloudflare resources only after the builds succeed. If a check fails, the run stops with an error that names the problem and the fix; see <a href="troubleshooting.html#install">Troubleshoot the installation workflow</a>.</p>
   <p>The slug names the three Cloudflare resources the workflow creates:</p>
   <table class="credential-table">
     <thead><tr><th scope="col">Resource</th><th scope="col">Name</th></tr></thead>
@@ -140,7 +140,7 @@
     <li>Under <strong>Authorized redirect URIs</strong>, add your installation's callback address. It has this form:</li>
   </ol>
   <p class="ui-path">Callback address <span>›</span> <code>https://&lt;slug&gt;-dashboard.pages.dev/api/auth/google/callback</code></p>
-  <p>The <strong>Create your installation</strong> form and <span class="ui-path">Settings <span>›</span> Integrations</span> show the exact value the API uses, with a copy button. Google compares it exactly, including the trailing slash. The address must use https. Only a <code>localhost</code> or <code>127.0.0.1</code> preview may use http.</p>
+  <p>The <strong>Create your installation</strong> form and <span class="ui-path">Settings <span>›</span> Integrations</span> show the exact value the API uses, with a copy button. Google compares it exactly, so paste it as copied and do not add a trailing slash. The address must use https. Only a <code>localhost</code> or <code>127.0.0.1</code> preview may use http.</p>
   <ol class="steps" start="3">
     <li>Create the client and save the client ID and client secret in your password manager. Google shows a new secret only once. Google's <a href="https://support.google.com/cloud/answer/15549257">Clients guide</a> covers creating and rotating secrets.</li>
     <li>Enter the client ID, the client secret, and the first Admin's Google email in the <strong>Create your installation</strong> form. To add Google sign-in later, enter the client ID and secret in <span class="ui-path">Settings <span>›</span> Integrations</span>, and add each person's Google email in <span class="ui-path">Settings <span>›</span> Access</span>. LancerLogin encrypts the secret and never displays it again.</li>

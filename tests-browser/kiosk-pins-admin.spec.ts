@@ -51,14 +51,14 @@ test("Require PIN saves with the method, hides the no-PIN warning and shows in t
   await expect(page.locator(".kiosk-summary")).toContainText("Require PINOn");
   await expect(save).toBeDisabled();
   await expect(requirePin).toBeChecked();
-  expect(writes.filter((request) => request.url().endsWith("/authentication-method")).map((request) => request.postDataJSON())).toEqual([{ authenticationMethod: "member_id", memberLookup: "entry", requirePin: true }]);
+  expect(writes.filter((request) => request.url().endsWith("/authentication-method")).map((request) => request.postDataJSON())).toEqual([{ authenticationMethod: "member_id", memberLookup: "entry", requirePin: true, discordCode: false }]);
 
   // Turning it off brings the warning back and saves false.
   await requirePin.uncheck();
   await expect(warning).toBeVisible();
   await save.click();
   await expect(page.locator(".kiosk-summary")).toContainText("Require PINOff");
-  expect(writes.filter((request) => request.url().endsWith("/authentication-method")).map((request) => request.postDataJSON()).at(-1)).toEqual({ authenticationMethod: "member_id", memberLookup: "entry", requirePin: false });
+  expect(writes.filter((request) => request.url().endsWith("/authentication-method")).map((request) => request.postDataJSON()).at(-1)).toEqual({ authenticationMethod: "member_id", memberLookup: "entry", requirePin: false, discordCode: false });
 });
 
 test("a Pi kiosk offers Require PIN only with Member ID entry", async ({ page }, testInfo) => {
@@ -77,7 +77,61 @@ test("a Pi kiosk offers Require PIN only with Member ID entry", async ({ page },
   await expect(page.locator(".kiosk-summary")).toContainText("Require PINOn");
   await page.getByLabel("Authentication method for selected kiosk").selectOption("qr");
   await expect(requirePin).toHaveCount(0);
-  expect(writes.filter((request) => request.url().endsWith("/authentication-method")).map((request) => request.postDataJSON())).toEqual([{ authenticationMethod: "member_id", memberLookup: "entry", requirePin: true }]);
+  expect(writes.filter((request) => request.url().endsWith("/authentication-method")).map((request) => request.postDataJSON())).toEqual([{ authenticationMethod: "member_id", memberLookup: "entry", requirePin: true, discordCode: false }]);
+});
+
+test("a Pi kiosk from before member PINs cannot turn on Require PIN until it is updated", async ({ page }, testInfo) => {
+  const { writes } = await useScenario(page, `old-pi-${testInfo.testId}-${testInfo.retry}`);
+  await page.goto("/kiosks/kiosk-1/manage");
+  await page.getByText("Identification", { exact: true }).click();
+  await page.getByLabel("Authentication method for selected kiosk").selectOption("member_id");
+  const requirePin = page.getByRole("checkbox", { name: "Require PIN", exact: true });
+  await expect(requirePin).toBeDisabled(); await expect(requirePin).not.toBeChecked();
+  await expect(requirePin).toHaveAccessibleDescription("Members enter a 4 to 6 digit PIN after confirming their name. Update this kiosk to turn on Require PIN.");
+  await expect(page.locator("#kiosk-require-pin-blocked")).toBeVisible();
+  // The help line is the same muted small text as the description above it: no new colour or component.
+  const style = (id: string) => page.locator(`#${id}`).evaluate((element) => { const computed = getComputedStyle(element); return [computed.color, computed.fontSize]; });
+  expect(await style("kiosk-require-pin-blocked")).toEqual(await style("kiosk-require-pin-detail"));
+  // The same control is "Require PIN for the backup method" when Discord code is chosen.
+  await page.getByLabel("Member lookup").selectOption("discord_code");
+  const backupPin = page.getByRole("checkbox", { name: "Require PIN for the backup method", exact: true });
+  await expect(backupPin).toBeDisabled(); await expect(page.locator("#kiosk-require-pin-blocked")).toHaveText("Update this kiosk to turn on Require PIN.");
+  await page.getByLabel("Member lookup").selectOption("entry");
+  // Every other choice still saves.
+  await page.getByRole("button", { name: "Save method" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "selected for" })).toHaveText("Member ID entry selected for Front desk. It will use this method after its next sync.");
+  expect(writes.filter((request) => request.url().endsWith("/authentication-method")).map((request) => request.postDataJSON())).toEqual([{ authenticationMethod: "member_id", memberLookup: "entry", requirePin: false, discordCode: false }]);
+  expect(await noSideScroll(page)).toBe(true);
+
+  // A web kiosk always runs the current dashboard code, so it is never blocked whatever release it shows.
+  await page.goto("/kiosks/web-kiosk-a/manage");
+  await page.getByText("Identification", { exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "Require PIN", exact: true })).toBeEnabled();
+  await expect(page.locator("#kiosk-require-pin-blocked")).toHaveCount(0);
+});
+
+test("a kiosk that already has Require PIN on can turn it off, whatever release it runs", async ({ page }, testInfo) => {
+  const { writes } = await useScenario(page, `${testInfo.testId}-${testInfo.retry}`);
+  // Front desk has Require PIN on and now reports a release from before member PINs.
+  await page.goto("/kiosks/kiosk-1/manage");
+  await page.getByText("Identification", { exact: true }).click();
+  await page.getByLabel("Authentication method for selected kiosk").selectOption("member_id");
+  await page.getByRole("checkbox", { name: "Require PIN", exact: true }).check();
+  await page.getByRole("button", { name: "Save method" }).click();
+  await expect(page.locator(".kiosk-summary")).toContainText("Require PINOn");
+  await page.route("**/admin/kiosks", async (route) => {
+    const response = await route.fetch({ headers: { ...route.request().headers(), "x-preview-scenario": `kiosk-pins-admin-${testInfo.testId}-${testInfo.retry}` } }); const json = await response.json();
+    await route.fulfill({ response, json: { ...json, kiosks: json.kiosks.map((kiosk: { id: string }) => kiosk.id === "kiosk-1" ? { ...kiosk, releaseVersion: "2.0.1" } : kiosk) } });
+  });
+  await page.reload();
+  await page.getByText("Identification", { exact: true }).click();
+  const requirePin = page.getByRole("checkbox", { name: "Require PIN", exact: true });
+  await expect(requirePin).toBeChecked(); await expect(requirePin).toBeEnabled();
+  await expect(page.locator("#kiosk-require-pin-blocked")).toHaveCount(0);
+  await requirePin.uncheck();
+  await page.getByRole("button", { name: "Save method" }).click();
+  await expect(page.locator(".kiosk-summary")).toContainText("Require PINOff");
+  expect(writes.filter((request) => request.url().endsWith("/authentication-method")).map((request) => request.postDataJSON()).at(-1)).toEqual({ authenticationMethod: "member_id", memberLookup: "entry", requirePin: false, discordCode: false });
 });
 
 test("pending PIN requests appear on Manage kiosk, refresh while open, and leave once approved or declined", async ({ page }, testInfo) => {

@@ -1,3 +1,5 @@
+import { scanRefusalFrom } from "./kiosk-presentation.mjs";
+
 const normalizeApiUrl = (value) => {
   const url = new URL(String(value));
   if (url.protocol !== "https:" && url.hostname !== "127.0.0.1" && url.hostname !== "localhost") throw new Error("The Worker API URL must use HTTPS");
@@ -106,10 +108,15 @@ function legacyRejectionCode(status, error) {
   return undefined;
 }
 
-// The PIN step refused a scan sent with a PIN: nothing was recorded, and the member sees why at the kiosk.
+// The PIN step refused a scan: nothing was recorded. For a scan sent with a PIN the member sees why at the kiosk; a
+// scan sent without one is settled as a rejection (see sendAttendance).
 // pin_throttled: too many wrong PINs online, so the member waits before the next try. It must never fall back to the
 // cached hash.
 export const pinScanRefusals = new Set(["pin_required", "invalid_pin", "pin_not_set", "pin_locked", "pin_incorrect", "pin_throttled"]);
+
+// The code step refused a scan sent with a Discord code: nothing was recorded, and the member sees why at the kiosk.
+// A code scan is sent once, straight from the code screen; it is never queued or sent again.
+export const codeScanRefusals = new Set(["code_invalid", "code_throttled", "code_not_enabled", "invalid_code"]);
 
 /** A Worker answer other than 2xx to kioskApiRequest, with its status, code and body. */
 export class KioskApiError extends Error {
@@ -149,17 +156,27 @@ export async function sendAttendance(config, event, { fetchImpl = fetch } = {}) 
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
     // pin travels only on a scan sent straight from a Require PIN kiosk; it is never part of a queued event. A scan
-    // queued after the kiosk checked its cached hash says pinCheck "offline" instead.
-    body: JSON.stringify({ eventId: event.eventId, memberId: event.memberId, ...(event.meetingId ? { meetingId: event.meetingId } : {}), occurredAt: event.occurredAt, ...(event.pairingId ? { pairingId: event.pairingId } : {}), ...(Number.isInteger(event.matchScore) ? { matchScore: event.matchScore } : {}), ...(typeof event.pin === "string" ? { pin: event.pin } : {}), ...(event.pinCheck === "offline" ? { pinCheck: "offline" } : {}), rescanSupported: true }),
+    // queued after the kiosk checked its cached hash says pinCheck "offline" instead. discordCode takes the place of
+    // memberId on a scan sent straight from the code screen, and is likewise never part of a queued event.
+    body: JSON.stringify({ eventId: event.eventId, ...(typeof event.discordCode === "string" ? { discordCode: event.discordCode } : { memberId: event.memberId }), ...(event.meetingId ? { meetingId: event.meetingId } : {}), occurredAt: event.occurredAt, ...(event.pairingId ? { pairingId: event.pairingId } : {}), ...(Number.isInteger(event.matchScore) ? { matchScore: event.matchScore } : {}), ...(typeof event.pin === "string" ? { pin: event.pin } : {}), ...(event.pinCheck === "offline" ? { pinCheck: "offline" } : {}), rescanSupported: true }),
   });
   if (response.status >= 400 && response.status < 500) {
     const contentType = response.headers.get("content-type") ?? "";
     const body = /^application\/json(?:\s*;|\s*$)/i.test(contentType) ? await response.json().catch(() => ({})) : (await response.body?.cancel(), {});
     const error = typeof body?.error === "string" ? body.error.slice(0, 300) : "";
     if (typeof event.pin === "string" && pinScanRefusals.has(body?.code)) return { accepted: false, duplicate: false, pinRefused: true, status: response.status, code: body.code, error, ...(Number.isInteger(body.attemptsLeft) ? { attemptsLeft: body.attemptsLeft } : {}), ...(typeof body.lockedUntil === "string" ? { lockedUntil: body.lockedUntil } : {}) };
+    // A PIN refusal for a scan that carries no PIN: Require PIN was turned on after the scan was queued, or before this
+    // kiosk heard of it. Sending it again cannot change the answer, so it is settled as a rejection and kept for review
+    // like any other; retrying it would hold up every scan queued behind it. The Worker records such a scan itself when
+    // it was made before the setting changed, so this is left for scans made after.
+    if (typeof event.pin !== "string" && pinScanRefusals.has(body?.code)) return { accepted: false, rejected: true, status: response.status, code: body.code, error };
+    if (typeof event.discordCode === "string" && codeScanRefusals.has(body?.code)) return { accepted: false, duplicate: false, codeRefused: true, status: response.status, code: body.code, error, ...(typeof body.retryAt === "string" ? { retryAt: body.retryAt } : {}), ...(Number.isInteger(body.retryAfterSeconds) ? { retryAfterSeconds: body.retryAfterSeconds } : {}) };
     if (response.status === 409 && rescanScanRefusals.has(body?.code)) return { accepted: false, duplicate: false, rescan: true, status: response.status, code: body.code, error, eventId: event.eventId };
     const code = typeof body?.code === "string" && permanentScanRejections.has(body.code) ? body.code : legacyRejectionCode(response.status, error);
-    if (code) return { accepted: false, rejected: true, status: response.status, code, error };
+    // A Worker that says why (no meeting open, attendance already settled) lets the kiosk show that instead of its
+    // generic refusal screen. Older Workers send no reason, and the screen stays as it was.
+    const refusal = scanRefusalFrom(body);
+    if (code) return { accepted: false, rejected: true, status: response.status, code, error, ...(refusal ? { refusal } : {}) };
     throw new TransientDeliveryError(response.status, error);
   }
   const result = await parseResponse(response);

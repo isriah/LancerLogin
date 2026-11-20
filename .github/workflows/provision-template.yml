@@ -565,6 +565,7 @@ jobs:
         run: node scripts/prepare-pages-proxy.mjs "${{ steps.deploy-api.outputs.deployment-url }}"
       # Written here, not in a script, because this workflow can install a release older than the binding. That release's proxy ignores it.
       - name: Bind the Pages API proxy to the Worker
+        id: pages-binding
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -573,10 +574,13 @@ jobs:
           # Through the binding the Worker sees each visitor's address. A fetch to workers.dev replaces it with one shared address.
           status=$(curl -sS -o /dev/null -w '%{http_code}' -X PATCH -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
             --data "{\"deployment_configs\":{\"production\":{\"services\":{\"API\":{\"service\":\"$INSTALLATION_SLUG-api\",\"environment\":\"production\"}}}}}" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$INSTALLATION_SLUG-dashboard")
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$INSTALLATION_SLUG-dashboard") || status="${status:-000}"
+          # Migrations and the Worker are already live, so a refused binding must not stop before the dashboard is deployed:
+          # the proxy falls back to a fetch. The web update controller treats the same refusal as a warning.
           if [ "$status" != "200" ]; then
-            echo "::error title=pages_api_binding_failed::Cloudflare did not add the Pages API binding to $INSTALLATION_SLUG-dashboard (HTTP $status): check that the token has Cloudflare Pages: Edit, then run this workflow again."
-            exit 1
+            echo "::warning title=Pages API binding not added::pages_api_binding_failed_$status: Cloudflare did not add the Pages API binding to $INSTALLATION_SLUG-dashboard (HTTP $status), so all dashboard visitors share one sign-in limit. The run continues and still deploys the dashboard. Check that the Cloudflare token has Cloudflare Pages: Edit, then run this workflow again with the operation resume and the same slug. The next release update also adds the binding."
+            echo "state=refused" >> "$GITHUB_OUTPUT"
+            echo "status=$status" >> "$GITHUB_OUTPUT"
           fi
       - name: Deploy Pages dashboard
         uses: cloudflare/wrangler-action@v4
@@ -592,6 +596,8 @@ jobs:
           DASHBOARD_URL: https://${{ inputs.installation_slug }}-dashboard.pages.dev
           ADMIN_STATE: ${{ steps.admin.outputs.admin }}
           UPDATE_CREDENTIAL_STATE: ${{ steps.update-credential.outputs.state }}
+          PAGES_BINDING_STATE: ${{ steps.pages-binding.outputs.state }}
+          PAGES_BINDING_STATUS: ${{ steps.pages-binding.outputs.status }}
         run: |
           database_id=$(node -e 'const c=require("./.provision/wrangler.json"); process.stdout.write(c.d1_databases?.find((b) => b.binding === "DB")?.database_id ?? "")')
           test -n "$database_id"
@@ -608,6 +614,12 @@ jobs:
               echo "The first Admin already exists. Open the dashboard and sign in."
             else
               echo "Open the dashboard and enter the private LANCERLOGIN_SETUP_CODE to create the first Admin."
+            fi
+            if [ "$PAGES_BINDING_STATE" = "refused" ]; then
+              echo ""
+              echo "### Pages API binding not added"
+              echo ""
+              echo "Cloudflare did not add the Pages API binding to \`$INSTALLATION_SLUG-dashboard\` (HTTP $PAGES_BINDING_STATUS). The dashboard is deployed and works, but sign-in limits are shared by all dashboard visitors, so a busy team can see \"Too many sign-in attempts\". Check that the Cloudflare token has **Cloudflare Pages: Edit**, then run this workflow again with the operation \`resume\` and the same slug. The next release update also adds the binding."
             fi
             echo ""
             echo "### Environment variables for future updates"

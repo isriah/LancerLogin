@@ -125,12 +125,13 @@ test("kiosk lists and Manage kiosk show each kiosk's kind, and web kiosks have n
   await expect(page.getByRole("button", { name: "Begin enrollment on Front desk" })).toBeVisible();
 });
 
-test("Manage kiosk Identification for a web kiosk offers only Member ID and Member search and saves the lookup", async ({ page }, testInfo) => {
+test("Manage kiosk Identification for a web kiosk offers only Discord code, Member ID and Member search and saves the lookup", async ({ page }, testInfo) => {
   const writes = await useScenario(page, testInfo.testId);
   await page.goto("/kiosks/web-kiosk-a/manage");
   await page.getByText("Identification", { exact: true }).click();
   const choice = page.getByRole("group", { name: "How members identify themselves" });
-  await expect(choice.getByRole("radio")).toHaveCount(2);
+  await expect(choice.getByRole("radio")).toHaveCount(3);
+  await expect(choice.getByRole("radio", { name: "Discord code", exact: true })).not.toBeChecked();
   await expect(choice.getByRole("radio", { name: "Member ID", exact: true })).toBeChecked();
   await expect(choice.getByRole("radio", { name: "Member ID", exact: true })).toHaveAccessibleDescription("Type a member ID on a keypad, then confirm the name.");
   await expect(choice.getByRole("radio", { name: "Member search", exact: true })).not.toBeChecked();
@@ -147,7 +148,59 @@ test("Manage kiosk Identification for a web kiosk offers only Member ID and Memb
   await expect(page.locator(".kiosk-summary")).toContainText("Member search");
   await expect(save).toBeDisabled();
   const patch = writes.filter((request) => request.url().endsWith("/authentication-method"));
-  expect(patch.map((request) => request.postDataJSON())).toEqual([{ authenticationMethod: "member_id", memberLookup: "search", requirePin: false }]);
+  expect(patch.map((request) => request.postDataJSON())).toEqual([{ authenticationMethod: "member_id", memberLookup: "search", requirePin: false, discordCode: false }]);
+});
+
+test("Discord code on a web kiosk saves with its backup method, when to offer it and Require PIN, and is kept after a reload", async ({ page }, testInfo) => {
+  const writes = await useScenario(page, testInfo.testId);
+  await page.goto("/kiosks/web-kiosk-a/manage");
+  await page.getByText("Identification", { exact: true }).click();
+  const choice = page.getByRole("group", { name: "How members identify themselves" });
+  const code = choice.getByRole("radio", { name: "Discord code", exact: true });
+  await expect(code).toHaveAccessibleDescription("Members run /code in Discord and type the 6-digit code. Needs a network connection.");
+  const backupMethod = page.getByLabel("Backup method", { exact: true });
+  const offer = page.getByLabel("Offer the backup", { exact: true });
+  await expect(backupMethod).toHaveCount(0);
+  await expect(offer).toHaveCount(0);
+
+  // Choosing Discord code shows the backup choices, starting from the kiosk's lookup and "only when offline".
+  await code.check();
+  await expect(backupMethod).toHaveValue("entry");
+  await expect(offer).toHaveValue("offline");
+  await expect(offer.locator("option")).toHaveText(["Only when the kiosk is offline", "Any time"]);
+  const warning = page.locator(".kiosk-authentication-form .warning-callout");
+  await expect(warning).toHaveText("Without a PIN, the backup method lets anyone sign in someone else while the kiosk is offline. Use Require PIN for the backup method where that matters.");
+  await backupMethod.selectOption("search");
+  await offer.selectOption("always");
+  await expect(warning).toHaveText("Without a PIN, anyone can skip the code and sign in someone else with the backup method. Use Require PIN for the backup method, or offer the backup only when the kiosk is offline.");
+  await expect(page.getByRole("checkbox", { name: "Require PIN", exact: true })).toHaveCount(0);
+  await page.getByRole("checkbox", { name: "Require PIN for the backup method", exact: true }).check();
+  await expect(warning).toHaveCount(0);
+  const save = page.getByRole("button", { name: "Save method" });
+  await save.click();
+  await expect(page.getByRole("status").filter({ hasText: "selected for" })).toHaveText("Discord code with Require PIN for the backup method selected for Test web kiosk A. It will use this method after its next sync.");
+  await expect(save).toBeDisabled();
+  const bodies = () => writes.filter((request) => request.url().endsWith("/authentication-method")).map((request) => request.postDataJSON());
+  expect(bodies()).toEqual([{ authenticationMethod: "member_id", memberLookup: "search", requirePin: true, discordCode: true, discordCodeBackup: "always" }]);
+
+  // After a reload the kiosk still shows every choice.
+  await page.reload();
+  await expect(page.locator(".kiosk-summary")).toContainText("Discord code");
+  await expect(page.locator(".kiosk-summary")).toContainText("Backup methodMember searchOffered any time");
+  await page.getByText("Identification", { exact: true }).click();
+  await expect(code).toBeChecked();
+  await expect(backupMethod).toHaveValue("search");
+  await expect(offer).toHaveValue("always");
+  await expect(page.getByRole("checkbox", { name: "Require PIN for the backup method", exact: true })).toBeChecked();
+  await expect(save).toBeDisabled();
+
+  // Back to Member ID turns Discord code off and hides the backup choices.
+  await choice.getByRole("radio", { name: "Member ID", exact: true }).check();
+  await expect(backupMethod).toHaveCount(0);
+  await save.click();
+  await expect(page.getByRole("status").filter({ hasText: "selected for" })).toHaveText("Member ID entry with Require PIN selected for Test web kiosk A. It will use this method after its next sync.");
+  expect(bodies().at(-1)).toEqual({ authenticationMethod: "member_id", memberLookup: "entry", requirePin: true, discordCode: false });
+  await expect(page.locator(".kiosk-summary")).not.toContainText("Backup method");
 });
 
 test("a Pi kiosk keeps its method choice and adds the member lookup for Member ID entry", async ({ page }, testInfo) => {
@@ -166,7 +219,7 @@ test("a Pi kiosk keeps its method choice and adds the member lookup for Member I
   await page.getByRole("button", { name: "Save method" }).click();
   await expect(page.getByRole("status").filter({ hasText: "selected for" })).toHaveText("Member search selected for Front desk. It will use this method after its next sync.");
   await expect(page.locator(".kiosk-summary")).toContainText("Member search configured - waiting for kiosk sync");
-  expect(writes.filter((request) => request.url().endsWith("/authentication-method")).map((request) => request.postDataJSON())).toEqual([{ authenticationMethod: "member_id", memberLookup: "search", requirePin: false }]);
+  expect(writes.filter((request) => request.url().endsWith("/authentication-method")).map((request) => request.postDataJSON())).toEqual([{ authenticationMethod: "member_id", memberLookup: "search", requirePin: false, discordCode: false }]);
 
   await method.selectOption("qr");
   await expect(page.getByLabel("Member lookup")).toHaveCount(0);
@@ -185,16 +238,29 @@ test("web kiosks offer only Reload display and Reset settings PIN", async ({ pag
   await expect(page.getByRole("button", { name: "Authentication maintenance" })).toHaveCount(0);
 
   await actions.getByRole("button", { name: "Reload display" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "queued" })).toHaveText("Display reload queued. The kiosk normally receives it within five seconds.");
+  await expect(page.getByRole("status").filter({ hasText: "queued" })).toHaveText("Display reload queued. The kiosk normally receives it within ten seconds.");
   page.once("dialog", (dialog) => { expect(dialog.message()).toBe("Reset the settings PIN on Test web kiosk A? The next person to open maintenance on the kiosk chooses a new PIN."); void dialog.accept(); });
   await actions.getByRole("button", { name: "Reset settings PIN" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "queued" })).toHaveText("Settings PIN reset queued. The kiosk normally receives it within five seconds.");
+  await expect(page.getByRole("status").filter({ hasText: "queued" })).toHaveText("Settings PIN reset queued. The kiosk normally receives it within ten seconds.");
   expect(writes.filter((request) => request.url().endsWith("/commands")).map((request) => request.postDataJSON())).toEqual([{ command: "reload_display" }, { command: "reset_network_pin" }]);
 
   // The Pi keeps its full set of commands.
   await page.goto("/kiosks/kiosk-1/manage");
   await page.getByText("Device maintenance", { exact: true }).click();
   for (const name of ["Reload display", "Restart software", "Reboot Pi", "Reset network PIN"]) await expect(page.getByRole("button", { name })).toBeVisible();
+});
+
+test("Diagnostics for a web kiosk leaves out the network, Wi-Fi scan and uptime rows a Pi kiosk reports", async ({ page }, testInfo) => {
+  await useScenario(page, testInfo.testId);
+  await page.goto("/kiosks/web-kiosk-a/manage");
+  await page.getByText("Diagnostics", { exact: true }).click();
+  const terms = page.locator(".kiosk-management-section dl.kiosk-diagnostics dt");
+  for (const row of ["Pending scans", "Last successful sync", "Last heartbeat", "Paired"]) await expect(terms.filter({ hasText: row })).toBeVisible();
+  for (const row of ["Network", "Last Wi-Fi scan", "Uptime"]) await expect(terms.filter({ hasText: row })).toHaveCount(0);
+
+  await page.goto("/kiosks/kiosk-1/manage");
+  await page.getByText("Diagnostics", { exact: true }).click();
+  for (const row of ["Network", "Last Wi-Fi scan", "Uptime", "Pending scans", "Last successful sync", "Last heartbeat", "Paired"]) await expect(terms.filter({ hasText: row })).toBeVisible();
 });
 
 test("web kiosks show their installed release without the Pi's latest release or update status", async ({ page }, testInfo) => {

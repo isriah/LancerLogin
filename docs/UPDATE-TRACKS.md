@@ -23,7 +23,7 @@ Module plugins, such as the official Outreach plugin and the optional Carpool pl
 A LancerLogin 1 (Community) installation reaches LancerLogin 2 in place through the v1.2.6 bridge, which installs the track-aware updater on the dashboard and the track-aware update helper on each kiosk. Follow [Upgrade Community to Modular](COMMUNITY-UPGRADE.md). In short:
 
 1. Install the v1.2.6 bridge on the dashboard with the stable web updater, then on each kiosk while Stable is selected.
-2. Update the private repository's `.github/workflows/upgrade-web.yml` from the bridge release. Its name must be **Upgrade LancerLogin web (update channels v2)** and its Node runtime 24.10 or later. Keep the confirmed resources, the `production` environment and its reviewers. Application updates never rewrite this workflow themselves.
+2. Update the private repository's `.github/workflows/upgrade-web.yml` from the bridge release. Its name must be **Upgrade LancerLogin web (update channels v2)**. Keep the exact Node.js version the release's file pins (the bridge pins 24.21.0; LancerLogin 2 workflows pin 24.22.1, the version in `.node-version`) rather than choosing another. Keep the confirmed resources, the `production` environment and its reviewers. Application updates never rewrite this workflow themselves.
 3. Opt in to the track that offers the LancerLogin 2 release, prepare the update with a new backup, and update each kiosk afterwards.
 
 A kiosk without the track-aware helper is blocked from Beta until it installs the bridge. The bridge checks the private workflow's capability before preparing a Beta update, and the executor rechecks release flags, complete assets, immutable beta metadata, exact tag and commit, the request's track and current consent.

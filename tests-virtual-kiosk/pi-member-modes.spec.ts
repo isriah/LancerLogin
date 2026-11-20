@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { adminApi, kiosk, kioskReady, panelPost, readerFaults } from "./virtual-kiosk";
+import { adminApi, checkoutRelease, kiosk, kioskReady, panelPost, readerFaults, reportRelease } from "./virtual-kiosk";
 
 // The Pi kiosk without its fingerprint reader: Member ID entry with the "Is this you?" step, Member search, and Require
 // PIN with setup approved from the dashboard or set from the kiosk's maintenance screen. Test Student I (1009) and
@@ -50,9 +50,17 @@ async function openMaintenance(page: Page, request: APIRequestContext) {
   await expect(page.getByRole("heading", { name: "Member PINs" })).toBeVisible({ timeout: 20_000 });
 }
 
+// Require PIN can be turned on only for a Pi kiosk that reports a release with member PINs (2.1.0-beta.3 or later). The
+// virtual kiosk reports an older release by then, so these scenarios run it as a kiosk updated to this checkout's release.
+let releaseBefore = "";
+test.beforeAll(async ({ request }) => {
+  await kioskReady(request);
+  releaseBefore = await reportRelease(request, checkoutRelease);
+});
 test.afterAll(async ({ request }) => {
   await readerFaults(request, { unplugged: false });
   await useMode(request, { authenticationMethod: "fingerprint" });
+  if (releaseBefore) await reportRelease(request, releaseBefore);
 });
 
 test("Member ID entry asks \"Is this you?\" before recording", async ({ page, request }) => {

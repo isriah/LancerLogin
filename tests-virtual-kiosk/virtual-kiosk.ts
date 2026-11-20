@@ -7,7 +7,10 @@ import { passwordProof } from "../packages/shared/src/password-key.mjs";
 export type KioskStatus = { name: string; screenUrl: string; url: string; running: boolean; serviceReachable: boolean; screenReachable: boolean; starts: number; paired: boolean; kioskId: string | null; cloudOnline: boolean; pendingScans: number | null; lastSeenAt: string | null; readerOnline: boolean; reader: { finger: string | null; slots: Record<string, string> } | null;
   bootId: string; network: { connection: string; ssid: string | null }; linkOnline: boolean; clockVerified: boolean | null; release: string;
   commands: { id: string; type: string; completedAt: string | null; success: number | null; resultMessage: string | null; requestedReleaseVersion: string | null }[] };
-export type PanelStatus = { cloudOnline: boolean; apiUrl: string; dashboardUrl: string | null; adminFile: string; kiosks: KioskStatus[] };
+// Where Test meeting A stands and what the Worker would do with a scan sent now (the panel's Meeting card).
+export type MeetingState = "in_progress" | "early" | "later" | "none_today" | "late" | "ended";
+export type MeetingStatus = { state: MeetingState | "missing"; title: string; startsAt: string | null; endsAt: string | null; opensAt: string | null; closesAt: string | null; scanAccepted: boolean; scanMeetingTitle: string | null; meetingCount: number };
+export type PanelStatus = { cloudOnline: boolean; apiUrl: string; dashboardUrl: string | null; adminFile: string; meeting: MeetingStatus | null; kiosks: KioskStatus[] };
 const panel = () => process.env.LANCERLOGIN_VIRTUAL_KIOSK_PANEL as string;
 
 export async function status(request: APIRequestContext): Promise<PanelStatus> { return (await request.get(`${panel()}/api/status`)).json(); }
@@ -72,6 +75,25 @@ export async function useAuthenticationMethod(request: APIRequestContext, method
   return api;
 }
 
+/** The release this checkout is, which a Pi kiosk reports once it is installed from it or updated to it. */
+export const checkoutRelease = (JSON.parse(readFileSync("package.json", "utf8")) as { version: string }).version;
+
+/**
+ * Has the virtual kiosk report a release, as a Pi does after an install or an update: the service restarts and sends it
+ * in its next heartbeat. Waits until the Worker has stored it, because the Worker decides by the last reported release
+ * (Require PIN is refused for a Pi kiosk that reports a release from before member PINs). Returns the release it
+ * reported before. The virtual kiosk starts on an old release, and a virtual update moves it to the latest stable one.
+ */
+export async function reportRelease(request: APIRequestContext, release: string) {
+  const api = await adminApi(request);
+  const { kioskId, starts, release: previous } = await kiosk(request);
+  await panelPost(request, "/api/kiosks/0/system", { release });
+  await panelPost(request, "/api/kiosks/0/restart");
+  await expect.poll(async () => { const current = await kiosk(request); return current.running && current.starts > starts; }, { timeout: 30_000 }).toBe(true);
+  await expect.poll(async () => (await api.get("/admin/kiosks")).kiosks.find((item: { id: string }) => item.id === kioskId)?.releaseVersion, { timeout: 60_000 }).toBe(release);
+  return previous;
+}
+
 export async function enterMemberId(page: Page, screenUrl: string, memberId: string) {
   await page.goto(screenUrl);
   await expect(page.locator("#identity-value")).toBeVisible({ timeout: 20_000 });
@@ -90,4 +112,10 @@ export async function tapFinger(request: APIRequestContext, finger: string, hold
 
 export async function readerFaults(request: APIRequestContext, faults: object) {
   await panelPost(request, "/api/kiosks/0/reader", { action: "faults", faults });
+}
+
+/** Puts Test meeting A in a state through the panel's Meeting card route and returns what the panel then reports. */
+export async function setMeetingState(request: APIRequestContext, state: MeetingState) {
+  await panelPost(request, "/api/meeting", { state });
+  return (await status(request)).meeting;
 }

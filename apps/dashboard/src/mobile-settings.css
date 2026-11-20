@@ -98,7 +98,6 @@
   .settings-updates .web-update-notes > summary { min-height: var(--control-min-block-size); display: flex; align-items: center; cursor: pointer; }
   .settings-configuration .field-label-with-info { display: flex; justify-content: space-between; align-items: center; }
   .settings-attendance .member-labels-panel { padding: var(--space-4); }
-  .settings-attendance .member-labels-panel > details > .discord-label-role-settings { padding: 0; border: 0; }
   .settings-attendance form.form-grid { grid-template-columns: minmax(0,1fr); gap: var(--space-4); }
   .settings-guided-setup .settings-callout { display: grid; grid-template-columns: minmax(0,1fr); gap: var(--space-4); }
   .scheduler-controls { padding: var(--space-4); }

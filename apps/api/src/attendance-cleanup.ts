@@ -65,6 +65,10 @@ export const attendanceCleanupSteps: readonly CleanupStep[] = [
   { kind: "reset", table: "organization_settings", pending: "pin_lockout_enabled<>0 OR pin_lockout_attempts<>5 OR pin_lockout_minutes<>15", set: "pin_lockout_enabled=0,pin_lockout_attempts=5,pin_lockout_minutes=15", bindings: [] },
   // The early arrival allowance (migration 0099) returns to its 15-minute default.
   { kind: "reset", table: "organization_settings", pending: "early_scan_minutes<>15", set: "early_scan_minutes=15", bindings: [] },
+  // Discord kiosk codes (migration 0100) are for Attendance kiosks only.
+  { kind: "delete", table: "discord_kiosk_codes" },
+  // Report ids for offline wrong-PIN reports (migration 0101) belong to Attendance kiosks.
+  { kind: "delete", table: "kiosk_pin_failure_reports" },
 ];
 
 /** In-flight Attendance delivery work that must drain before deletion. Binds the installation three times. */

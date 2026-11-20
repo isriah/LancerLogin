@@ -232,6 +232,30 @@ test("physical kiosk gives bounded scan and offline feedback at 800 by 480", asy
   expect(dimensions).toEqual({ width: 800, height: 480 });
 });
 
+test("physical kiosk shows a refusal reason as a notice in a fixed amber, not as a failed scan", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 480 });
+  await page.setExtraHTTPHeaders({ "x-lancerlogin-preview-state": "rescan" });
+  await page.goto(`${kioskBaseUrl}/`);
+  const shell = page.locator("#kiosk");
+  await expect(shell).toHaveClass(/kiosk-shell-rescan/);
+  const frame = (element: Element) => getComputedStyle(element).boxShadow;
+
+  await page.setExtraHTTPHeaders({ "x-lancerlogin-preview-state": "scan_notice" });
+  await expect(page.getByRole("heading", { name: "Too early" })).toBeVisible();
+  await expect(page.getByText("Test Wednesday Evening Build Meeting opens for scans at 5:45 PM")).toBeVisible();
+  await expect(shell).toHaveClass(/kiosk-shell-scan_notice/);
+  // Amber (#f2c14e) whatever the team's accent colour is.
+  const noticeFrame = await shell.evaluate(frame);
+  expect(noticeFrame).toContain("rgb(242, 193, 78)");
+  expect(await shell.evaluate((element) => getComputedStyle(element).animationName)).not.toBe("failure-flash");
+
+  await page.setExtraHTTPHeaders({ "x-lancerlogin-preview-state": "rejected" });
+  await expect(page.getByRole("heading", { name: "Scan needs help" })).toBeVisible();
+  expect(await shell.evaluate(frame)).not.toBe(noticeFrame);
+  const dimensions = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }));
+  expect(dimensions).toEqual({ width: 800, height: 480 });
+});
+
 test("physical kiosk asks for a rescan without an error state and notes a weak reading on an accepted scan", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 480 });
   await page.setExtraHTTPHeaders({ "x-lancerlogin-preview-state": "rescan" });

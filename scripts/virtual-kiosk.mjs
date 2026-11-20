@@ -22,6 +22,8 @@ import { fileURLToPath } from "node:url";
 import { coreRoot, developmentRuntime } from "./plugin-dev.mjs";
 import { defaultNetworkState, networkOnline, rebootExitCode, updateExitCode, validNetworkState } from "./virtual-kiosk/fakes.mjs";
 import { newPasswordCredential, passwordProof } from "../packages/shared/src/password-key.mjs";
+import { parseReleaseVersion } from "../packages/shared/src/release-policy.mjs";
+import { attendanceWindow, scanMeetingFor, scanWindowState } from "../apps/api/src/attendance-lifecycle.ts";
 
 const defaultStateRoot = join(coreRoot, ".provision/virtual-kiosk");
 const panelHtml = join(dirname(fileURLToPath(import.meta.url)), "virtual-kiosk/panel.html");
@@ -40,7 +42,21 @@ export const testMembers = [
   { memberId: "1008", firstName: "Test Student", lastName: "H", email: "test.student.h@example.test" },
   { memberId: "1009", firstName: "Test Student", lastName: "I", email: "test.student.i@example.test" },
   { memberId: "1010", firstName: "Test Student", lastName: "J", email: "test.student.j@example.test" },
+  { memberId: "1011", firstName: "Test Student", lastName: "K", email: "test.student.k@example.test" },
+  { memberId: "1012", firstName: "Test Student", lastName: "L", email: "test.student.l@example.test" },
+  { memberId: "1013", firstName: "Test Student", lastName: "M", email: "test.student.m@example.test" },
 ];
+// The meeting the control panel's Meeting card moves. Test meeting B stays a week out, so two test meetings always exist.
+export const panelMeetingTitle = "Test meeting A";
+/** The states the Meeting card can put Test meeting A in, with the panel's label for each. The first is the seeded one. */
+export const meetingStates = Object.freeze({
+  in_progress: "In progress",
+  early: "Starts soon, arrivals open",
+  later: "Starts later today",
+  none_today: "No meeting today",
+  late: "Ended, late scans open",
+  ended: "Ended, attendance closed",
+});
 // Deployment and provisioning environments; the virtual kiosk runs on a developer's computer or a CI test runner only.
 const refusedMarkers = ["CF_PAGES", "WORKERS_CI", "CLOUDFLARE_API_TOKEN", "LANCERLOGIN_DEPLOYMENT"];
 
@@ -135,7 +151,62 @@ async function signIn(api, admin) {
   await api.ok("POST", "/auth/local", { username: admin.username, ...await passwordProof(admin.password, params) });
 }
 
-/** First Admin, attendance setup, two test members and two test meetings. Runs once per state folder. */
+/**
+ * Start and end times that put a meeting in one of the Meeting card's states at `now`, given the installation's early
+ * arrival and late scan allowances (minutes). The times are what an Admin could save on the Meetings page.
+ */
+export function meetingTimes(state, now = Date.now(), { earlyScanMinutes = 15, lateScanMinutes = 30 } = {}) {
+  const minute = 60_000, hour = 60 * minute;
+  const range = (startsAt, endsAt) => ({ startsAt: new Date(startsAt).toISOString(), endsAt: new Date(endsAt).toISOString() });
+  if (state === "in_progress") {
+    // As seeded: open for scans now and for the rest of today (UTC).
+    const midnight = Date.parse(`${new Date(now).toISOString().slice(0, 10)}T00:00:00.000Z`);
+    return range(Math.max(now - 5 * minute, midnight), midnight + 24 * hour - minute);
+  }
+  if (state === "early") {
+    if (earlyScanMinutes < 2) fail("The early arrival allowance is under 2 minutes, so no meeting can be open for arrivals before it starts. Raise it in the dashboard's attendance rules.");
+    const start = now + Math.ceil(earlyScanMinutes * 2 / 3) * minute; return range(start, start + 2 * hour);
+  }
+  if (state === "later") { const start = now + (earlyScanMinutes + 60) * minute; return range(start, start + 2 * hour); }
+  if (state === "none_today") { const start = now + 24 * hour; return range(start, start + 2 * hour); }
+  if (state === "late") {
+    if (lateScanMinutes < 2) fail("The late scan allowance is under 2 minutes, so no ended meeting can still take scans. Raise it in the dashboard's attendance rules.");
+    const end = now - Math.floor(lateScanMinutes / 2) * minute; return range(end - 2 * hour, end);
+  }
+  if (state === "ended") { const end = now - (lateScanMinutes + 60) * minute; return range(end - 2 * hour, end); }
+  return fail(`Meeting state must be one of ${Object.keys(meetingStates).join(", ")}`);
+}
+
+/**
+ * Where Test meeting A stands at `now` and what the Worker would do with a scan sent now. The state comes from the
+ * meeting's saved times, so it moves by itself as time passes (a meeting that starts soon becomes one in progress). The
+ * scan outcome uses the Worker's own rules (apps/api/src/attendance-lifecycle.ts) over every meeting.
+ */
+export function meetingStatus(meetings, now = Date.now(), { earlyScanMinutes = 15, lateScanMinutes = 30 } = {}) {
+  const at = new Date(now).toISOString();
+  const scanMeeting = scanMeetingFor(meetings, at, lateScanMinutes, earlyScanMinutes);
+  const scanAccepted = Boolean(scanMeeting && scanWindowState(scanMeeting, at, lateScanMinutes, earlyScanMinutes).accepted);
+  const scan = { scanAccepted, scanMeetingTitle: scanAccepted ? scanMeeting.title : null, meetingCount: meetings.length, earlyScanMinutes, lateScanMinutes };
+  const meeting = meetings.find((item) => item.title === panelMeetingTitle);
+  if (!meeting) return { state: "missing", title: panelMeetingTitle, startsAt: null, endsAt: null, opensAt: null, closesAt: null, ...scan };
+  const { opens, closes } = attendanceWindow(meeting, lateScanMinutes, earlyScanMinutes);
+  const start = Date.parse(meeting.startsAt), end = Date.parse(meeting.endsAt);
+  const state = now < opens ? (start - now >= 12 * 3_600_000 ? "none_today" : "later") : now < start ? "early" : now <= end ? "in_progress" : now <= closes ? "late" : "ended";
+  return { state, title: meeting.title, startsAt: meeting.startsAt, endsAt: meeting.endsAt, opensAt: new Date(opens).toISOString(), closesAt: new Date(closes).toISOString(), ...scan };
+}
+
+/** Moves Test meeting A into a state by saving new times for it as the dashboard's Meetings page does. */
+async function setMeetingState(api, state) {
+  if (!Object.hasOwn(meetingStates, state)) fail(`Meeting state must be one of ${Object.keys(meetingStates).join(", ")}`);
+  const listed = await api.ok("GET", "/meetings");
+  const meeting = listed.meetings.find((item) => item.title === panelMeetingTitle);
+  if (!meeting) fail(`${panelMeetingTitle} is missing. Add it again on the dashboard's Meetings page, or start over with --reset.`);
+  const times = meetingTimes(state, Date.now(), listed);
+  await api.ok("PATCH", `/meetings/${encodeURIComponent(meeting.id)}`, { title: meeting.title, ...times, required: Boolean(meeting.required), ...(meeting.notes ? { notes: meeting.notes } : {}) });
+  return meetingStatus(listed.meetings.map((item) => item.id === meeting.id ? { ...item, ...times } : item), Date.now(), listed);
+}
+
+/** First Admin, attendance setup, the test members and two test meetings. Runs once per state folder. */
 async function seedPreview(api, { setupCode, adminPath }) {
   if (existsSync(adminPath)) {
     const admin = JSON.parse(readFileSync(adminPath, "utf8"));
@@ -153,8 +224,7 @@ async function seedPreview(api, { setupCode, adminPath }) {
   await completeSetupStep(api, "attendance", "rules");
   // Test meeting A is open for scans now and for the rest of today (UTC); Test meeting B is a week out.
   const now = Date.now(); const midnight = Date.parse(`${new Date(now).toISOString().slice(0, 10)}T00:00:00.000Z`);
-  const current = { startsAt: new Date(Math.max(now - 5 * 60_000, midnight)).toISOString(), endsAt: new Date(midnight + 86_400_000 - 60_000).toISOString() };
-  await api.ok("POST", "/module-setup/attendance/meeting", { title: "Test meeting A", ...current, required: true });
+  await api.ok("POST", "/module-setup/attendance/meeting", { title: panelMeetingTitle, ...meetingTimes("in_progress", now), required: true });
   await completeSetupStep(api, "attendance", "meeting");
   // Verified attendance input completes once a paired kiosk has checked in. Pair a web kiosk through the API, report in
   // once, finish the step and retire it, so the virtual kiosks below pair into a ready installation.
@@ -286,7 +356,7 @@ function superviseKiosk({ index, port, screenPort, linkUrl, directory, readerPat
         // Like a Pi after its update service runs, the kiosk now reports the release it was asked to install. It still
         // runs this checkout.
         let request; try { request = JSON.parse(readFileSync(join(directory, "update-request.json"), "utf8")); } catch { request = undefined; }
-        if (/^v\d+\.\d+\.\d+/.test(request?.targetTag ?? "")) { kiosk.release = request.targetTag.slice(1); writeFileSync(systemPath, `${JSON.stringify({ release: kiosk.release })}\n`); }
+        if (/^v\d+\.\d+\.\d+/.test(request?.targetTag ?? "")) kiosk.setRelease(request.targetTag.slice(1));
         note(`update installed; reporting release ${kiosk.release}`);
       }
       else note(`service exited (${code}); restarting`);
@@ -294,6 +364,8 @@ function superviseKiosk({ index, port, screenPort, linkUrl, directory, readerPat
     });
   };
   kiosk.stop = () => { kiosk.stopping = true; kiosk.child?.kill(); };
+  // The release applies when the service next starts, as the installer's version drop-in does on a Pi.
+  kiosk.setRelease = (release) => { kiosk.release = release; writeFileSync(systemPath, `${JSON.stringify({ release })}\n`); };
   kiosk.restart = () => { if (kiosk.child) { kiosk.restartRequested = true; kiosk.child.kill(); } else kiosk.start(); };
   kiosk.note = note;
   /** Sends one action to the kiosk's virtual hardware and returns its status. */
@@ -388,7 +460,15 @@ function startPanel({ port, kiosks, worker, api, urls }) {
       if (pathname === "/api/status" && request.method === "GET") {
         const members = ((await api.call("GET", "/admin/members")).body?.members ?? []).filter((member) => member.active !== false)
           .map((member) => ({ memberId: member.memberId, name: `${member.firstName} ${member.lastName}`.trim() }));
-        return json(response, 200, { cloudOnline: worker.online, ...urls, members, kiosks: await Promise.all(kiosks.map((kiosk) => kioskStatus(kiosk, api, worker))) });
+        const listed = (await api.call("GET", "/meetings")).body;
+        const meeting = Array.isArray(listed?.meetings) ? meetingStatus(listed.meetings, Date.now(), listed) : null;
+        return json(response, 200, { cloudOnline: worker.online, ...urls, members, meeting, meetingStates, kiosks: await Promise.all(kiosks.map((kiosk) => kioskStatus(kiosk, api, worker))) });
+      }
+      // The Worker picks the meeting when each scan arrives, so a new state applies to the very next scan.
+      if (pathname === "/api/meeting" && request.method === "POST") {
+        const meeting = await setMeetingState(api, (await readBody(request)).state);
+        for (const kiosk of kiosks) kiosk.note(`${panelMeetingTitle} set to: ${meetingStates[meeting.state] ?? meeting.state}`);
+        return json(response, 200, { meeting });
       }
       const reader = /^\/api\/kiosks\/(\d)\/reader$/.exec(pathname);
       if (reader && request.method === "POST") {
@@ -413,7 +493,13 @@ function startPanel({ port, kiosks, worker, api, urls }) {
             kiosk.nextUpdate = input.nextUpdate; await kiosk.hardware({ action: "next-update", outcome: input.nextUpdate }).catch(() => undefined);
           }
           if (input.nextBootClockSynced !== undefined) kiosk.nextBootClockSynced = Boolean(input.nextBootClockSynced);
-          return json(response, 200, { nextUpdate: kiosk.nextUpdate, nextBootClockSynced: kiosk.nextBootClockSynced });
+          // The release the kiosk reports from its next start, for scenarios that need a kiosk on a given release:
+          // the Worker refuses Require PIN for a Pi kiosk that reports a release from before member PINs.
+          if (input.release !== undefined) {
+            if (!parseReleaseVersion(input.release)) return json(response, 400, { error: "The release must be an official version such as 2.1.0 or 2.1.0-beta.3" });
+            kiosk.setRelease(input.release.replace(/^v/, "")); kiosk.note(`reports release ${kiosk.release} from its next start`);
+          }
+          return json(response, 200, { nextUpdate: kiosk.nextUpdate, nextBootClockSynced: kiosk.nextBootClockSynced, release: kiosk.release });
         }
         if (!kioskCommands.includes(input.command)) return json(response, 400, { error: `Command must be one of ${kioskCommands.join(", ")}` });
         kiosk.note(`dashboard command ${input.command} queued`);

@@ -89,7 +89,7 @@ export function DiscordLabelReconciliation({ preview, onConfirm, onCancel, busy 
           </tr>)}</tbody>
         </table></div>
       </>}
-      {preview.unmatchedCount > 0 && <p className="discord-reconcile-note">{count(preview.unmatchedCount, "Discord user")} with {role} {preview.unmatchedCount === 1 ? "isn't" : "aren't"} linked to anyone on the roster. They're listed in Debug tools on the Kiosks page and won't be changed.</p>}
+      {preview.unmatchedCount > 0 && <p className="discord-reconcile-note">{count(preview.unmatchedCount, "Discord user")} with {role} {preview.unmatchedCount === 1 ? "isn't" : "aren't"} linked to anyone on the roster. They're listed in Debug tools on the Kiosks page and won't be changed. Anyone who links their Discord account later keeps the role and gets the label.</p>}
     </>}
     {state && <p className="ui-status settings-notice" data-tone={state.tone} role="status">{state.message}</p>}
     <div className="discord-reconcile-footer">

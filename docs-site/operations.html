@@ -14,7 +14,7 @@
 <header class="page-header"><div><p class="eyebrow">Daily operations</p><h1>Operate LancerLogin</h1><p>Run meetings, keep the roster current, report on attendance, and look after the installation's data and access.</p></div></header>
 <main id="main" class="page">
   <h2 id="roles">Roles</h2>
-  <p><strong>Admins</strong> manage everything, including settings, access, integrations, modules, data, and updates. <strong>Operators</strong> run the modules they are assigned to: for Attendance, that means meetings, attendance corrections, reports, and kiosk status. Operators can view the roster but not change it. Being on the roster does not give anyone dashboard access.</p>
+  <p><strong>Admins</strong> manage everything, including settings, access, integrations, modules, data, and updates. <strong>Operators</strong> run the modules they are assigned to: for Attendance, that means meetings, attendance corrections, reports, and kiosk status. Operators can also approve <a href="#member-pins">kiosk PIN requests</a> and reset or unlock a member's kiosk PIN. Operators can view the roster but not change it. Being on the roster does not give anyone dashboard access.</p>
   <p>To give someone access, open <span class="ui-path">Settings <span>›</span> Access</span>, create an Admin or Operator account, and optionally link it to their roster entry. Choose the modules an Operator can use under <strong>Module access</strong> when you edit their account.</p>
 
   <h2 id="navigation">Find your way around</h2>
@@ -50,7 +50,7 @@
     <li>Choose <strong>Preview roster</strong> and check every change. Nothing is saved until you confirm.</li>
   </ol>
   <p>Making a member inactive keeps their attendance history and any dashboard account. Meetings held while a member is inactive do not count against them.</p>
-  <p>Admins add, rename, and retire member labels, such as a class or team, in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Labels</span>, and link a label to a Discord role there. They give a label an attendance policy in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Attendance rules</span>. A meeting can be for all members or only for selected labels.</p>
+  <p>Admins add, rename, and retire member labels, such as a class or team, in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Labels</span>, and link a label to a Discord role there. See <a href="#discord-roles">Keep Discord roles in step with labels</a>. They give a label an attendance policy in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Attendance rules</span>. A meeting can be for all members or only for selected labels.</p>
 
   <h2 id="reports">Report on attendance</h2>
   <p><strong>Reports</strong> opens on the <strong>Leaderboard</strong>, with period, roster, label, and sorting controls, plus a <strong>Below target</strong> panel of members below an attendance policy and contests waiting for review. Saved reports appear as tabs. Choose <strong>+</strong> to build a report: pick the period, members, meetings, and columns, then save it for yourself or share it with other staff.</p>
@@ -61,9 +61,10 @@
   <div class="task-grid">
     <article class="task-card"><span>G</span><h3>Google Calendar</h3><p>Connect a calendar you can write to. In a meeting workspace, choose <strong>Sync configured calendars</strong> to send the meeting's title, notes, and times.</p></article>
     <article class="task-card"><span>R</span><h3>Resend email</h3><p>Send missed-meeting emails and individual attendance reports to the email on each member's roster entry.</p></article>
-    <article class="task-card"><span>D</span><h3>Discord</h3><p>Member commands, absence notices with a contest button, meeting events, and a kiosk status message.</p></article>
+    <article class="task-card"><span>F</span><h3>FIRST</h3><p>Look up FRC, FTC and FLL teams by number, for modules such as Guest Visits. See <a href="#first">Set up FIRST team lookup</a>.</p></article>
+    <article class="task-card"><span>D</span><h3>Discord</h3><p>Member commands, absence notices with a contest button, meeting events, kiosk sign-in codes, label roles, and a kiosk status message.</p></article>
   </div>
-  <figure class="annotated compact-shot"><img src="assets/settings-integrations.png" alt="LancerLogin Settings Integrations page, with the settings tabs Organization, Modules, Access, Integrations, Data and Updates, listing Google OAuth, Google Calendar, Resend email and Discord bot, each marked Disabled with its switch off."><figcaption>Each integration starts disabled. Turn one on to see its setup steps.</figcaption></figure>
+  <figure class="annotated compact-shot"><img src="assets/settings-integrations.png" alt="LancerLogin Settings Integrations page, with the settings tabs Organization, Modules, Access, Integrations, Data and Updates, listing Google OAuth, Google Calendar, Resend email and Discord bot, each marked Disabled with its switch off. The FIRST card, which current releases show between Resend email and Discord bot, is not in this picture."><figcaption>Each integration starts disabled. Turn one on to see its setup steps. The FIRST card has no switch.</figcaption></figure>
 
   <h2 id="google-calendar">Connect Google Calendar</h2>
   <p>Google Calendar uses its own OAuth client, separate from <a href="setup.html#google-oauth">Google sign-in</a>. Enter each value in <span class="ui-path">Settings <span>›</span> Integrations <span>›</span> Google Calendar</span>.</p>
@@ -90,6 +91,15 @@
   </ol>
   <p>The <code>onboarding@resend.dev</code> test sender delivers only to the email address of your own Resend account. If verification fails, the card shows Resend's own reason.</p>
 
+  <h2 id="first">Set up FIRST team lookup</h2>
+  <p>The <strong>FIRST</strong> card in <span class="ui-path">Settings <span>›</span> Integrations</span> lets modules fill in a team's name from its number, for example when Guest Visits records a visiting team. Only the team number is sent to FIRST. The card has no on/off switch: each program works once it has what it needs.</p>
+  <ol class="steps">
+    <li>For FRC or FTC, request a username and token from the <a href="https://frc-events.firstinspires.org/services/API">FRC Events API registration</a> or the <a href="https://ftc-events.firstinspires.org/services/API">FTC Events API registration</a>. FLL needs no username or token.</li>
+    <li>Enter the <strong>Username</strong> and <strong>Token</strong> in that program's row and choose <strong>Save</strong>. LancerLogin checks them with FIRST before saving. The token is stored encrypted and never shown again.</li>
+    <li>Under <strong>Test a team</strong>, enter a <strong>Team number</strong>, pick the <strong>Program</strong>, and check the answer.</li>
+  </ol>
+  <p>LancerLogin remembers FIRST's answers for up to seven days; <strong>Clear cached answers</strong> makes the next lookups ask FIRST again. <strong>Remove</strong> forgets a program's username and token. If a row says <strong>Saved, but can't be read</strong> after a restore, enter the token again and save.</p>
+
   <h2 id="discord-bot">Create the Discord bot</h2>
   <p>Follow these steps in order. Discord checks the Interactions Endpoint URL when you save it, and LancerLogin can answer only after its credentials are saved. Enter each value in <span class="ui-path">Settings <span>›</span> Integrations <span>›</span> Discord bot</span>.</p>
   <ol class="steps">
@@ -106,8 +116,29 @@
   <p>If you use private anomaly reports, add the bot to that private channel with <strong>View Channel</strong>, <strong>Send Messages</strong>, and <strong>Read Message History</strong>.</p>
 
   <h2 id="discord-commands">Enable the Discord member commands</h2>
-  <p>In <span class="ui-path">Settings <span>›</span> Integrations</span>, save the bot token, Application ID, public key, Server ID, and attendance channel ID, then choose <strong>Send Discord verification</strong>. LancerLogin checks that the bot token belongs to that application and server and creates or updates exactly the guild-scoped <code>/pair</code>, <code>/attendance-report</code>, <code>/label</code>, <code>/outreach-submit</code>, and <code>/outreach-correction</code> commands. No manual HTTP request or command payload is required.</p>
-  <p>The Interactions Endpoint URL goes into Discord only after you save credentials, as described in <a href="#discord-bot">Create the Discord bot</a>. Commands work only in your server and return ephemeral responses, visible only to the member who ran them. <code>/attendance-report</code> reports only on the member's own linked roster entry. The Outreach commands need the Outreach plugin turned on and set up. Exact submission retries reuse the same receipt, and corrections wait for staff review before totals change. If commands go missing, choose <strong>Reconcile Discord commands</strong>.</p>
+  <p>In <span class="ui-path">Settings <span>›</span> Integrations</span>, save the bot token, Application ID, public key, Server ID, and attendance channel ID, then choose <strong>Send Discord verification</strong>. LancerLogin checks that the bot token belongs to that application and server and creates or updates exactly the guild-scoped <code>/pair</code>, <code>/attendance-report</code>, <code>/code</code>, <code>/label</code>, <code>/outreach-submit</code>, and <code>/outreach-correction</code> commands. No manual HTTP request or command payload is required.</p>
+  <p>The Interactions Endpoint URL goes into Discord only after you save credentials, as described in <a href="#discord-bot">Create the Discord bot</a>. Commands work only in your server and return ephemeral responses, visible only to the member who ran them. <code>/attendance-report</code> reports only on the member's own linked roster entry. <code>/code</code> gives the member a one-time code to sign in at a kiosk that takes Discord codes. The Outreach commands need the Outreach plugin turned on and set up. Exact submission retries reuse the same receipt, and corrections wait for staff review before totals change. If commands go missing, choose <strong>Reconcile Discord commands</strong>.</p>
+
+  <h2 id="discord-roles">Keep Discord roles in step with labels</h2>
+  <p>In <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Labels</span>, an Admin links a label to a Discord role in the label's <strong>Discord role</strong> column. The bot needs <strong>Manage Roles</strong>, the <strong>Server Members Intent</strong>, and a role above the roles it manages. Each linked label then has one of two directions:</p>
+  <table class="credential-table">
+    <thead><tr><th scope="col">Direction</th><th scope="col">What happens</th></tr></thead>
+    <tbody>
+      <tr><td>Dashboard to Discord</td><td>The default. Nothing changes in Discord until you choose <strong>Sync to Discord</strong> for the label, or <strong>Sync all linked roles</strong>, and confirm the preview. A sync also removes the role from anyone in the server who does not hold the label.</td></tr>
+      <tr><td>Two-way</td><td>LancerLogin checks Discord every 5 minutes. A role added or removed in Discord changes the member's label, and label changes in the dashboard reach Discord. <strong>Sync all linked roles</strong> skips these labels.</td></tr>
+    </tbody>
+  </table>
+  <p>Choosing <strong>Two-way</strong> opens <strong>Turn on two-way sync</strong>, which lists everyone whose label and role disagree. Choose the correct side for each person, then choose <strong>Confirm and turn on two-way sync</strong>. Nothing changes until you confirm.</p>
+  <section class="notice"><strong>A newly linked member keeps what they have.</strong> Two-way sync covers only members who have linked their Discord account with <code>/pair</code>. The first time a newly linked member is checked, nothing is removed: if they already hold the role in Discord, they get the label, and if they already have the label, they get the role. If they should not have the label, remove the role in Discord before they link.</section>
+  <p>With two-way sync, anyone who can give out the role in Discord can change the label, and with it which meetings and attendance policies apply to a member. After restoring an entire-installation backup, a two-way label is paused until an Admin chooses <strong>Review differences</strong>.</p>
+
+  <h2 id="member-pins">Approve and reset kiosk PINs</h2>
+  <p>A kiosk with <strong>Require PIN</strong> turned on asks each member for a 4 to 6 digit PIN after they confirm their name. See <a href="kiosk.html#web-kiosk-sign-in">Choose how members sign in</a>. Admins and Operators look after PINs in two places:</p>
+  <ul>
+    <li><strong>PIN requests</strong>, on the kiosk's <strong>Manage kiosk</strong> page, lists members waiting at that kiosk to choose a PIN. Check that the person at the kiosk is who the request names, then approve it; the member then types their new PIN twice at the kiosk. Decline a request you do not recognize.</li>
+    <li>The <strong>Kiosk PIN</strong> card, on a member's page in <strong>Roster</strong>, shows whether a PIN is set and how many wrong tries it has had. <strong>Reset PIN</strong> removes a forgotten PIN so the member can ask for a new one at a kiosk. <strong>Unlock</strong> ends a lock or a wait after wrong tries.</li>
+  </ul>
+  <p>Nobody can view a PIN; only a protected hash is stored. An Admin can make a PIN lock after repeated wrong tries with <strong>Kiosk PIN lockout</strong> in <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Attendance <span>›</span> Meeting configuration</span>. It is off by default.</p>
 
   <h2 id="modules">Turn modules on or off</h2>
   <p>Open <span class="ui-path">Settings <span>›</span> Modules <span>›</span> Manage modules</span>. Turning a module on opens its setup. Turning a module off hides its pages at once and keeps its data for seven days before deleting it; turn it back on within that time to keep everything. Adding a new module with <strong>Add module</strong> commits a change that <strong>Apply changes</strong> deploys as an update; see <a href="updates.html#plugins">Add, update, or remove plugins</a>.</p>

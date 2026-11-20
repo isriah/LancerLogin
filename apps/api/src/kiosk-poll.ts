@@ -27,7 +27,7 @@ export async function kioskPoll(request: Request, { db, credentialHash, secret, 
   const bindings: unknown[] = [credentialHash, new Date(Date.now() - 15 * 60_000).toISOString()];
   if (fingerprints) bindings.push(revisionText === null ? -1 : Number(revisionText));
   const row = await db.prepare(`WITH current_kiosk AS MATERIALIZED (
-      SELECT id,name,pairing_code_id AS pairingId,pairing_bound AS pairingBound,configured_authentication_method AS authenticationMethod,kind,member_lookup AS memberLookup,require_pin AS requirePin FROM kiosks
+      SELECT id,name,pairing_code_id AS pairingId,pairing_bound AS pairingBound,configured_authentication_method AS authenticationMethod,kind,member_lookup AS memberLookup,require_pin AS requirePin,discord_code AS discordCode,discord_code_backup AS discordCodeBackup FROM kiosks
       WHERE installation_id='primary' AND token_hash=? AND active=1
     )${fingerprints ? `, maintenance_lock AS MATERIALIZED (
       SELECT 1 FROM web_update_requests WHERE installation_id='primary' AND maintenance=1 LIMIT 1
@@ -47,6 +47,8 @@ export async function kioskPoll(request: Request, { db, credentialHash, secret, 
       ${configuration ? `,(SELECT json_object('organizationName',organization_name,'subtitle',subtitle,'logoData',logo_data,
         'primaryColor',primary_color,'secondaryColor',secondary_color,'logoBackdrop',logo_backdrop,'authenticationMethod',k.authenticationMethod,'kind',k.kind,'memberLookup',k.memberLookup,
         'requirePin',json(CASE WHEN k.requirePin=1 AND k.authenticationMethod='member_id' THEN 'true' ELSE 'false' END),
+        'discordCode',json(CASE WHEN k.discordCode=1 AND k.authenticationMethod='member_id' THEN 'true' ELSE 'false' END),
+        'discordCodeBackup',CASE WHEN k.discordCodeBackup='always' THEN 'always' ELSE 'offline' END,
         'pinLockout',json_object('enabled',json(CASE WHEN pin_lockout_enabled=1 THEN 'true' ELSE 'false' END),'attempts',pin_lockout_attempts,'minutes',pin_lockout_minutes),
         'fingerprintMinimumScore',COALESCE((SELECT minimum_score FROM kiosk_fingerprint_match_settings WHERE installation_id='primary'),0),
         'fingerprintReenrollScore',COALESCE((SELECT CASE WHEN minimum_score>0 THEN minimum_score+20 END FROM kiosk_fingerprint_match_settings WHERE installation_id='primary'),70))

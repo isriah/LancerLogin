@@ -300,7 +300,7 @@ export function AddModuleButton({ packages }: { packages: ModulePackages }) {
 /** Whether modules can be added, updated and removed from the dashboard, and the result of the last change. */
 export function ModuleRepositoryStatus({ packages }: { packages: ModulePackages }) {
   const { state, error, notice, ready, locked } = packages;
-  const credentialText = !state ? "" : state.credential.state === "missing" ? "Adding, updating and removing modules from the dashboard is not set up yet. Settings > Updates shows how to add the module selection credential." : state.credential.state === "expired" ? "The module selection credential (LANCERLOGIN_MODULE_SELECTION_TOKEN) has expired. Replace the production environment secret with a new token, then run the \"Refresh web update credential\" workflow." : !state.repository ? "The private deployment repository is not configured." : `Module changes are committed to ${state.repository}. ${state.credential.expiresAt ? `Credential valid until ${new Date(state.credential.expiresAt).toLocaleDateString()}.` : "The credential has no expiry."}`;
+  const credentialText = !state ? "" : state.credential.state === "missing" ? "Adding, updating and removing modules from the dashboard is not set up yet. Settings > Updates shows how to add the module management credential." : state.credential.state === "expired" ? "The module management credential (LANCERLOGIN_MODULE_SELECTION_TOKEN) has expired. Replace the production environment secret with a new token, then run the \"Refresh web update credential\" workflow." : !state.repository ? "The private deployment repository is not configured." : `Module changes are committed to ${state.repository}. ${state.credential.expiresAt ? `Credential valid until ${new Date(state.credential.expiresAt).toLocaleDateString()}.` : "The credential has no expiry."}`;
   if (!state && !error && !notice) return null;
   return <div className="module-repository-status">
     {notice && <p className="ui-status settings-notice" data-tone="success" role="status">{notice}</p>}
@@ -320,7 +320,7 @@ export function PendingModuleChanges({ packages }: { packages: ModulePackages })
   const id = useId();
   if (!state) return null;
   // The selection credential is optional: without it the installation works and the selection is edited in the repository.
-  const optionalCredentialText = "Reading and changing the module selection from the dashboard needs the optional module selection token, LANCERLOGIN_MODULE_SELECTION_TOKEN. Without it, installed modules keep working; edit lancerlogin.modules.json in the private deployment repository instead. See \"Module selection credential\" in docs/MODULE-PLUGINS.md.";
+  const optionalCredentialText = "Reading and changing the module selection from the dashboard needs the optional module management token, LANCERLOGIN_MODULE_SELECTION_TOKEN. Without it, installed modules keep working; edit lancerlogin.modules.json in the private deployment repository instead. See \"Module management credential\" in docs/MODULE-PLUGINS.md.";
   const applying = state.activeUpdate?.mode === "modules" || updateActive;
   return <section className="plugin-pending" aria-labelledby={`${id}-pending-title`}>
     <h3 id={`${id}-pending-title`}>Pending changes{state.pending.length > 0 && <> <span className="plugin-pending-badge">Not deployed</span></>}</h3>
@@ -360,7 +360,7 @@ export function ModuleMigrationNotice({ onRequired }: { onRequired?: (required: 
     {required.map((module) => <div key={module.id} className="settings-callout module-migration" role="group" aria-labelledby={`migration-${module.id}`}>
       <p id={`migration-${module.id}`}><strong>{module.label} is in use and is now a separate module.</strong></p>
       <p>{module.label} is now installed from its own repository, and updating without it would stop {module.label}. Keep it by adding the module, which carries its data and settings over unchanged, or remove it: turn it off in Settings &gt; Modules, where its data is retained for seven days.</p>
-      {!ready && state && <p className="field-help">{state.credential.state !== "ready" ? "Adding a module from the dashboard needs the module selection credential, LANCERLOGIN_MODULE_SELECTION_TOKEN; Setup status below shows how to add it. You can instead add the module to lancerlogin.modules.json in the private deployment repository." : "Module changes are locked while a web update is in progress."}</p>}
+      {!ready && state && <p className="field-help">{state.credential.state !== "ready" ? "Adding a module from the dashboard needs the module management credential, LANCERLOGIN_MODULE_SELECTION_TOKEN; Setup status below shows how to add it. You can instead add the module to lancerlogin.modules.json in the private deployment repository." : "Module changes are locked while a web update is in progress."}</p>}
       <div className="module-actions">
         <button className="ui-button ui-button--primary primary-button" type="button" disabled={!ready || !module.plugin} onClick={() => { setNotice(""); setDraft({ action: "add", id: module.id, source: module.plugin!.source, commit: module.plugin!.commit }); }}>Keep {module.label} (add module)</button>
         <a className="ui-button" href="/settings/modules">Remove {module.label}</a>

@@ -13,7 +13,7 @@ export const attendanceByLabelPreset = Object.freeze({
 });
 
 /** The periods the preset offers, most useful first. */
-export const presetPeriodOptions: readonly (readonly [string, string])[] = [["last_90", "Last 90 days"], ["current_month", "This month"], ["last_month", "Last month"], ["baseline", "Attendance baseline"], ["all", "All history"]];
+export const presetPeriodOptions: readonly (readonly [string, string])[] = [["last_90", "Last 90 days"], ["current_month", "Current month"], ["last_month", "Last month"], ["baseline", "Attendance baseline"], ["all", "All history"]];
 
 /**
  * The preset's report: Member, Overall rate, then each chosen label's column set in the order given, filtered to members

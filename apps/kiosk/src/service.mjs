@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInstallationActivities, createUnpairingStore } from "./unpairing-store.mjs";
+import { cloudRecheckMs, createCloudRecheck, workerReachable } from "./cloud-recheck.mjs";
 import { completeKioskCommand, createDeliveryBackoff, kioskApiRequest, KioskApiError, fetchKioskCommand, fetchKioskConfiguration, fetchKioskEnrollment, fetchKioskRoster, pairInstallation, sendAttendance, sendHeartbeat, sendKioskEnrollmentProgress, sendLocalEnrollment, sendScanReviews } from "./cloud-client.mjs";
 import { createEnrollmentReports } from "./enrollment-reports.mjs";
 import { createDashboardEnrollment } from "./dashboard-enrollment.mjs";
@@ -22,7 +23,7 @@ import { createDesktopControl } from "./desktop-control.mjs";
 import { fingerprintDiagnostic, fingerprintFailureReason } from "./fingerprint-diagnostics.mjs";
 import { createCredentialStore } from "./credential-store.mjs";
 import { createIdentityInput } from "./identity-input.mjs";
-import { identityReadyState, identityUnknownState, normalizeIdentityMethod } from "./identity-methods.mjs";
+import { identityReadyState, identityUnknownState, memberModeLabel, normalizeDiscordCode, normalizeIdentityMethod } from "./identity-methods.mjs";
 import { resolveIdentityObservation } from "./identity-resolver.mjs";
 import { createRosterCache, visibleMember } from "./roster-cache.mjs";
 import { createPinFailureStore, normalizeMemberSettings, pinLockedUntil, reportPinFailures, validPin, verifyCachedPin } from "./member-pins.mjs";
@@ -38,7 +39,7 @@ import { eraseUnlinkedTemplates } from "./reader-cleanup.mjs";
 import { createFingerprintResetClient } from "./fingerprint-reset-client.mjs";
 import { createFingerprintReset } from "./fingerprint-reset.mjs";
 import { kioskState, kioskStates } from "./kiosk-states.mjs";
-import { kioskDisplayForQueuedScan } from "./kiosk-presentation.mjs";
+import { kioskDisplayForQueuedScan, kioskDisplayForRefusal } from "./kiosk-presentation.mjs";
 import { createIdentityScanner } from "./scanner.mjs";
 import { createNetworkPinStore } from "./network-pin.mjs";
 import { createHostAllowlist, createSetupCode, isLoopbackAddress } from "./local-access.mjs";
@@ -112,22 +113,28 @@ const pairingCache = createPairingCache({
   onValue: config => { if (config) { const newlyPaired = !state.paired; state = { ...state, paired: true, kioskName: config.kioskName }; if (newlyPaired) display = readyDisplay(); } },
 });
 
-function readyDisplay() { return kioskState("ready", identityReadyState(authenticationMethod, memberSettings)); }
-function unavailableDisplay() { return authenticationMethod === "fingerprint" ? kioskState("reader_offline") : kioskState("reader_offline", { message: "Input unavailable", detail: `${authenticationMethod === "member_id" ? "Member ID" : authenticationMethod.toUpperCase()} input is not responding` }); }
+// At a Discord code kiosk the start screen follows the connection: the code entry while the cloud is reachable, the backup method with a note while it is not.
+// Codes are also held back while earlier scans wait in the queue though the server answers (see recordCodeAttendance).
+let codesHeld = false;
+const readyText = () => identityReadyState(authenticationMethod, { ...memberSettings, cloudOnline: state.cloudOnline, codesHeld });
+function readyDisplay() { return kioskState("ready", readyText()); }
+function unavailableDisplay() { return authenticationMethod === "fingerprint" ? kioskState("reader_offline") : kioskState("reader_offline", { message: "Input unavailable", detail: `${authenticationMethod === "member_id" ? memberModeLabel(memberSettings) : authenticationMethod.toUpperCase()} input is not responding` }); }
 function currentDisplay() {
   if (display.id.startsWith("enroll_")) return display;
   if (operatorPresence.status().captureSuspended) return kioskState("operator_paused");
   if (state.paired && !attendanceClock.isVerified()) return kioskState("clock_required", { message: "Confirm date and time", detail: "Open maintenance and enter the local PIN to set the current date and time." });
   if (fingerRemovalRequired && authenticationMethod === "fingerprint") return kioskState("finger_removal");
+  // The connection can change while the start screen is up.
+  if (display.id === "ready" && codeMode()) { const { notice, ...shown } = display; return { ...shown, ...readyText() }; }
   return display;
 }
 async function loadAuthenticationMethod() { try { const saved = JSON.parse(await readFile(authenticationPath, "utf8")); authenticationMethod = normalizeIdentityMethod(saved.authenticationMethod); memberSettings = normalizeMemberSettings({ ...saved, authenticationMethod }); } catch { authenticationMethod = "fingerprint"; memberSettings = normalizeMemberSettings(); } return authenticationMethod; }
-// The method is saved with the member lookup, Require PIN and the lockout setting, so an offline restart keeps all four.
+// The method is saved with the member lookup, Require PIN, the lockout setting and the Discord code settings, so an offline restart keeps them all.
 async function saveAuthenticationMethod(settings) {
   const next = normalizeIdentityMethod(settings?.authenticationMethod); const nextMember = normalizeMemberSettings({ ...settings, authenticationMethod: next });
-  const methodChanged = next !== authenticationMethod, modeChanged = nextMember.memberLookup !== memberSettings.memberLookup || nextMember.requirePin !== memberSettings.requirePin;
-  if (!methodChanged && !modeChanged && JSON.stringify(nextMember.pinLockout) === JSON.stringify(memberSettings.pinLockout)) return;
-  if (methodChanged || modeChanged) attendanceInputGeneration++;
+  const methodChanged = next !== authenticationMethod, modeChanged = nextMember.memberLookup !== memberSettings.memberLookup || nextMember.requirePin !== memberSettings.requirePin || nextMember.discordCode !== memberSettings.discordCode;
+  if (!methodChanged && !modeChanged && JSON.stringify(nextMember.pinLockout) === JSON.stringify(memberSettings.pinLockout) && nextMember.discordCodeBackup === memberSettings.discordCodeBackup) return;
+  if (methodChanged || modeChanged) { attendanceInputGeneration++; codesHeld = false; }
   await mkdir(dirname(authenticationPath), { recursive: true, mode: 0o700 }); const temporary = `${authenticationPath}.${process.pid}.tmp`; await writeFile(temporary, `${JSON.stringify({ authenticationMethod: next, ...nextMember })}\n`, { mode: 0o600, flag: "wx" }); await rename(temporary, authenticationPath); await chmod(authenticationPath, 0o600);
   authenticationMethod = next; memberSettings = nextMember;
   if (methodChanged || modeChanged) identityInput.clear();
@@ -163,13 +170,15 @@ let attendanceFlush;
 const deliveryBackoff = createDeliveryBackoff();
 function flushAttendance(config) {
   if (!attendanceFlush) attendanceFlush = (async () => {
-    const acknowledgements = [];
+    const acknowledgements = []; let unreachable = false;
     // Scans stay durably queued during the backoff; only replay is deferred.
     if (deliveryBackoff.blocked()) return { delivered: [], acknowledgements, deferred: true };
     const delivered = await queue.flush(async (event) => {
       let result;
       try { result = await sendAttendance(config, event, { fetchImpl: boundedCloudFetch }); }
-      catch (error) { deliveryBackoff.failed(error); throw error; }
+      // No answer, a timeout or a server error means the server is unreachable. A refusal the kiosk does not know
+      // (error.transient) is an answer: the scan stays queued, but the connection works.
+      catch (error) { deliveryBackoff.failed(error); if (!error?.transient) unreachable = true; throw error; }
       deliveryBackoff.succeeded();
       acknowledgements.push({ eventId: event.eventId, ...result });
       return result;
@@ -178,7 +187,9 @@ function flushAttendance(config) {
       if (prepared.rejected) acknowledgements.push({ eventId: event.eventId, ...prepared });
       return prepared;
     } });
-    return { delivered, acknowledgements };
+    // Discord codes return once nothing waits ahead of them.
+    if (codesHeld && !deliveryBackoff.blocked() && !(await queue.pending()).length) codesHeld = false;
+    return { delivered, acknowledgements, ...(unreachable ? { unreachable: true } : {}) };
   })().finally(() => { attendanceFlush = undefined; });
   return attendanceFlush;
 }
@@ -399,14 +410,21 @@ async function pollCommandsNow(suppliedCommand, expectedConfig) {
   finally { commandPolling = false; }
 }
 async function showDisplay(id, overrides = {}) { if (displayTimer) clearTimeout(displayTimer); display = kioskState(id, overrides); const duration = overrides.durationMs ?? kioskStates[id]?.durationMs; if (duration) displayTimer = setTimeout(() => { display = state.readerOnline ? readyDisplay() : unavailableDisplay(); void setFeedback(display.id); }, duration); }
+// A refused scan: the reason when the Worker gave one the kiosk knows (kioskDisplayForRefusal), otherwise the generic screen.
+async function showRejectedScan(result) {
+  const notice = kioskDisplayForRefusal(result.refusal);
+  if (notice) await showDisplay(notice.id, { message: notice.message, detail: notice.detail });
+  else await showDisplay("rejected", { detail: result.error || "Ask an operator for help." });
+}
 async function setFeedback(id) { const definition = kioskStates[id]; if (authenticationMethod === "fingerprint" && sensor && definition?.led) await useSensor(() => sensor.led(definition.led)); }
 // ---- Member ID confirm, member search and member PINs ----
 const memberIdMode = () => authenticationMethod === "member_id";
 const pinMode = () => memberIdMode() && memberSettings.requirePin;
+function codeMode() { return memberIdMode() && memberSettings.discordCode; }
 const refusal = (status, code, error, extra = {}) => ({ status, body: { error, code, ...extra } });
 const memberName = member => `${member.firstName} ${member.lastName}`.trim();
 function markCloud(online) { state.cloudOnline = online; if (online) { state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; } else state.errorCategory = "cloud_sync"; }
-function sendPinFailures(config) { return reportPinFailures(pinFailures, failures => kioskApiRequest(config, "POST", "/kiosk/pin-failures", { failures }, { fetchImpl: boundedCloudFetch })); }
+function sendPinFailures(config) { return reportPinFailures(pinFailures, (failures, reportId) => kioskApiRequest(config, "POST", "/kiosk/pin-failures", { reportId, failures }, { fetchImpl: boundedCloudFetch })); }
 const pinAttendanceAllowed = generation => attendanceAllowed() && attendanceClock.isVerified() && generation === attendanceInputGeneration && pinMode();
 class LocalRefusal extends Error { constructor(status, message, code) { super(message); this.status = status; this.code = code; } }
 /** A kiosk endpoint call for PIN setup. No connection becomes a 503 the screen can explain. */
@@ -449,7 +467,7 @@ async function onlinePinOutcome(member, result) {
     return refusal({ pin_incorrect: 403, pin_locked: 423, pin_not_set: 409, pin_throttled: 429 }[result.code] ?? 400, result.code, result.error || "Wrong PIN.", { ...(Number.isInteger(result.attemptsLeft) ? { attemptsLeft: result.attemptsLeft } : {}), ...(result.lockedUntil ? { lockedUntil: result.lockedUntil } : {}) });
   }
   await pinFailures.recordSuccess(member.memberId).catch(() => undefined);
-  if (result.rejected) { await showDisplay("rejected", { detail: result.error || "Ask an operator for help." }); return { status: 200, body: { recorded: false, rejected: true } }; }
+  if (result.rejected) { await showRejectedScan(result); return { status: 200, body: { recorded: false, rejected: true } }; }
   if (result.rescan) { await showDisplay("rescan", { message: "Try again", detail: "Enter your member ID again in a moment." }); return { status: 200, body: { recorded: false, rescan: true } }; }
   const shown = { name: result.member?.displayName || memberName(member), meetingTitle: result.meeting?.title };
   await showDisplay(result.duplicate ? "duplicate" : result.action === "check_out" ? "goodbye" : "welcome", shown);
@@ -470,6 +488,55 @@ async function offlinePinOutcome(member, pin, event, generation) {
   await showDisplay(queued.id, { name: memberName(member), detail: event.clock?.verified === false ? "Saved on kiosk | Clock needs sync before attendance can be confirmed" : queued.detail });
   void loadPairing().then(config => config && flushAttendance(config)).catch(() => undefined);
   return { status: 202, body: { queued: true } };
+}
+// A scan at a Discord code kiosk: the member typed the six digits from /code and the server finds them. The scan is sent
+// once, straight away, and its answer decides what the screen shows. A code is checked online only, so it is never
+// queued, written to disk, logged or sent again; with no answer the screen offers the backup method instead. Scans
+// already waiting go first, to keep their order: while any of them stays queued the code is not sent at all, and the
+// start screen is the backup method, whose scans join the queue in order.
+const codeAttendanceAllowed = generation => attendanceAllowed() && attendanceClock.isVerified() && generation === attendanceInputGeneration && codeMode();
+let codeScanRunning = false;
+async function recordCodeAttendance(code, generation) {
+  const config = await loadPairing(); if (!config) throw new Error("Pair this kiosk before recording attendance");
+  if (!codeAttendanceAllowed(generation)) throw new Error("Attendance mode changed. Return to attendance and scan again.");
+  const event = { eventId: randomUUID(), ...await attendanceClock.capture(), ...(config.pairingId ? { pairingId: config.pairingId } : {}) };
+  // Scans already waiting go first, so the server sees them in the order they were taken.
+  let flushed;
+  if ((await queue.pending()).length || deliveryBackoff.blocked()) flushed = await flushAttendance(config).catch(() => undefined);
+  if (!codeAttendanceAllowed(generation)) throw new Error("Attendance mode changed. Return to attendance and scan again.");
+  if ((await queue.pending()).length || deliveryBackoff.blocked()) {
+    // Some stayed queued, so the code is not sent: it stays unused and the member can try it again or use the backup.
+    if (flushed?.unreachable) { markCloud(false); return refusal(503, "unreachable", "Couldn't reach the server. Discord codes need a network connection."); }
+    // The server answers, but an earlier scan is refused, waiting out a retry delay or waiting for the clock.
+    codesHeld = true;
+    return refusal(503, "scans_waiting", "Earlier scans are still waiting to sync, so your code was not used.");
+  }
+  let result;
+  try { result = await sendAttendance(config, { ...event, discordCode: code }, { fetchImpl: boundedCloudFetch }); }
+  catch (error) {
+    // An answer the kiosk does not know (not a code refusal, not a scan rejection): the server is there, the scan is not recorded.
+    if (error?.transient && error.status < 500) { markCloud(true); await showDisplay("rejected", { message: "Couldn't check your code", detail: "Try again in a moment. If the code stops working, run /code again.", durationMs: 3500 }); return { status: 200, body: { recorded: false, rejected: true } }; }
+    // No answer, a timeout or a server error: codes can't be checked, so the kiosk falls back to its backup method.
+    markCloud(false);
+    return refusal(503, "unreachable", "Couldn't reach the server. Discord codes need a network connection.");
+  }
+  markCloud(true);
+  if (result.codeRefused) {
+    const wait = { ...(result.retryAt ? { retryAt: result.retryAt } : {}), ...(Number.isInteger(result.retryAfterSeconds) ? { retryAfterSeconds: result.retryAfterSeconds } : {}) };
+    if (result.code === "code_throttled") return refusal(429, "code_throttled", result.error || "Too many wrong codes. Try again in a few minutes.", wait);
+    if (result.code === "code_not_enabled") {
+      // Discord codes were turned off on the dashboard since the last poll: load the new settings before answering.
+      await fetchKioskConfiguration(config, { fetchImpl: boundedCloudFetch }).then(remote => applyRemoteConfiguration(config, remote)).catch(() => undefined);
+      return refusal(409, "code_not_enabled", "This kiosk does not take Discord codes.");
+    }
+    if (result.code === "invalid_code") return refusal(400, "invalid_code", "A Discord code is 6 digits.");
+    return refusal(403, "code_invalid", "That code is wrong or has expired. Run /code in Discord for a new one.", wait);
+  }
+  if (result.rejected) { await showRejectedScan(result); return { status: 200, body: { recorded: false, rejected: true } }; }
+  // The member scanned on another kiosk moments apart. The code may be spent, so they ask for a new one.
+  if (result.rescan) { await showDisplay("rescan", { message: "Try again", detail: "Run /code again and enter the new code in a moment." }); return { status: 200, body: { recorded: false, rescan: true } }; }
+  await showDisplay(result.duplicate ? "duplicate" : result.action === "check_out" ? "goodbye" : "welcome", { name: result.member?.displayName || undefined, meetingTitle: result.meeting?.title });
+  return { status: 200, body: { recorded: true } };
 }
 // R503 answers for a poor image: the reader works, so the member is asked to place the finger again instead of
 // seeing "Reader offline". Any other failure, including no answer at all, still means the reader is offline.
@@ -492,7 +559,7 @@ async function captureIdentity() {
   if (!memberId) return { status: "unknown", detail: "This fingerprint is not linked to an active roster member" };
   return { status: "identified", memberId, identityKey: `fingerprint:${observation.slot}`, ...(Number.isInteger(observation.score) ? { matchScore: observation.score } : {}) };
 }
-const scanner = createIdentityScanner({ captureIdentity, captureTime: () => attendanceClock.capture(), now: () => performance.now(), captureAllowed: () => !shuttingDown && attendanceClock.isVerified() && !operatorPresence.status().captureSuspended && !fingerRemovalRequired, setFeedback, queue, loadPairing, flushAttendance, weakReading, onDisplay: showDisplay, onInput: (online) => { readerObserved = true; state.readerOnline = online; if (online && display.id === "reader_offline") { display = readyDisplay(); void setFeedback(display.id).catch(() => undefined); } }, onCloud: (online) => { state.cloudOnline = online; if (online) { state.lastSyncAt = new Date().toISOString(); state.errorCategory = undefined; } else state.errorCategory = "cloud_sync"; } });
+const scanner = createIdentityScanner({ captureIdentity, captureTime: () => attendanceClock.capture(), now: () => performance.now(), captureAllowed: () => !shuttingDown && attendanceClock.isVerified() && !operatorPresence.status().captureSuspended && !fingerRemovalRequired, setFeedback, queue, loadPairing, flushAttendance, weakReading, onDisplay: showDisplay, onInput: (online) => { readerObserved = true; state.readerOnline = online; if (online && display.id === "reader_offline") { display = readyDisplay(); void setFeedback(display.id).catch(() => undefined); } }, onCloud: online => markCloud(online) });
 const operatorPresence = createOperatorPresence({ restored: await presenceRestart.take(presenceBinding(await loadPairing().catch(() => undefined))), onSuspend: () => { attendanceInputGeneration++; identityInput.clear(); requireFingerRemoval(); void scanner.suspend("operator"); } });
 const dashboardEnrollment = createDashboardEnrollment({
   loadPairing,
@@ -643,8 +710,8 @@ async function handleRequest(request, response) {
     const paired = Boolean(await loadPairing()) && !changing;
     response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", paired, setupReady: !changing, setupCodeRequired: !paired })); return;
   }
-  if (pathname === "/health" && request.method === "GET") { await loadPairing(); const attendance = changing ? undefined : await queue.diagnostics(); response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", ...state, ...(changing ? { paired: false, kioskName: undefined, cloudOnline: false } : {}), setupReady: !changing, authenticationMethod, memberLookup: memberSettings.memberLookup, requirePin: memberSettings.requirePin, pendingEvents: attendance?.pending, attendance, clock: await attendanceClock.status(), fingerprintSync: changing ? undefined : await fingerprintDiagnostics(), ...(!state.paired && !changing ? { setupCode: setupCode.current() } : {}) })); return; }
-  if (pathname === "/display-state" && request.method === "GET") { const attendance = changing ? undefined : await queue.diagnostics(); const clock = await attendanceClock.status(); response.end(JSON.stringify({ display: changing ? kioskState("unpaired", { message: "Finish unpairing", detail: "Open local maintenance to complete the installation switch." }) : currentDisplay(), branding, kioskName: changing ? undefined : state.kioskName, readerOnline: state.readerOnline, authenticationMethod, memberLookup: memberSettings.memberLookup, requirePin: memberSettings.requirePin, memberIdKeypad: memberIdMode() && await rosterCache.numericIds().catch(() => false), cloudOnline: changing ? false : state.cloudOnline, networkType: state.networkType, pendingEvents: attendance?.pending, attendance, clock, uptimeSeconds: Math.floor(process.uptime()), releaseVersion, displayReloadToken, enrollment: dashboardEnrollment.active() ? { id: dashboardEnrollment.snapshot().id } : null })); return; }
+  if (pathname === "/health" && request.method === "GET") { await loadPairing(); const attendance = changing ? undefined : await queue.diagnostics(); response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", ...state, ...(changing ? { paired: false, kioskName: undefined, cloudOnline: false } : {}), setupReady: !changing, authenticationMethod, memberLookup: memberSettings.memberLookup, requirePin: memberSettings.requirePin, discordCode: memberSettings.discordCode, discordCodeBackup: memberSettings.discordCodeBackup, pendingEvents: attendance?.pending, attendance, clock: await attendanceClock.status(), fingerprintSync: changing ? undefined : await fingerprintDiagnostics(), ...(!state.paired && !changing ? { setupCode: setupCode.current() } : {}) })); return; }
+  if (pathname === "/display-state" && request.method === "GET") { const attendance = changing ? undefined : await queue.diagnostics(); const clock = await attendanceClock.status(); response.end(JSON.stringify({ display: changing ? kioskState("unpaired", { message: "Finish unpairing", detail: "Open local maintenance to complete the installation switch." }) : currentDisplay(), branding, kioskName: changing ? undefined : state.kioskName, readerOnline: state.readerOnline, authenticationMethod, memberLookup: memberSettings.memberLookup, requirePin: memberSettings.requirePin, discordCode: memberSettings.discordCode, discordCodeBackup: memberSettings.discordCodeBackup, ...(codeMode() ? { discordCodeHeld: codesHeld, backupReady: identityReadyState(authenticationMethod, { memberLookup: memberSettings.memberLookup }) } : {}), memberIdKeypad: memberIdMode() && await rosterCache.numericIds().catch(() => false), cloudOnline: changing ? false : state.cloudOnline, networkType: state.networkType, pendingEvents: attendance?.pending, attendance, clock, uptimeSeconds: Math.floor(process.uptime()), releaseVersion, displayReloadToken, enrollment: dashboardEnrollment.active() ? { id: dashboardEnrollment.snapshot().id } : null })); return; }
   if (pathname === "/maintenance/pairing" && request.method === "GET") {
     try { await requireNetworkSession(); } catch { response.statusCode = 403; response.end(JSON.stringify({ error: "Unlock local settings before unpairing" })); return; }
     const config = await loadPairing();
@@ -743,6 +810,22 @@ async function handleRequest(request, response) {
       if (!identityInput.submit(observation)) { response.statusCode = 429; response.end(JSON.stringify({ error: "Wait for the current identity check to finish" })); return; }
       response.statusCode = 202; response.end(JSON.stringify({ accepted: true }));
     } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Identity input was not accepted" })); }
+    return;
+  }
+  if (pathname === "/identity/code" && request.method === "POST") {
+    // The body holds a Discord code: it is read, sent to the server once and dropped. Nothing here logs or stores it.
+    const inputGeneration = attendanceInputGeneration;
+    try {
+      if (!await loadPairing()) throw new Error("Pair this kiosk before submitting a code");
+      if (!codeMode()) throw new LocalRefusal(409, "This kiosk does not take Discord codes.", "code_not_enabled");
+      if (!attendanceAllowed()) throw new Error("Return to attendance before submitting a code");
+      const input = await body(request, 1024); const code = normalizeDiscordCode(input?.code);
+      if (!code) throw new LocalRefusal(400, "A Discord code is 6 digits.", "invalid_code");
+      if (codeScanRunning) throw new LocalRefusal(429, "Wait for the current code check to finish", "code_busy");
+      codeScanRunning = true;
+      let outcome; try { outcome = await recordCodeAttendance(code, inputGeneration); } finally { codeScanRunning = false; }
+      response.statusCode = outcome.status; response.end(JSON.stringify(outcome.body));
+    } catch (error) { sendRefusal(response, error, "The code was not accepted"); }
     return;
   }
   if (pathname === "/identity/search" && request.method === "POST") {
@@ -934,6 +1017,12 @@ if (process.env.NODE_ENV !== "test") {
   server.listen(port, process.env.LANCERLOGIN_KIOSK_HOST ?? "0.0.0.0", () => console.log(`LancerLogin kiosk service listening on port ${port}`));
   void pairingBoundary.then(async () => { if (pairingRecovery) { scanner.pause(); return; } await installationActivities.run(async () => { await Promise.all([loadPairing(), loadBranding(), loadAuthenticationMethod(), loadFingerprintMatch(), attendanceClock.refresh().catch(() => undefined)]); display = state.paired ? readyDisplay() : kioskState("unpaired"); }); purgeExpiredArchives(); void pollCloud().then(() => cloudPolling?.scheduler.configurationSettled()).then(heartbeat); if (!unpairingBusy && !pairingRecovery) return scanner.start(); }).catch(() => undefined); setInterval(heartbeat, pollIntervals.heartbeatMs).unref(); setInterval(pollCloud, pollIntervals.commandsMs).unref();
   setInterval(() => { void dashboardEnrollment.expire(); void refreshCapturePermission(); void checkFingerRemoval(); }, 250).unref();
+  // A Discord code kiosk that lost the cloud shows its backup method. Between heartbeats it asks only whether the server
+  // answers (one small request, nothing else), and runs the full heartbeat as soon as it does, so the code entry returns
+  // soon after the connection. The heartbeat itself keeps its normal interval however long the kiosk is offline.
+  const cloudRecheck = createCloudRecheck({ wanted: () => !shuttingDown && codeMode() && !state.cloudOnline,
+    reachable: async () => { const config = await loadPairing(); return Boolean(config) && workerReachable(config, { fetchImpl: boundedCloudFetch }); }, heartbeat });
+  setInterval(() => void cloudRecheck.tick(), cloudRecheckMs).unref();
   // Apply attendance retention and keep the journal short even on a quiet kiosk.
   setInterval(() => { void installationActivities.run(() => queue.compact()).catch(() => undefined); void installationActivities.run(() => enrollmentReports.compact()).catch(() => undefined); purgeExpiredArchives(); }, 6 * 60 * 60_000).unref();
 }

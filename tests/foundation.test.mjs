@@ -113,12 +113,13 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /const backupSchemaVersion = 51;/);
+  assert.match(source, /const backupSchemaVersion = 52;/);
   assert.match(source, /backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49, module_report_baselines: 50 }/);
   assert.match(source, /simulated_kiosk_sessions: { schema: 48, owner: "attendance" }/);
   assert.match(source, /tables\.simulated_kiosk_sessions = \[\];/);
   assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -17\)/);
   for (const [version, omitted] of [[8, 15], [9, 13], [10, 11], [15, 8], [31, 6], [41, 5], [47, 4], [51, 1]]) assert.match(source, new RegExp(`schemaVersion < ${version} && table === "organization_settings" \\? tableColumns\\.organization_settings\\.slice\\(0, -${omitted}\\)`));
+  assert.ok(source.includes('table === "kiosks" && schemaVersion < 52 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -8 : schemaVersion < 31 ? -7 : schemaVersion < 40 ? -6 : schemaVersion < 46 ? -5 : schemaVersion < 47 ? -3 : -2)'));
   assert.match(source, /table === "discord_attendance_contests" && schemaVersion < 41 \? tableColumns\.discord_attendance_contests\.slice\(0, schemaVersion === 1 \? -3 : -1\)/);
   assert.match(source, /discord_block_recontests_after_rejection: 0/);
   assert.match(source, /prior_reviews_json: "\[\]"/);
@@ -293,6 +294,17 @@ test("provisioning workflow is adopter-gated and account-neutral", async () => {
   assert.match(workflow, /"API\\":\{\\"service\\":\\"\$INSTALLATION_SLUG-api\\"/);
   assert.ok(workflow.indexOf("Bind the Pages API proxy to the Worker") < workflow.indexOf("Deploy Pages dashboard"));
   assert.ok(workflow.indexOf("Select Worker deployment URL") < workflow.indexOf("Bind the Pages API proxy to the Worker"));
+  // Migrations and the Worker are live by then, so a refused binding warns and the run goes on to deploy the dashboard,
+  // as the web update controller does. Stopping here would leave a new API behind an old or missing dashboard.
+  const bindStep = workflow.slice(workflow.indexOf("- name: Bind the Pages API proxy to the Worker"), workflow.indexOf("- name: Deploy Pages dashboard"));
+  assert.doesNotMatch(bindStep, /\bexit\b|::error|continue-on-error/);
+  assert.match(bindStep, /::warning title=Pages API binding not added::pages_api_binding_failed_\$status: .*Cloudflare Pages: Edit, then run this workflow again with the operation resume and the same slug\. The next release update also adds the binding\./);
+  assert.match(bindStep, /echo "state=refused" >> "\$GITHUB_OUTPUT"/);
+  // A curl that cannot connect must not end the step either.
+  assert.match(bindStep, /\|\| status="\$\{status:-000\}"/);
+  assert.doesNotMatch(workflow.slice(workflow.indexOf("- name: Deploy Pages dashboard"), workflow.indexOf("- name: Publish setup links")), /\n\s+if:/);
+  assert.match(workflow, /PAGES_BINDING_STATE: \$\{\{ steps\.pages-binding\.outputs\.state \}\}/);
+  assert.match(workflow, /if \[ "\$PAGES_BINDING_STATE" = "refused" \]; then\s+echo ""\s+echo "### Pages API binding not added"/);
   assert.equal((workflow.match(/secrets:\s*\|/g) ?? []).length, 0);
   assert.match(workflow, /accounts\/\$CLOUDFLARE_ACCOUNT_ID\/tokens\/verify/);
   assert.doesNotMatch(workflow, /user\/tokens\/verify/);

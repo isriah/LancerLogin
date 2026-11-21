@@ -15,6 +15,7 @@ import { schedulerClass, schedulerRequest, type InFlight, type SliceHooks } from
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
 import { InstallationSeed, TestD1Database, attendanceWithOutreachDisabled } from "./fixtures/d1-database.ts";
 import { sessionSecret } from "./fixtures/worker-fake-database.ts";
+import { countingDatabase } from "./fixtures/counting-database.ts";
 
 const jobIds = [...registeredCoreSchedulerJobs, ...registeredModuleSchedulerJobs].map((job) => job.id);
 const channelId = "223456789012345678";
@@ -90,10 +91,16 @@ test("the channel manager is two slices, one Discord request each, and still re-
     assert.deepEqual(first.map((slice) => slice.requests.map((line) => line.split(" ")[0])), [["POST", "PUT"], ["POST"]], "the first round posts and pins the status and posts the help message");
     const recorded = db.sqlite.prepare("SELECT state_key, external_id, updated_at FROM integration_state WHERE provider = 'discord' ORDER BY state_key").all();
     quietJobs(db); const steady = await round(env, "attendance.discord-channel", requests);
-    assert.deepEqual(steady.map((slice) => slice.requests), [[`GET /channels/${channelId}/messages/1001`], [`GET /channels/${channelId}/messages/1002`]], "an unchanged, still-pinned message is only checked");
+    assert.deepEqual(steady.map((slice) => slice.requests), [[], []], "an unchanged message checked within the hour costs no Discord request");
     assert.deepEqual(db.sqlite.prepare("SELECT state_key, external_id, updated_at FROM integration_state WHERE provider = 'discord' ORDER BY state_key").all(), recorded, "nothing is rewritten when nothing changed");
-    // Someone unpinned the status message: the next round pins it again, as every round did before.
-    discord.unpinned = true; quietJobs(db); const repinned = await round(env, "attendance.discord-channel", requests);
+    // An hour after the last check each message is checked against Discord once, and the check's time is recorded.
+    const hourAgo = new Date(Date.now() - 61 * 60_000).toISOString(); const aged = () => db.sqlite.prepare("UPDATE integration_state SET updated_at = ? WHERE provider = 'discord'").run(hourAgo);
+    aged(); quietJobs(db); const refreshed = await round(env, "attendance.discord-channel", requests);
+    assert.deepEqual(refreshed.map((slice) => slice.requests), [[`GET /channels/${channelId}/messages/1001`], [`GET /channels/${channelId}/messages/1002`]], "an unchanged, still-pinned message is only checked");
+    assert.ok((db.sqlite.prepare("SELECT MIN(updated_at) AS at FROM integration_state WHERE provider = 'discord'").get() as { at: string }).at > hourAgo, "the check is recorded, so the next one waits an hour");
+    quietJobs(db); assert.deepEqual((await round(env, "attendance.discord-channel", requests)).map((slice) => slice.requests), [[], []]);
+    // Someone unpinned the status message: the next hourly check pins it again.
+    discord.unpinned = true; aged(); quietJobs(db); const repinned = await round(env, "attendance.discord-channel", requests);
     assert.deepEqual(repinned[0]!.requests, [`GET /channels/${channelId}/messages/1001`, `PUT /channels/${channelId}/messages/pins/1001`]);
     // A kiosk change edits the status message in place.
     discord.unpinned = false; db.sqlite.exec("UPDATE kiosks SET last_seen_at = '2026-01-01T00:00:00Z' WHERE name = 'Test Kiosk B'");
@@ -150,9 +157,19 @@ test("a Durable Object slice records its job in the object's storage, not with a
   assert.equal(writes, 1, "only the outcome is written to D1");
 });
 
-test("a job whose slice the platform stopped is marked failed and the next slice moves on to other work", async () => {
+test("a slice stopped once, as a deploy resetting the object does, runs its job again and does not show it as failed", async () => {
   const { db, env } = await installation(); quietJobs(db);
-  const crashed: InFlight = { job: "attendance.discord-channel", at: Date.now() - 2_000 };
+  const crashed: InFlight = { job: "attendance.discord-channel", at: Date.now() - 2_000, count: 1 };
+  await withDiscord(async () => {
+    const report = await runSchedulerSlice(env, { "attendance.discord-channel": Date.now() - 3_000 }, undefined, { ...hooks(), crashed });
+    assert.deepEqual(report.attempted, ["attendance.discord-channel"], "the job is still due and runs in the next slice");
+  });
+  assert.equal(jobState(db, "attendance.discord-channel").outcome, "ok");
+});
+
+test("a job whose slice the platform stopped twice in a row is marked failed and the next slice moves on to other work", async () => {
+  const { db, env } = await installation(); quietJobs(db);
+  const crashed: InFlight = { job: "attendance.discord-channel", at: Date.now() - 2_000, count: 2 };
   const report = await runSchedulerSlice(env, { "attendance.discord-channel": Date.now() - 3_000, "core.discord-commands": Date.now() }, undefined, { ...hooks(), crashed });
   assert.deepEqual(report.attempted, ["core.discord-commands"], "the stopped job is not retried straight away");
   const state = jobState(db, "attendance.discord-channel");
@@ -173,7 +190,87 @@ test("the Durable Object hands a stopped slice's job to the next alarm and clear
   void new Scheduler({ storage }, {}).alarm();
   await new Promise((resolve) => setTimeout(resolve, 10));
   await new Scheduler({ storage }, {}).alarm(); // a new instance, as after the platform resets the object
-  assert.equal(seen[1]?.job, "fixture.heavy");
+  assert.equal(seen[1]?.job, "fixture.heavy"); assert.equal(seen[1]?.count, 1, "the first stop on this job");
   assert.equal(stored.has("inflight"), false, "a finished slice clears the marker");
   assert.equal((await (await new Scheduler({ storage }, {}).fetch(schedulerRequest("status"))).json() as { alarm: number }).alarm, alarm);
+});
+
+// ---- The kiosk status message is the channel job's work, not the heartbeat's (database-access audit, 2026-11-20) ----
+
+const heartbeat = (env: Env, kiosk: string, body: Record<string, unknown> = {}, context?: { waitUntil(promise: Promise<unknown>): void }) => worker.fetch(new Request("https://api.example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: `Bearer ${kiosk}`, "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: "2.1.0-beta.11", pendingEvents: 0, ...body }) }), env, context as never);
+
+test("a heartbeat that changes nothing costs the same D1 queries with Discord configured as without, and asks Discord nothing", async () => {
+  // The same installation twice: once with Discord verified and the channel manager on, once with no Discord at all.
+  const configured = await installation(); const bare = await installation();
+  bare.db.sqlite.exec("DELETE FROM encrypted_integrations; UPDATE installations SET discord_enabled = 0; UPDATE organization_settings SET discord_channel_manager_enabled = 0");
+  const cost = async ({ db, env }: Awaited<ReturnType<typeof installation>>) => {
+    const counted = countingDatabase(db); const countedEnv = { ...env, DB: counted } as Env;
+    // The first heartbeat records the reader and release; the second changes nothing a status message shows.
+    assert.equal((await heartbeat(countedEnv, "Test Kiosk A")).status, 200);
+    const before = counted.queries.length;
+    assert.equal((await heartbeat(countedEnv, "Test Kiosk A")).status, 200);
+    return counted.queries.slice(before);
+  };
+  await withDiscord(async (requests) => {
+    const without = await cost(bare); const withDiscordConfigured = await cost(configured);
+    assert.equal(withDiscordConfigured.length, without.length, `with Discord: ${withDiscordConfigured.length} queries; without: ${without.length}`);
+    for (const table of ["encrypted_integrations", "integration_state", "platform_scheduler_state", "organization_settings"]) assert.equal(withDiscordConfigured.some((sql) => sql.includes(table)), false, `a heartbeat does not read ${table}`);
+    assert.equal(withDiscordConfigured.filter((sql) => /FROM kiosks\b/.test(sql)).length, 1, "the kiosk's row is read once, to authenticate it");
+    assert.deepEqual(requests, [], "and no request goes to Discord");
+  });
+});
+
+test("a heartbeat pokes the channel job only when it changes what the status message shows for that kiosk", async () => {
+  const { db, env } = await installation();
+  const pokes: string[][] = [];
+  const durable = { ...env, PLATFORM_SCHEDULER: { idFromName: (name: string) => name, get: () => ({ fetch: async (request: Request) => { pokes.push(((await request.json()) as { jobs: string[] }).jobs); return Response.json({ alarm: 1 }); } }) } } as unknown as Env;
+  const beat = async (body: Record<string, unknown> = {}) => { const waiting: Promise<unknown>[] = []; assert.equal((await heartbeat(durable, "Test Kiosk A", body, { waitUntil: (promise) => { waiting.push(promise); } })).status, 200); await Promise.all(waiting); };
+  await withDiscord(async (requests) => {
+    await beat(); assert.deepEqual(pokes, [["attendance.discord-channel"]], "its reader and release are reported for the first time");
+    await beat(); await beat(); assert.equal(pokes.length, 1, "unchanged heartbeats poke nothing");
+    await beat({ readerOnline: false }); assert.equal(pokes.length, 2, "the reader went offline");
+    await beat({ readerOnline: false }); assert.equal(pokes.length, 2);
+    await beat({ readerOnline: false, releaseVersion: "2.1.0-beta.12" }); assert.equal(pokes.length, 3, "a new release");
+    // Silent for longer than the two minutes a kiosk counts as online: its next heartbeat brings it back.
+    db.sqlite.prepare("UPDATE kiosks SET last_seen_at = ? WHERE name = 'Test Kiosk A'").run(new Date(Date.now() - 3 * 60_000).toISOString());
+    await beat({ readerOnline: false, releaseVersion: "2.1.0-beta.12" }); assert.equal(pokes.length, 4, "it came back online");
+    assert.deepEqual(requests, [], "the heartbeats themselves never call Discord");
+  });
+  // On the cron fallback there is nothing to poke; the channel job's five-minute run picks the change up.
+  await withDiscord(async (requests) => { assert.equal((await heartbeat(env, "Test Kiosk B", { readerOnline: false })).status, 200); assert.deepEqual(requests, []); });
+});
+
+test("two passes that both find the kiosk status message missing post it once", async () => {
+  for (const pinned of [0, 1]) {
+    const { db, env } = await installation(); db.sqlite.prepare("UPDATE organization_settings SET discord_channel_manager_enabled = ?").run(pinned);
+    const original = globalThis.fetch; const requests: string[] = []; let id = 2000;
+    // Discord answers after a pause, so the second pass reads the tracking row before the first has saved the message.
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? "GET"; requests.push(`${method} ${String(input).replace("https://discord.com/api/v10", "")}`);
+      await new Promise((resolve) => setImmediate(resolve));
+      return Response.json({ id: method === "POST" ? String(++id) : String(input).split("/").pop(), pinned: true });
+    }) as typeof fetch;
+    try {
+      quietJobs(db); const now = Date.now(); const pokes = { "attendance.discord-channel": now };
+      await Promise.all([runSchedulerSlice(env, pokes, now, hooks()), runSchedulerSlice(env, pokes, now, hooks())]);
+    } finally { globalThis.fetch = original; }
+    assert.equal(requests.filter((line) => line === `POST /channels/${channelId}/messages`).length, 1, `${pinned ? "pinned" : "unpinned"}: ${JSON.stringify(requests)}`);
+    const tracked = db.sqlite.prepare("SELECT state_key AS stateKey, external_id AS externalId FROM integration_state WHERE provider = 'discord' AND state_key LIKE 'kiosk-status%'").all().map((row) => ({ ...row }));
+    assert.deepEqual(tracked, [{ stateKey: "kiosk-status", externalId: "2001" }], "one message is tracked and the claim is released");
+  }
+});
+
+test("the kiosk status message follows a kiosk going silent at the channel job's next run, and an unchanged status asks Discord nothing", async () => {
+  const { db, env } = await installation(); db.sqlite.exec("UPDATE organization_settings SET discord_channel_manager_enabled = 0");
+  await withDiscord(async (requests) => {
+    quietJobs(db); await round(env, "attendance.discord-channel", requests);
+    assert.deepEqual(requests, [`POST /channels/${channelId}/messages`], "the first run posts the message");
+    quietJobs(db); const steady = await round(env, "attendance.discord-channel", requests);
+    assert.deepEqual(steady.map((slice) => slice.requests), [[]], "nothing changed: no request, where every run used to check the message");
+    assert.ok(steady[0]!.d1 <= 6, `and ${steady[0]!.d1} D1 queries`);
+    // Kiosk B stops sending heartbeats. No heartbeat reports that, so the job's own run is what notices.
+    db.sqlite.prepare("UPDATE kiosks SET last_seen_at = ? WHERE name = 'Test Kiosk B'").run(new Date(Date.now() - 3 * 60_000).toISOString());
+    quietJobs(db); const silent = await round(env, "attendance.discord-channel", requests);
+    assert.deepEqual(silent[0]!.requests, [`PATCH /channels/${channelId}/messages/1001`]);
+  });
 });

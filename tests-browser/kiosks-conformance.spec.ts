@@ -650,6 +650,71 @@ test("management route uses the selected kiosk and never falls back for a missin
   expect(commands).toHaveLength(1);
 });
 
+// Local state a Pi kiosk repaired. Each row appears only while the kiosk reports it, in the theme's semantic tone.
+async function expectStorageRow(page: Page, key: string, expected: { label: string; tone: "warning" | "error"; text: RegExp } | null) {
+  const row = page.locator(`[data-diagnostic="${key}"]`);
+  if (!expected) { await expect(row).toHaveCount(0); return; }
+  await expect(row.locator("dt")).toHaveText(expected.label);
+  await expect(row.locator("dd")).toHaveText(expected.text);
+  await expect(row).toHaveClass(`kiosk-diagnostic-${expected.tone}`);
+  const [color, token] = await row.locator("dd").evaluate((element, tone) => {
+    const probe = document.createElement("span"); probe.style.color = `var(--ui-${tone})`; element.append(probe);
+    const colors = [getComputedStyle(element).color, getComputedStyle(probe).color]; probe.remove(); return colors;
+  }, expected.tone);
+  expect(color).toBe(token);
+}
+
+test("Manage kiosk > Diagnostics shows a repaired network PIN only while a Pi kiosk reports one", async ({ page }) => {
+  const at = "2026-11-20T10:00:00.000Z";
+  const restored = { label: "Network settings PIN", tone: "warning" as const, text: /^Restored from the kiosk's backup copy at .+, after the PIN file was found damaged\. The PIN did not change\.$/ };
+  const unreadable = { label: "Network settings PIN", tone: "error" as const, text: /^Unreadable since .+\. The PIN file and its backup copy on the kiosk are damaged, so nobody can unlock network settings or maintenance there\. Use Reset network PIN, then someone at the kiosk sets a new PIN\.$/ };
+  const cases = [
+    { storageDiagnostics: undefined, row: null },
+    { storageDiagnostics: null, row: null },
+    { storageDiagnostics: { networkPin: { state: "restored", at } }, row: restored },
+    { storageDiagnostics: { networkPin: { state: "unreadable", at } }, row: unreadable },
+    { kind: "web", storageDiagnostics: { networkPin: { state: "unreadable", at } }, row: null },
+  ];
+  for (const item of cases) {
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await useKioskContext(page);
+    const [kiosk] = kioskFor("healthy");
+    await page.route("**/admin/kiosks", route => route.fulfill({ json: { kiosks: [{ ...kiosk, ...(item.kind ? { kind: item.kind } : {}), storageDiagnostics: item.storageDiagnostics }, retiredKiosk] } }));
+    await page.goto("/kiosks/kiosk-1/manage");
+    await page.getByText("Diagnostics", { exact: true }).click();
+    await expect(page.getByText("Pending scans", { exact: true })).toBeVisible();
+    await expectStorageRow(page, "network-pin", item.row);
+    if (item.row?.tone === "error") await expectResponsiveFit(page, responsiveFit);
+  }
+});
+
+test("Manage kiosk > Diagnostics shows entries set aside per queue only while a Pi kiosk reports some", async ({ page }) => {
+  const lastAt = "2026-11-20T09:30:00.000Z";
+  const scans = { label: "Scans set aside", tone: "warning" as const, text: /^2 unreadable entries in the waiting queue, most recent .+\. They were kept on the kiosk for recovery\.$/ };
+  const reports = { label: "Enrollment reports set aside", tone: "warning" as const, text: /^1 unreadable entry in the enrollment report queue\. It was kept on the kiosk for recovery\.$/ };
+  const cases = [
+    { storageDiagnostics: undefined, attendance: null, enrollment: null },
+    { storageDiagnostics: { setAside: { attendance: { count: 0, lastAt: null } } }, attendance: null, enrollment: null },
+    { storageDiagnostics: { setAside: { attendance: { count: 2, lastAt } } }, attendance: scans, enrollment: null },
+    { storageDiagnostics: { setAside: { attendance: { count: 2, lastAt }, enrollmentReports: { count: 1, lastAt: null } } }, attendance: scans, enrollment: reports },
+    { kind: "web", storageDiagnostics: { setAside: { attendance: { count: 2, lastAt } } }, attendance: null, enrollment: null },
+  ];
+  for (const item of cases) {
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await useKioskContext(page);
+    const [kiosk] = kioskFor("healthy");
+    await page.route("**/admin/kiosks", route => route.fulfill({ json: { kiosks: [{ ...kiosk, ...(item.kind ? { kind: item.kind } : {}), storageDiagnostics: item.storageDiagnostics }, retiredKiosk] } }));
+    await page.goto("/kiosks/kiosk-1/manage");
+    await page.getByText("Diagnostics", { exact: true }).click();
+    await expect(page.getByText("Pending scans", { exact: true })).toBeVisible();
+    await expectStorageRow(page, "set-aside-attendance", item.attendance);
+    await expectStorageRow(page, "set-aside-enrollment-reports", item.enrollment);
+    // Entries set aside are not waiting scans and never change the kiosk's health.
+    await expect(page.locator(".page-intro .status-pill")).toHaveText("Healthy");
+    if (item.enrollment) await expectResponsiveFit(page, responsiveFit);
+  }
+});
+
 test("operator management remains read-only and fingerprint sharing stays Admin-only", async ({ page }) => {
   await useKioskContext(page, { role: "operator" });
   await page.goto("/kiosks/kiosk-1/manage");
@@ -686,7 +751,7 @@ test("Admin reviews rejected scans from retired kiosks without changing attendan
     expect(route.request().postDataJSON()).toEqual({ note: "Presence corrected from event roster" });
     attempts++;
     if (attempts === 1) return route.fulfill({ status: 503, json: { error: "Review service unavailable. Try again." } });
-    reviewed = true; return route.fulfill({ json: { reviewed: true } });
+    reviewed = true; return route.fulfill({ json: { reviewed: true, alreadyReviewed: false } });
   });
   await page.goto("/kiosks");
   const panel = page.getByRole("region", { name: "Rejected scans", exact: true });
@@ -714,7 +779,7 @@ test("Admin reviews rejected scans from retired kiosks without changing attendan
   await expect(panel.getByRole("alert")).toContainText("Review service unavailable");
   await expect(panel.getByLabel("Review note", { exact: true })).toHaveValue("Presence corrected from event roster");
   await panel.getByRole("button", { name: "Mark reviewed", exact: true }).click();
-  await expect(panel).toContainText("Attendance was not changed");
+  await expect(panel.getByRole("status").filter({ hasText: "Attendance was not changed" })).toHaveText("Scan marked reviewed. Attendance was not changed.");
   await expect(panel).toContainText("No scans need review");
   await panel.getByRole("combobox", { name: "Review status", exact: true }).selectOption("reviewed");
   await panel.locator("summary").click();
@@ -733,6 +798,35 @@ test("Admin reviews rejected scans from retired kiosks without changing attendan
     expect(styles.background).toBe(styles.expectedBackground); expect(styles.color).toBe(styles.expectedColor); expect(styles.border).toBe(styles.expectedBorder); expect(styles.radius).toBe(styles.expectedRadius); expect(styles.height).toBeGreaterThanOrEqual(44);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   }
+});
+
+test("Mark reviewed on a scan another Admin already reviewed says so, keeps the earlier note and refreshes the row", async ({ page }, testInfo) => {
+  await useKioskContext(page, { state: "unpaired", debugMode: true });
+  let reviewed = false;
+  const record = { kioskId: "retired-1", kioskName: "Retired entrance kiosk", eventId: "event-1", memberId: "member-record-1", occurredAt: "2020-01-01T07:00:00Z", receivedAt: "2026-10-25T12:00:00Z", reasonCode: "outside_meeting_window", reviewStatus: "open" };
+  await page.route("**/admin/kiosks/scan-reviews?**", (route) => {
+    const status = new URL(route.request().url()).searchParams.get("status");
+    const records = status === "reviewed" ? reviewed ? [{ ...record, reviewStatus: "reviewed", reviewNote: "Checked by the other Admin first", reviewedAt: "2026-10-25T13:00:00Z" }] : [] : reviewed ? [] : [record];
+    return route.fulfill({ json: { records, hasMore: false } });
+  });
+  // Another Admin reviewed it in another tab after this page loaded: the Worker keeps their note and says so.
+  await page.route("**/admin/kiosks/retired-1/scan-reviews/event-1/review", (route) => { reviewed = true; return route.fulfill({ json: { reviewed: true, alreadyReviewed: true } }); });
+  await page.goto("/kiosks");
+  const panel = page.getByRole("region", { name: "Rejected scans", exact: true });
+  await panel.locator("summary").click();
+  await panel.getByLabel("Review note", { exact: true }).fill("My note, written at the same time");
+  await panel.getByRole("button", { name: "Mark reviewed", exact: true }).click();
+  const notice = panel.getByRole("status").filter({ hasText: "Attendance was not changed." });
+  await expect(notice).toBeVisible();
+  await expect(panel).toContainText("No scans need review");
+  await panel.screenshot({ path: testInfo.outputPath("already-reviewed-notice.png") });
+  await expect(notice).toHaveText("This scan was already reviewed; its existing note was preserved and your note was not saved. Attendance was not changed.");
+  await expect(notice).toHaveAttribute("data-tone", "neutral");
+  await expect(panel).not.toContainText("Scan marked reviewed");
+  await panel.getByRole("combobox", { name: "Review status", exact: true }).selectOption("reviewed");
+  await panel.locator("summary").click();
+  await expect(panel.locator(".scan-review-note")).toHaveText("Checked by the other Admin first");
+  await expect(panel).not.toContainText("My note, written at the same time");
 });
 
 test("Operators cannot open rejected-scan reviews or request their records", async ({ page }) => {

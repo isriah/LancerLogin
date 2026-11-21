@@ -32,10 +32,12 @@ test("Last 10 selects the newest eligible meetings and plots them oldest to newe
 });
 
 test("CSV filenames identify the report, export type and date without path characters", () => {
-  const date = new Date("2026-10-17T18:30:00Z");
-  assert.equal(reportExportFilename("Robotics Class", false, date), "lancerlogin-robotics-class-2026-10-17.csv");
-  assert.equal(reportExportFilename("../Robotics: Class?", true, date), "lancerlogin-robotics-class-2026-10-17-detail.csv");
-  assert.equal(reportExportFilename(" / ", false, date), "lancerlogin-report-2026-10-17.csv");
+  const now = Date.parse("2026-10-17T18:30:00Z");
+  assert.equal(reportExportFilename("Robotics Class", false, "UTC", now), "lancerlogin-robotics-class-2026-10-17.csv");
+  assert.equal(reportExportFilename("../Robotics: Class?", true, "UTC", now), "lancerlogin-robotics-class-2026-10-17-detail.csv");
+  assert.equal(reportExportFilename(" / ", false, "UTC", now), "lancerlogin-report-2026-10-17.csv");
+  // The date is the installation's: 22:00 on Oct 17 in New York is already Oct 18 in UTC.
+  assert.equal(reportExportFilename("Robotics Class", false, "America/New_York", Date.parse("2026-10-18T02:00:00Z")), "lancerlogin-robotics-class-2026-10-17.csv");
 });
 
 test("H:MM filters take hours and minutes and store minutes, as H:MM filters always have", () => {

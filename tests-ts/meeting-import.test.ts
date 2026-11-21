@@ -169,7 +169,9 @@ test("imported meetings that have ended get skipped notices, so the absence job 
   f.meeting("control", "Test Control Meeting", iso(-2, 18), iso(-2, 19));
   const originalFetch = globalThis.fetch; const posted: string[] = [];
   globalThis.fetch = async (input, init) => { const url = String(input instanceof Request ? input.url : input); if ((init?.method ?? "GET") === "POST" && url.endsWith("/messages")) posted.push(String(JSON.parse(String(init!.body)).content)); return new Response(JSON.stringify({ id: `message-${posted.length}` }), { headers: { "content-type": "application/json" } }); };
-  try { await worker.scheduled({ cron: "*/5 * * * *" }, f.env as never); } finally { globalThis.fetch = originalFetch; }
+  // Two ticks: on an installation's first pass every job has first-time work (commands, channel messages), and D1
+  // queries and Discord requests share one budget, so the notice job may be left for the next tick.
+  try { for (let tick = 0; tick < 2; tick += 1) await worker.scheduled({ cron: "*/5 * * * *" }, f.env as never); } finally { globalThis.fetch = originalFetch; }
   assert.equal(posted.filter((content) => content.includes("Test Past Build")).length, 0);
   assert.equal(posted.filter((content) => content.includes("Test Control Meeting")).length, 1);
 });

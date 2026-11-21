@@ -151,9 +151,13 @@ export async function prepareWebUpdate(env: WebUpdateEnv, actorId?: string, opti
 export async function startedUpdate(env: WebUpdateEnv): Promise<UpdateRow | null> {
   return db(env).prepare("SELECT * FROM web_update_requests WHERE installation_id = 'primary' AND state NOT IN ('prepared','succeeded','failed','expired') LIMIT 1").first<UpdateRow>();
 }
-export async function recordUpdateBackup(env: WebUpdateEnv, id: string): Promise<void> {
+/** Refuses unless the request is prepared and can still take its backup. A backup downloaded in parts checks before it starts. */
+export async function requirePreparedUpdate(env: WebUpdateEnv, id: string): Promise<void> {
   const row = await requestRow(env, id);
   if (row.state !== "prepared" || Date.parse(row.expires_at) <= Date.now()) fail(409, "request_expired", "Prepare a fresh update before downloading its backup.");
+}
+export async function recordUpdateBackup(env: WebUpdateEnv, id: string): Promise<void> {
+  await requirePreparedUpdate(env, id);
   await db(env).prepare("UPDATE web_update_requests SET backup_exported_at = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ? AND state = 'prepared'")
     .bind(new Date().toISOString(), new Date().toISOString(), id).run();
 }

@@ -557,18 +557,33 @@ export async function readModuleMigrationLedger(executor: ModuleMigrationExecuto
  * Apply pending module migrations in order. Each migration's statements and its ledger row run in one atomic
  * batch, so a failure records nothing for that migration; earlier migrations stay applied and recorded.
  * An adopted baseline records its ledger row without running any SQL.
+ *
+ * Passes can run at the same time (two Worker isolates serving the first requests after a deployment, or a request and
+ * the scheduler), and both can plan the same pending migration. The database runs their batches one after the other, so
+ * the second batch fails, on its own SQL ("duplicate column name", "table already exists") or on the ledger's primary
+ * key, and rolls back. That is not a failure of the migration: when a batch fails, the ledger is read again, and a
+ * migration another pass has recorded since (same sequence, name and hash, checked by the plan) counts as applied. Only
+ * a migration that is still pending after its batch failed is reported.
  */
 export async function applyModuleMigrations(executor: ModuleMigrationExecutor, pkg: ModuleMigrationPackage, options: { readonly coreAppliedMigrations: readonly string[]; readonly now?: () => string; readonly label?: string }): Promise<{ readonly applied: readonly string[]; readonly plan: ModuleMigrationPlan }> {
-  const plan = planModuleMigrations(pkg, await readModuleMigrationLedger(executor, pkg.moduleId), options.coreAppliedMigrations, { label: options.label });
+  const readPlan = async () => planModuleMigrations(pkg, await readModuleMigrationLedger(executor, pkg.moduleId), options.coreAppliedMigrations, { label: options.label });
+  const plan = await readPlan();
   const applied: string[] = [];
-  for (const migration of plan.pending) {
+  let pending = [...plan.pending];
+  while (pending.length) {
+    const migration = pending[0]!;
     const record = { sql: `INSERT INTO ${moduleMigrationLedgerTable} (module_id, sequence, name, sha256, applied_at) VALUES (?, ?, ?, ?, ?)`, bindings: [pkg.moduleId, migration.sequence, migration.name, migration.sha256, options.now?.() ?? new Date().toISOString()] };
     try {
       await executor.batch([...migration.statements.map((sql) => ({ sql, bindings: [] })), record]);
+      applied.push(migration.name); pending.shift();
     } catch (error) {
-      throw new ModuleMigrationError("module_migration_failed", `Module ${pkg.moduleId}: migration ${migration.name} failed and was not recorded${error instanceof Error && error.message ? `: ${error.message}` : ""}`);
+      const failure = new ModuleMigrationError("module_migration_failed", `Module ${pkg.moduleId}: migration ${migration.name} failed and was not recorded${error instanceof Error && error.message ? `: ${error.message}` : ""}`);
+      // The new pending list is a shorter tail of the same reviewed list, so this loop always ends.
+      let remaining: PendingModuleMigration[];
+      try { remaining = [...(await readPlan()).pending]; } catch { throw failure; }
+      if (remaining.some((entry) => entry.sequence === migration.sequence)) throw failure;
+      pending = remaining;
     }
-    applied.push(migration.name);
   }
   return { applied, plan };
 }

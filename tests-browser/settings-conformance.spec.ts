@@ -546,7 +546,7 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
     await useSettingsContext(page);
     await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: true, saved: true, authorized: true, configured: true, state: "configured", calendarName: "Operations calendar", pendingOperations: 2, failedOperations: 1, lastError: "Google Calendar is temporarily unavailable." }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: true, state: "configured", pendingOperations: 1, failedOperations: 0 }] }) }));
-    await page.route("**/admin/integrations/google-calendar/retry", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ synced: 3, queued: 0, failed: 0 }) }));
+    await page.route("**/admin/integrations/google-calendar/retry", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ synced: 0, queued: 3, failed: 0, waiting: 3, scheduler: "alarm", perPass: 5 }) }));
     await page.route("**/admin/integrations/google-calendar/sync-all", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ selected: 4, synced: 4, queued: 0, failed: 0 }) }));
     let discordSyncPage = 0;
     await page.route("**/admin/integrations/discord/calendar/sync-all**", (route) => {
@@ -569,14 +569,14 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     await retry.focus();
     await expect(retry).toBeFocused();
     await retry.click();
-    await expect(card.getByText("3 Calendar events sent.")).toBeVisible();
+    await expect(card.getByText("3 Calendar events queued again. Queued events are sent in the background, soonest meetings first.")).toBeVisible();
     await card.getByRole("button", { name: "Sync all meetings" }).click();
     await expect(card.getByText(/Google Calendar: 4 updated/)).toBeVisible();
     const discordCard = page.locator(".integration-card").filter({ hasText: "Discord bot" });
     await discordCard.getByText("Manage configuration", { exact: true }).click();
     await expect(discordCard.getByText("1 waiting · 0 need another attempt", { exact: true })).toBeVisible();
     await discordCard.getByRole("button", { name: "Sync all meetings" }).click();
-    await expect(discordCard.getByText(/Discord: 4 updated, 1 queued.*5 active meetings checked/)).toBeVisible();
+    await expect(discordCard.getByText(/Discord: 4 updated, 1 queued\. 5 current and upcoming meetings checked\. Queued events are sent in the background, soonest meetings first\./)).toBeVisible();
     expect(discordSyncPage).toBe(3);
     await expectResponsiveFit(page, responsiveFit);
   });
@@ -597,7 +597,7 @@ test("Discord sync-all stops requesting later pages when a provider failure leav
   const card = page.locator(".integration-card").filter({ hasText: "Discord bot" });
   await card.getByText("Manage configuration", { exact: true }).click();
   await card.getByRole("button", { name: "Sync all meetings" }).click();
-  await expect(card.getByRole("alert")).toContainText("Discord: 11 updated, 8 queued, 1 need attention. 20 active meetings checked.");
+  await expect(card.getByRole("alert")).toContainText("Discord: 11 updated, 8 queued, 1 need attention. 20 current and upcoming meetings checked.");
   expect(requests).toBe(2);
 });
 
@@ -940,13 +940,14 @@ for (const theme of ["light", "dark"] as const) test(`Settings keeps approved co
 });
 
 const unavailablePlugin = { id: "synthetic-retired", label: "Retired Synthetic Plugin", status: "missing", requiredBackupVersion: 3, installedBackupVersion: null, requiredContractVersion: 1, installedContractVersion: null, source: "https://example.test/plugins/synthetic-retired-with-a-long-repository-name.git", commit: "a".repeat(40), rows: 2 };
-async function openInstallationRestore(page: Page) {
+const restoreSession = "7a1f0c7e-4c1b-4d5e-9f3a-2b6c8d0e1f2a";
+async function openInstallationRestore(page: Page, file: unknown = { product: "LancerLogin", schemaVersion: 42 }) {
   await page.goto("/settings/data");
   const installation = page.locator(".data-category").filter({ has: page.getByRole("heading", { name: "Entire installation", exact: true }) });
   await installation.getByText("Restore or delete data", { exact: true }).click();
   await installation.getByRole("button", { name: "Restore file", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Restore Entire installation" });
-  await dialog.locator("input[type='file']").setInputFiles({ name: "installation.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ product: "LancerLogin", schemaVersion: 42 })) });
+  await dialog.locator("input[type='file']").setInputFiles({ name: "installation.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(file)) });
   await dialog.getByRole("textbox").fill("RESTORE INSTALLATION");
   await dialog.getByRole("button", { name: "Validate and restore", exact: true }).click();
   return dialog;
@@ -958,11 +959,17 @@ for (const { viewport, theme } of pairedViews) {
     await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
     await useSettingsContext(page);
     const requests: { excludeModules?: string[] }[] = [];
-    await page.route("**/admin/data/restore", (route) => {
-      const body = route.request().postDataJSON() as { excludeModules?: string[] }; requests.push(body);
+    // The restore starts by sending the backup document; the API refuses it there, before anything is uploaded or replaced.
+    await page.route("**/admin/data/restore/sessions", (route) => {
+      const body = route.request().postDataJSON() as { excludeModules?: string[]; document: string; parts: unknown[] }; requests.push(body);
+      expect(JSON.parse(body.document)).toEqual({ product: "LancerLogin", schemaVersion: 42 }); expect(body.parts).toEqual([]);
       return body.excludeModules
-        ? route.fulfill({ json: { restored: true, scope: "installation", recovery: { revokedKiosks: 0, invalidatedPairingCodes: 0, pausedProviderOperations: 0 }, excludedModules: [{ id: unavailablePlugin.id, label: unavailablePlugin.label, status: "missing", backupVersion: 3, source: unavailablePlugin.source, commit: unavailablePlugin.commit, rows: 2 }] } })
+        ? route.fulfill({ status: 201, json: { id: restoreSession, digest: "d".repeat(64), parts: [] } })
         : route.fulfill({ status: 409, json: { error: "This backup contains module data this installation cannot restore. Install the listed modules and retry, or confirm a restore that discards their data.", code: "module-restore-refused", reason: "unavailable-modules", modules: [unavailablePlugin], dependencies: [], optOut: { available: true, excludeModules: [unavailablePlugin.id] }, details: [] } });
+    });
+    await page.route(`**/admin/data/restore/sessions/${restoreSession}/commit`, (route) => {
+      expect(route.request().postDataJSON()).toEqual({ confirmation: "RESTORE INSTALLATION", digest: "d".repeat(64) });
+      return route.fulfill({ json: { restored: true, scope: "installation", recovery: { revokedKiosks: 0, invalidatedPairingCodes: 0, pausedProviderOperations: 0 }, excludedModules: [{ id: unavailablePlugin.id, label: unavailablePlugin.label, status: "missing", backupVersion: 3, source: unavailablePlugin.source, commit: unavailablePlugin.commit, rows: 2 }] } });
     });
     const dialog = await openInstallationRestore(page);
     const notice = dialog.getByRole("alert").filter({ hasText: "Retired Synthetic Plugin" });
@@ -987,7 +994,7 @@ for (const { viewport, theme } of pairedViews) {
 test("installation restore offers no discard while an included module depends on an unavailable one", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
   const requests: unknown[] = [];
-  await page.route("**/admin/data/restore", (route) => { requests.push(route.request().postDataJSON()); return route.fulfill({ status: 409, json: { error: "This backup contains module data that cannot be discarded because restored modules depend on it. Install the listed modules and retry.", code: "module-restore-refused", reason: "excluded-module-dependency", modules: [{ ...unavailablePlugin, status: "newer", installedBackupVersion: 2, source: null, commit: null }], dependencies: [{ moduleId: "synthetic-addon", label: "Synthetic Add-on", dependsOn: unavailablePlugin.id }], optOut: { available: false, excludeModules: [unavailablePlugin.id] }, details: [] } }); });
+  await page.route("**/admin/data/restore/sessions", (route) => { requests.push(route.request().postDataJSON()); return route.fulfill({ status: 409, json: { error: "This backup contains module data that cannot be discarded because restored modules depend on it. Install the listed modules and retry.", code: "module-restore-refused", reason: "excluded-module-dependency", modules: [{ ...unavailablePlugin, status: "newer", installedBackupVersion: 2, source: null, commit: null }], dependencies: [{ moduleId: "synthetic-addon", label: "Synthetic Add-on", dependsOn: unavailablePlugin.id }], optOut: { available: false, excludeModules: [unavailablePlugin.id] }, details: [] } }); });
   const dialog = await openInstallationRestore(page);
   const notice = dialog.getByRole("alert").filter({ hasText: "Retired Synthetic Plugin" });
   await expect(notice).toContainText("installed version is older (module backup version 2)");
@@ -998,6 +1005,150 @@ test("installation restore offers no discard while an included module depends on
   await expect(notice).toHaveCount(0); await expect(dialog.getByRole("button", { name: "Validate and restore", exact: true })).toBeEnabled();
   expect(requests).toHaveLength(1);
   await expectResponsiveFit(page, responsiveFit);
+});
+
+/** A backup whose scans are large enough to be uploaded in several parts. */
+function partedBackup(scans = 900) {
+  const events = Array.from({ length: scans }, (_, index) => ({ id: `test-event-${String(index).padStart(24, "0")}`, installation_id: "primary", member_id: "test-member-000000000000000000000001", meeting_id: "test-meeting-00000000000000000000001", source: "kiosk", occurred_at: "2026-01-05T18:00:00.000Z", kiosk_event_id: `test-scan-${String(index).padStart(25, "0")}`, created_by: null, action: "check_in" }));
+  return { product: "LancerLogin", schemaVersion: 52, scope: "installation", exportedAt: "2026-01-06T00:00:00.000Z", tables: { members: [{ id: "test-member-000000000000000000000001", first_name: "Test", last_name: "Student A" }], attendance_events: events } };
+}
+for (const { viewport, theme } of pairedViews) {
+  test(`a large restore uploads in parts, shows its progress and replaces the data in one last request at ${viewport.width}x${viewport.height} in ${theme} mode`, async ({ page }) => {
+    await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: "reduce", colorScheme: theme });
+    await page.addInitScript((savedTheme) => localStorage.setItem("lancerlogin-theme", savedTheme), theme);
+    await useSettingsContext(page);
+    const file = partedBackup(); const calls: string[] = []; const uploaded = new Map<number, unknown[]>(); let declared: { table: string; rows: number; sha256: string }[] = [];
+    let release!: () => void; const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/admin/data/restore/sessions", (route) => {
+      const body = route.request().postDataJSON() as { scope: string; confirmation: string; document: string; parts: typeof declared }; calls.push("start"); declared = body.parts;
+      expect([body.scope, body.confirmation]).toEqual(["installation", "RESTORE INSTALLATION"]);
+      // The document keeps the small tables and none of the scans; each part names its table, its rows and its digest.
+      expect(JSON.parse(body.document)).toEqual({ ...file, tables: { ...file.tables, attendance_events: [] } });
+      expect(declared.length).toBeGreaterThanOrEqual(3); expect(declared.every((part) => part.table === "attendance_events" && /^[0-9a-f]{64}$/.test(part.sha256))).toBe(true);
+      return route.fulfill({ status: 201, json: { id: restoreSession, digest: "d".repeat(64), parts: declared.map((_, index) => index) } });
+    });
+    await page.route(`**/admin/data/restore/sessions/${restoreSession}/parts/*`, async (route) => {
+      const seq = Number(route.request().url().split("/").at(-1)); calls.push("part"); expect(route.request().method()).toBe("PUT");
+      const body = route.request().postDataBuffer()!; expect(body.length).toBeLessThanOrEqual(65_536); uploaded.set(seq, JSON.parse(body.toString("utf8")) as unknown[]);
+      // The first part is acknowledged at once and the rest wait, so the progress line can be read.
+      if (seq !== 0) await held;
+      return route.fulfill({ json: { received: seq } });
+    });
+    await page.route(`**/admin/data/restore/sessions/${restoreSession}/commit`, (route) => { calls.push("commit"); expect(route.request().postDataJSON()).toEqual({ confirmation: "RESTORE INSTALLATION", digest: "d".repeat(64) }); return route.fulfill({ json: { restored: true, scope: "installation", recovery: { revokedKiosks: 2, invalidatedPairingCodes: 2, pausedProviderOperations: 1 } } }); });
+    await page.route("**/admin/data/restore", (route) => { calls.push("single request"); return route.fulfill({ status: 500, json: {} }); });
+    const dialog = await openInstallationRestore(page, file);
+    const progress = dialog.getByRole("status");
+    await expect(progress).toHaveText(/^Uploading the backup: 1 of \d+ parts\. Nothing is replaced until every part has arrived\.$/);
+    expect(await progress.textContent()).toContain(`1 of ${declared.length} parts`);
+    await expect(dialog.getByRole("button", { name: "Restoring…", exact: true })).toBeDisabled(); await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+    expect(calls).not.toContain("commit");
+    await expectResponsiveFit(page, responsiveFit);
+    const box = await progress.boundingBox(); const frame = await dialog.boundingBox(); expect(box!.x).toBeGreaterThanOrEqual(frame!.x); expect(box!.x + box!.width).toBeLessThanOrEqual(frame!.x + frame!.width + 1);
+    await dialog.screenshot({ path: test.info().outputPath(`restore-progress-${viewport.width}-${theme}.png`) });
+    release();
+    await expect(page.getByRole("status").filter({ hasText: "Entire installation restored successfully. 2 kiosk credentials were retired and must be paired again. 1 provider operation requires explicit review before retry." })).toBeVisible();
+    // Every scan went up exactly once, in parts, and the one request that replaces data came last.
+    expect([...uploaded.keys()].sort((left, right) => left - right).flatMap((seq) => uploaded.get(seq)!)).toEqual(file.tables.attendance_events);
+    expect(calls.filter((call) => call !== "part")).toEqual(["start", "commit"]); expect(calls.at(-1)).toBe("commit"); expect(calls.filter((call) => call === "part")).toHaveLength(declared.length);
+  });
+}
+
+for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+  test(`a restore that would write most of the Free plan's daily database allowance warns first and lets the Admin continue or cancel at ${viewport.width}x${viewport.height} in dark mode`, async ({ page }) => {
+    await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
+    await page.addInitScript(() => localStorage.setItem("lancerlogin-theme", "dark"));
+    await useSettingsContext(page);
+    // 12,000 scans at 7 written rows each, and one member at 6: 84,006 rows, over the 80,000 the dialog warns at.
+    const file = partedBackup(14_000); const calls: string[] = [];
+    await page.route("**/admin/data/restore/sessions", (route) => { const body = route.request().postDataJSON() as { parts: unknown[] }; calls.push("start"); return route.fulfill({ status: 201, json: { id: restoreSession, digest: "d".repeat(64), parts: body.parts.map((_, index) => index), estimatedRowsWritten: 84_006 } }); });
+    await page.route(`**/admin/data/restore/sessions/${restoreSession}/parts/*`, (route) => { calls.push("part"); return route.fulfill({ json: { received: 0 } }); });
+    await page.route(`**/admin/data/restore/sessions/${restoreSession}/commit`, (route) => { calls.push("commit"); return route.fulfill({ json: { restored: true, scope: "installation", recovery: { revokedKiosks: 0, invalidatedPairingCodes: 0, pausedProviderOperations: 0 } } }); });
+    await page.route("**/admin/data/restore", (route) => { calls.push("single request"); return route.fulfill({ status: 500, json: {} }); });
+    const dialog = await openInstallationRestore(page, file);
+    const warning = dialog.getByRole("alert");
+    await expect(warning).toHaveText("This restore writes at least about 84,000 database rows. Cloudflare's Free plan allows 100,000 a day across the account, and passing that stops the dashboard and kiosks until 00:00 UTC. Continue if the account's plan allows it or the installation can wait until then.");
+    await expect(warning).toHaveCount(1); await expect(warning).toHaveClass(/warning-callout/);
+    // Nothing was sent: the Admin has two choices, both enabled.
+    expect(calls).toEqual([]);
+    const proceed = dialog.getByRole("button", { name: "Restore anyway", exact: true }); await expect(proceed).toBeEnabled(); await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
+    await expect(dialog.getByRole("button", { name: "Validate and restore", exact: true })).toHaveCount(0);
+    await expectResponsiveFit(page, responsiveFit);
+    const box = await warning.boundingBox(); const frame = await dialog.boundingBox(); expect(box!.x).toBeGreaterThanOrEqual(frame!.x); expect(box!.x + box!.width).toBeLessThanOrEqual(frame!.x + frame!.width + 1);
+    await dialog.screenshot({ path: test.info().outputPath(`restore-write-warning-${viewport.width}-dark.png`) });
+    // Cancel sends nothing; choosing the file again asks again.
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click(); await expect(dialog).toHaveCount(0); expect(calls).toEqual([]);
+    const reopened = await openInstallationRestore(page, file); await expect(reopened.getByRole("alert")).toContainText("84,000 database rows"); expect(calls).toEqual([]);
+    await reopened.getByRole("button", { name: "Restore anyway", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Entire installation restored successfully." })).toBeVisible();
+    expect(calls[0]).toBe("start"); expect(calls.at(-1)).toBe("commit"); expect(calls).not.toContain("single request");
+  });
+}
+
+test("the write warning comes before the single request too, and a small restore shows none", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
+  const requests: { backup: { tables: { attendance_events: unknown[] } } }[] = [];
+  // The preview API has no restore sessions (404), so the dashboard uses the single request, as against an earlier release.
+  await page.route("**/admin/data/restore", (route) => { requests.push(route.request().postDataJSON()); return route.fulfill({ json: { restored: true, scope: "installation", recovery: { revokedKiosks: 0, invalidatedPairingCodes: 0, pausedProviderOperations: 0 } } }); });
+  const dialog = await openInstallationRestore(page, partedBackup(14_000));
+  await expect(dialog.getByRole("alert")).toContainText("This restore writes at least about 84,000 database rows."); expect(requests).toEqual([]);
+  // A smaller file chosen instead clears the warning and restores at once.
+  await dialog.locator("input[type='file']").setInputFiles({ name: "small.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(partedBackup(40))) });
+  await expect(dialog.getByRole("alert")).toHaveCount(0); await expect(dialog.getByRole("button", { name: "Validate and restore", exact: true })).toBeEnabled();
+  await dialog.locator("input[type='file']").setInputFiles({ name: "installation.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(partedBackup(14_000))) });
+  await dialog.getByRole("button", { name: "Validate and restore", exact: true }).click(); await expect(dialog.getByRole("alert")).toContainText("84,000"); expect(requests).toEqual([]);
+  await dialog.getByRole("button", { name: "Restore anyway", exact: true }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Entire installation restored successfully." })).toBeVisible();
+  expect(requests).toHaveLength(1); expect(requests[0]!.backup.tables.attendance_events).toHaveLength(14_000);
+});
+
+test("a part the API refuses stops the restore, cancels it and says nothing was changed", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
+  const calls: string[] = [];
+  await page.route("**/admin/data/restore/sessions", (route) => { const body = route.request().postDataJSON() as { parts: unknown[] }; return route.fulfill({ status: 201, json: { id: restoreSession, digest: "d".repeat(64), parts: body.parts.map((_, index) => index) } }); });
+  await page.route(`**/admin/data/restore/sessions/${restoreSession}/parts/*`, (route) => { calls.push("part"); return route.fulfill({ status: 409, json: { error: "A part of the backup did not arrive as it was sent. Nothing was changed.", code: "restore_part_mismatch" } }); });
+  await page.route(`**/admin/data/restore/sessions/${restoreSession}`, (route) => { calls.push(route.request().method()); return route.fulfill({ json: { cancelled: true } }); });
+  await page.route(`**/admin/data/restore/sessions/${restoreSession}/commit`, (route) => { calls.push("commit"); return route.fulfill({ status: 500, json: {} }); });
+  const dialog = await openInstallationRestore(page, partedBackup());
+  await expect(dialog.getByRole("alert")).toHaveText("A part of the backup did not arrive as it was sent. Nothing was changed.");
+  await expect(dialog.getByRole("status")).toHaveCount(0); await expect(dialog.getByRole("button", { name: "Validate and restore", exact: true })).toBeEnabled();
+  expect(calls).toContain("DELETE"); expect(calls).not.toContain("commit");
+  await expectResponsiveFit(page, responsiveFit);
+});
+
+test("an API without restore in parts takes the whole file in one request", async ({ page }) => {
+  await useSettingsContext(page);
+  const requests: { scope: string; confirmation: string; backup: unknown }[] = [];
+  // The preview API has no restore sessions and answers 404, as a release before restore in parts does.
+  await page.route("**/admin/data/restore", (route) => { requests.push(route.request().postDataJSON()); return route.fulfill({ json: { restored: true, scope: "installation", recovery: { revokedKiosks: 0, invalidatedPairingCodes: 0, pausedProviderOperations: 0 } } }); });
+  const file = partedBackup(); await openInstallationRestore(page, file);
+  await expect(page.getByRole("status").filter({ hasText: "Entire installation restored successfully." })).toBeVisible();
+  expect(requests).toEqual([{ scope: "installation", confirmation: "RESTORE INSTALLATION", backup: file }]);
+});
+
+test("a large backup downloads in parts with its progress and saves the assembled file", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 }); await useSettingsContext(page);
+  const session = "7a1f0c7e-4c1b-4d5e-9f3a-2b6c8d0e1f2b"; const calls: string[] = [];
+  const document = { product: "LancerLogin", format: "lancerlogin-community-modular", formatVersion: 1, schemaVersion: 52, scope: "meetings", exportedAt: "2026-01-06T00:00:00.000Z", tables: { meeting_weight_categories: [], meetings: [], attendance_events: [] } };
+  const parts = [{ seq: 1_000_000, rows: 1, table: "meetings" }, { seq: 2_000_000, rows: 2, table: "attendance_events" }, { seq: 2_000_001, rows: 1, table: "attendance_events" }];
+  const payloads: Record<number, unknown[][]> = { 1_000_000: [["test-meeting-1", "Test Meeting A", 1.5]], 2_000_000: [["test-event-1", "check_in", null], ["test-event-2", "check_out", null]], 2_000_001: [["test-event-3", "check_in", "admin"]] };
+  let release!: () => void; const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/admin/data/backup/sessions", (route) => { calls.push("start"); expect(route.request().postDataJSON()).toEqual({ scope: "meetings" }); return route.fulfill({ status: 201, json: { id: session, expiresAt: "2099-01-01T00:00:00.000Z", filename: "lancerlogin-meetings-backup-2026-01-06.json", document, columns: { meetings: ["id", "title", "attendance_weight"], attendance_events: ["id", "action", "created_by"] }, parts } }); });
+  await page.route(`**/admin/data/backup/sessions/${session}/parts/*`, async (route) => { const seq = Number(route.request().url().split("/").at(-1)); calls.push("part"); if (seq !== 1_000_000) await held; return route.fulfill({ json: payloads[seq] }); });
+  await page.route(`**/admin/data/backup/sessions/${session}/complete`, (route) => { calls.push("complete"); return route.fulfill({ json: { completed: true } }); });
+  await page.route("**/admin/data/backup?scope=*", (route) => { calls.push("single request"); return route.fulfill({ status: 500, json: {} }); });
+  await page.goto("/settings/data");
+  const category = page.locator(".data-category").filter({ has: page.getByRole("heading", { name: "Meetings and attendance", exact: true }) });
+  const saved = page.waitForEvent("download");
+  await category.getByRole("button", { name: "Download backup", exact: true }).click();
+  await expect(category.getByRole("button", { name: "Downloading… 33%", exact: true })).toBeDisabled();
+  await expectResponsiveFit(page, responsiveFit);
+  release();
+  const download = await saved; expect(download.suggestedFilename()).toBe("lancerlogin-meetings-backup-2026-01-06.json");
+  const stream = await download.createReadStream(); const chunks: Buffer[] = []; for await (const chunk of stream) chunks.push(chunk as Buffer);
+  expect(JSON.parse(Buffer.concat(chunks).toString("utf8"))).toEqual({ ...document, tables: { meeting_weight_categories: [], meetings: [{ id: "test-meeting-1", title: "Test Meeting A", attendance_weight: 1.5 }], attendance_events: [{ id: "test-event-1", action: "check_in", created_by: null }, { id: "test-event-2", action: "check_out", created_by: null }, { id: "test-event-3", action: "check_in", created_by: "admin" }] } });
+  await expect(page.getByRole("status").filter({ hasText: "Meetings and attendance backup downloaded. Store it securely." })).toBeVisible();
+  await expect(category.getByRole("button", { name: "Download backup", exact: true })).toBeEnabled();
+  expect(calls).toEqual(["start", "part", "part", "part", "complete"]);
 });
 
 test("Admin can add a Google email from Access and sees API errors inline", async ({ page }) => {

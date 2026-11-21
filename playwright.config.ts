@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const portBase = Number(process.env.LANCERLOGIN_BROWSER_PORT_BASE ?? 43_173);
+const portBase = Number(process.env.LANCERLOGIN_BROWSER_PORT_BASE ?? 23_173);
 if (!Number.isInteger(portBase) || portBase < 1_024 || portBase > 65_532) {
   throw new Error("LANCERLOGIN_BROWSER_PORT_BASE must reserve three valid consecutive ports.");
 }
@@ -26,6 +26,10 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
   workers: process.env.CI ? 1 : undefined,
+  // The Vite dev server sends the dashboard as hundreds of separate modules on every page load, from one process that
+  // all workers share. In a full parallel run a test that loads a dozen pages takes 16 to 22 seconds there, against 4
+  // to 8 from a production build, so on a busy computer it ran past 30 seconds. Dev server runs get twice as long.
+  timeout: dashboardServer === "dev" ? 60_000 : 30_000,
   // CI also writes a JSON report: the job summary lists the tests that needed their retry (scripts/browser-test-summary.mjs).
   reporter: process.env.CI ? [["github"], ["json", { outputFile: "playwright-report/browser-results.json" }]] : "list",
   // Every spec runs in UTC with en-US formatting unless it pins its own, so results never depend on the host's zone.

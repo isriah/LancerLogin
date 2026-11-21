@@ -160,8 +160,9 @@ test("real D1 keeps each one-label sync route and the job pass it starts within 
     assert.equal(review.status, 200, JSON.stringify(review.body)); assert.ok(review.body.mismatches.length >= 8, `${review.body.mismatches.length} mismatches`);
     const confirmed = await post("two-way/confirm", { previewId: review.body.previewId, all: "dashboard" }, true);
     assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body)); assert.equal(confirmed.body.rolesAdded + confirmed.body.rolesRemoved, review.body.mismatches.length);
-    assert.ok(confirmed.subrequests > 0 && confirmed.subrequests <= invocationBudget, `two-way confirm and its job pass made ${confirmed.subrequests} subrequests`);
-    assert.ok(await items(confirmed.body.jobId, "completed") > 0 && await items(confirmed.body.jobId, "pending") > 0);
+    // The confirmation runs no job pass of its own, which leaves it well below the limit: the scheduler makes the changes.
+    assert.ok(confirmed.subrequests > 0 && confirmed.subrequests <= invocationBudget - 15, `two-way confirm made ${confirmed.subrequests} subrequests`);
+    assert.equal(await items(confirmed.body.jobId, "completed"), 0); assert.equal(await items(confirmed.body.jobId, "pending"), review.body.mismatches.length);
     console.log(JSON.stringify({ benchmark: "discord_label_single_subrequests_d1", apply: applied.subrequests, retry: retried.subrequests, twoWayConfirm: confirmed.subrequests }));
   } finally { await runtime.dispose(); }
 });

@@ -151,8 +151,12 @@ test("Google Calendar migration and worker keep delivery scoped and retryable", 
   assert.match(migration, /action IN \('upsert', 'delete'\)/);
   assert.match(source, /summary: meeting.title, description: calendarAttendanceDetails\(meeting, await meetingAudienceText\(db, operation.meetingId\)\)/);
   assert.match(source, /Google Calendar delivery retries safely on the next scheduled pass/);
-  assert.match(source, /enqueueGoogleCalendarDelete/);
-  assert.match(source, /enqueueGoogleCalendarRestore/);
+  // Meeting routes queue deletes and restores through calendar-queue.ts, in the batch that changes the meeting.
+  const queue = await readFile("apps/api/src/calendar-queue.ts", "utf8");
+  assert.match(queue, /export function googleCalendarDeleteStatements/);
+  assert.match(queue, /export function googleCalendarSyncStatements\(db: D1Database, target: CalendarTarget, now: string\)/);
+  assert.match(source, /calendarLifecycleQueue\(db, "delete"/);
+  assert.match(source, /calendarLifecycleQueue\(db, "restore"/);
   assert.doesNotMatch(source, /summary: operation\.(title|notes)/);
 });
 
@@ -454,6 +458,17 @@ test("CI scopes ordinary changes and runs one complete exact-release gate", asyn
   assert.match(browserRunner, /LANCERLOGIN_BROWSER_PORT_BASE/);
   const playwrightConfig = await readFile("playwright.config.ts", "utf8");
   assert.match(playwrightConfig, /LANCERLOGIN_BROWSER_PORT_BASE/);
+  // Test servers bind fixed ports, so every default stays below 32768, where Linux starts handing ports to outgoing
+  // connections and to servers that ask for any free port. A virtual kiosk run failed once on a port taken that way.
+  const runnerPorts = /const portBase = ([\d_]+) \+ \(seed % ([\d_]+)\) \* 3;/.exec(browserRunner);
+  assert.ok(runnerPorts, "the browser runner derives its port base from the checkout");
+  const number = (text) => Number(text.replaceAll("_", ""));
+  assert.ok(number(runnerPorts[1]) >= 1_024 && number(runnerPorts[1]) + (number(runnerPorts[2]) - 1) * 3 + 2 < 32_768, "browser test ports stay below 32768");
+  const virtualKioskConfig = await readFile("playwright.virtual-kiosk.config.ts", "utf8");
+  for (const [name, text, span] of [["browser", playwrightConfig, 3], ["virtual kiosk", virtualKioskConfig, 34]]) {
+    const fallback = /PORT_BASE \?\? ([\d_]+)\)/.exec(text);
+    assert.ok(fallback && number(fallback[1]) >= 1_024 && number(fallback[1]) + span < 32_768, `the ${name} default port base stays below 32768`);
+  }
   assert.match(playwrightConfig, /workers: process\.env\.CI \? 1 : undefined/);
   assert.doesNotMatch(playwrightConfig, /reuseExistingServer: true|reuseExistingServer: !process\.env\.CI/);
   const releaseWorkflow = await readFile(".github/workflows/release.yml", "utf8");

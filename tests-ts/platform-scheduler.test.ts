@@ -68,15 +68,63 @@ test("the watchdog only re-arms a missing alarm and never runs a slice", async (
   assert.equal((await scheduler.fetch(new Request("https://scheduler.internal/start", { method: "POST" }))).status, 404, "the old start/stop paths are gone");
 });
 
-test("a slice that throws is retried in 30 seconds instead of looping, and serial control waits for it", async () => {
+test("a slice that throws is retried in 30 seconds, then with doubling delays up to five minutes, and serial control waits for it", async () => {
   const order: string[] = [];
   const fixture = harness([job("fixture.job")], async () => { order.push("slice"); await new Promise((resolve) => setTimeout(resolve, 5)); throw new Error("private provider detail"); });
   const scheduler = fixture.create();
   await Promise.all([scheduler.alarm(), scheduler.fetch(schedulerRequest("poke", { jobs: ["fixture.job"] })).then(() => order.push("poke"))]);
   assert.deepEqual(order, ["slice", "poke"]);
   assert.equal(fixture.alarm(), fixture.clock.now + SLICE_CONTINUE_MS, "the later poke still brings the retry forward");
-  fixture.setAlarm(null); await scheduler.alarm();
-  assert.equal(fixture.alarm(), fixture.clock.now + SLICE_RETRY_MS);
+  // A slice that keeps throwing (D1 unreachable, for example) backs off instead of running every 30 seconds for ever.
+  const delays: number[] = [];
+  for (let attempt = 0; attempt < 6; attempt += 1) { fixture.setAlarm(null); await scheduler.alarm(); delays.push(fixture.alarm()! - fixture.clock.now); }
+  assert.deepEqual(delays, [2, 4, 8, 10, 10, 10].map((factor) => Math.min(SLICE_IDLE_MAX_MS, SLICE_RETRY_MS * factor)), "1, 2 and 4 minutes, then every 5");
+});
+
+test("a slice that succeeds after failures starts the backoff over", async () => {
+  let fail = true;
+  const fixture = harness([job("fixture.job")], async () => { if (fail) throw new Error("synthetic D1 outage"); return { ran: "fixture.job", nextWake: fixture.clock.now + 300_000 }; });
+  const scheduler = fixture.create();
+  await scheduler.alarm(); await scheduler.alarm();
+  assert.equal(fixture.alarm(), fixture.clock.now + SLICE_RETRY_MS * 2);
+  fail = false; await scheduler.alarm();
+  assert.equal(fixture.alarm(), fixture.clock.now + 300_000);
+  fail = true; await scheduler.alarm();
+  assert.equal(fixture.alarm(), fixture.clock.now + SLICE_RETRY_MS, "the first failure after a success waits 30 seconds again");
+});
+
+test("while the cron fallback is the runner the object runs no slice and keeps no alarm, however it is asked", async () => {
+  let slices = 0; let active = true;
+  const stored = new Map<string, unknown>(); let alarm: number | null = null;
+  const storage = { get: async <T>(key: string) => stored.get(key) as T | undefined, put: async (key: string, value: unknown) => { stored.set(key, value); }, delete: async (key: string) => stored.delete(key), getAlarm: async () => alarm, setAlarm: async (time: number) => { alarm = time; }, deleteAlarm: async () => { alarm = null; } };
+  const clock = { now: 1_000_000 };
+  const Scheduler = schedulerClass([job("fixture.job")], async () => { slices += 1; return { ran: "fixture.job", more: true, nextWake: clock.now + SLICE_CONTINUE_MS }; }, () => clock.now, () => active);
+  const scheduler = new Scheduler({ storage }, {});
+  await scheduler.alarm();
+  assert.equal(slices, 1); assert.equal(alarm, clock.now + SLICE_CONTINUE_MS, "as the runner it re-arms itself");
+  // The deployment switches to the cron fallback with that alarm still armed.
+  active = false; stored.set("inflight", { job: "fixture.job", at: clock.now });
+  await scheduler.alarm();
+  assert.equal(slices, 1, "the armed alarm runs no slice");
+  assert.equal(alarm, null, "and is not re-armed");
+  assert.equal(stored.has("inflight"), false);
+  for (const action of ["watchdog", "poke"] as const) {
+    assert.deepEqual(await (await scheduler.fetch(schedulerRequest(action, { jobs: ["fixture.job"] }))).json(), { alarm: null, standby: true });
+    assert.equal(alarm, null, `${action} arms nothing`);
+  }
+  // Switched back, the watchdog arms it again.
+  active = true;
+  assert.deepEqual(await (await scheduler.fetch(schedulerRequest("watchdog"))).json(), { alarm: clock.now, rearmed: true });
+});
+
+test("a stand-down waits for the slice in flight, then drops the alarm, so a cron pass never overlaps a slice", async () => {
+  const order: string[] = [];
+  const fixture = harness([job("fixture.job")], async () => { order.push("slice starts"); await new Promise((resolve) => setTimeout(resolve, 5)); order.push("slice ends"); return { ran: "fixture.job", more: true, nextWake: fixture.clock.now + SLICE_CONTINUE_MS }; });
+  const scheduler = fixture.create();
+  const [, reply] = await Promise.all([scheduler.alarm(), scheduler.fetch(schedulerRequest("standdown")).then((response) => { order.push("stood down"); return response.json(); })]);
+  assert.deepEqual(order, ["slice starts", "slice ends", "stood down"]);
+  assert.deepEqual(reply, { alarm: null, standby: true });
+  assert.equal(fixture.alarm(), null, "the alarm the slice re-armed is gone");
 });
 
 test("continuations past the daily cap slow to one a minute so a stuck job cannot use up the Free plan's DO requests", async () => {

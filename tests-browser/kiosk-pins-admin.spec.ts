@@ -8,7 +8,7 @@ test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: "wait" })
 // Web kiosk phase 3 on the dashboard: Require PIN, PIN requests, the member Kiosk PIN card and the PIN lockout setting,
 // against the dashboard preview API's per-scenario PIN state. Test Student A (A-101) has a PIN; Test Student B (A-102)
 // has one locked after five wrong tries. Every name and value is synthetic.
-const mockApi = `http://127.0.0.1:${Number(process.env.LANCERLOGIN_BROWSER_PORT_BASE ?? 43_173) + 1}`;
+const mockApi = `http://127.0.0.1:${Number(process.env.LANCERLOGIN_BROWSER_PORT_BASE ?? 23_173) + 1}`;
 const students: Record<string, { rosterId: string; lastName: string }> = { "A-101": { rosterId: "member-1", lastName: "Student A" }, "A-102": { rosterId: "member-2", lastName: "Student B" } };
 
 async function useScenario(page: Page, id: string, role: "admin" | "operator" = "admin") {

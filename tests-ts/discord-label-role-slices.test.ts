@@ -10,6 +10,7 @@ import { scheduledSliceLimits } from "../apps/api/src/scheduler-budget.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
 import { InstallationSeed, TestD1Database, attendanceWithOutreachDisabled } from "./fixtures/d1-database.ts";
 import { sessionSecret } from "./fixtures/worker-fake-database.ts";
+import { countingDatabase } from "./fixtures/counting-database.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 
 const guildId = "123456789012345678", botId = "523456789012345678", botRoleId = "623456789012345678";
@@ -142,5 +143,30 @@ test("the cron fallback runs queued role changes and the two-way check in the sa
     }
     assert.deepEqual(jobRows(db).map((row) => [row.labelId, row.status, row.completed]), labels.map((label) => [label, "completed", membersPerLabel]), JSON.stringify(passes));
     assert.ok(passes.every((count) => count > 0), `every pass changes someone's role: ${JSON.stringify(passes)}`);
+  } finally { globalThis.fetch = original; }
+});
+
+// Workers Free allows 50 subrequests per invocation. With its own first pass over the queued role changes this request
+// used about 46, and Discord answering one request with a rate limit (a retry) took it over.
+test("turning on two-way sync leaves its role changes to the scheduler and stays far below 50 subrequests", async () => {
+  const { db, env, requests, added, fetchStub } = await installation();
+  db.sqlite.exec("UPDATE discord_label_role_mappings SET sync_direction = 'to_discord', two_way_enabled_at = NULL, two_way_checked_at = NULL WHERE label_id = 'label-b'");
+  const counted = countingDatabase(db); const countedEnv = { ...env, DB: counted } as Env;
+  const original = globalThis.fetch; globalThis.fetch = fetchStub;
+  try {
+    const passes: Promise<unknown>[] = [];
+    const preview = await call(countedEnv, "/admin/integrations/discord/label-roles/two-way/preview", { labelId: "label-b" }, passes);
+    const before = { d1: counted.queries.length, external: requests.length };
+    const result = await call(countedEnv, "/admin/integrations/discord/label-roles/two-way/confirm", { previewId: preview.previewId, all: "dashboard" }, passes);
+    await Promise.allSettled(passes);
+    const used = { d1: counted.queries.length - before.d1, external: requests.length - before.external };
+    assert.equal(result.rolesAdded, membersPerLabel); assert.equal(typeof result.jobId, "string");
+    assert.ok(used.d1 + used.external <= 30, `the request and everything it started used ${used.d1} D1 queries and ${used.external} Discord requests`);
+    assert.equal(added.length, 0, "no role is changed inside the request");
+    assert.deepEqual(jobRows(db).map((row) => [row.labelId, row.status, row.pending]), [["label-b", "pending", membersPerLabel]], "the changes wait in the label's role job");
+    // The label job, which the request's response pokes, makes the changes in its next slice.
+    const now = Date.now(); quietOtherJobs(db, now);
+    const report = await runSchedulerSlice(env, { [job]: now }, now);
+    assert.deepEqual(report.attempted, [job]); assert.ok(added.length > 0, "the scheduler's slice changes the first members");
   } finally { globalThis.fetch = original; }
 });

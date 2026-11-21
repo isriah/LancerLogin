@@ -80,9 +80,6 @@ test("organization branding stays local and the entry keeps the saved theme", as
   const configuration = await readFile("apps/dashboard/src/configuration-settings.tsx", "utf8");
   assert.match(settings, /accept="image\/png,image\/jpeg,image\/webp"/);
   assert.doesNotMatch(settings, /stored in D1/);
-  assert.match(styles, /\.setup-logo-file input\[type="file"\]::file-selector-button/);
-  assert.match(styles, /\.wizard-panel \.logo-backdrop-options \+ \.color-grid/);
-  assert.match(styles, /\.wizard-panel \.setup-branding-save \{ margin-top: \.45rem/);
   assert.match(entry, /brandTheme\(branding\.primaryColor, branding\.secondaryColor\)/);
   assert.match(entry, /data-theme=\{theme\}/);
   assert.match(entry, /lancerlogin-theme/);
@@ -145,7 +142,14 @@ test("data controls expose separate backup, restore, and deletion per category",
   for (const scope of ["meetings", "roster", "installation"]) {
     assert.match(source, new RegExp(`${scope}: \\{ title:`));
   }
-  assert.match(source, /\/admin\/data\/backup\?scope=\$\{scope\}/);
+  // Backups and restores move in parts (backup-transfer.ts); the single requests remain for an API without them.
+  const transfer = await readFile("apps/dashboard/src/backup-transfer.ts", "utf8");
+  const transferApi = await readFile("apps/dashboard/src/backup-transfer-api.ts", "utf8");
+  assert.match(source, /fetchBackup\(\{ scope, onProgress: track \}\)/);
+  assert.match(source, /restoreInParts\(transferRequest, \{ scope, confirmation: expected, backup: backupDocument/);
+  assert.match(transfer, /\/admin\/data\/backup\/sessions/);
+  assert.match(transfer, /\/admin\/data\/restore\/sessions/);
+  assert.match(transferApi, /\/admin\/data\/backup\?scope=\$\{input\.scope\}/);
   assert.match(source, /\/admin\/data\/restore/);
   assert.match(source, /RESTORE \$\{scope\.toUpperCase\(\)\}/);
   assert.match(source, /Sensitive backup/);
@@ -365,7 +369,7 @@ test("update assistant uses backup-confirmed durable web updates and separate ki
   const source = await readFile("apps/dashboard/src/updates-page.tsx", "utf8");
   const card = await readFile("apps/dashboard/src/web-update-card.tsx", "utf8");
   assert.match(source, /<WebUpdateCard/);
-  assert.match(card, /updateRequestId=/);
+  assert.match(card, /fetchBackup\(\{ scope: "installation", updateRequestId: id \}\)/);
   assert.match(card, /requestId: id, backupSaved: true/);
   assert.match(source, /readDashboardReleaseState/);
   assert.match(card, /reloadAvailable/);
@@ -408,7 +412,7 @@ test("reports are a routed workspace with a paginated leaderboard and saved repo
   assert.match(reports, /<ReportChoiceFilter key=\{filter\.id\} title=\{filter\.label\}/);
   assert.match(popovers, /<legend className="visually-hidden">\{title\} matching<\/legend>/);
   assert.match(reports, /moduleFilterSelection\(definition, filter\)/);
-  assert.match(reports, /From<input type="date"/);
+  assert.match(reports, /From<DateInput /);
   assert.match(reports, /Meeting type<select/);
   assert.match(reports, /Active roster/);
   assert.match(reports, /Team overall rate trend/);
@@ -669,7 +673,7 @@ test("integration setup distinguishes saved credentials from verified connection
   assert.match(source, /During verification, LancerLogin creates or updates only the guild-scoped/);
   assert.match(source, /<code>\/attendance-report<\/code>/);
   assert.match(source, /<code>\/code<\/code>, and <code>\/label<\/code> commands, plus the commands each installed plugin declares/);
-  assert.match(source, /Outreach adds <code>\/outreach-submit<\/code>, <code>\/outreach-correction<\/code> and, from Outreach v1\.4\.0, <code>\/outreach-report<\/code>/);
+  assert.match(source, /Outreach adds <code>\/outreach-submit<\/code>, <code>\/outreach-correction<\/code> and <code>\/outreach-report<\/code>/);
   assert.match(source, /Outreach commands remain unavailable until the Outreach module is enabled and ready/);
   assert.match(source, /server's Core and Outreach commands/);
   assert.match(source, /Verify with Google/);

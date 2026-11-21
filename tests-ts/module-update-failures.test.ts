@@ -10,6 +10,38 @@ import { TestD1Database } from "./fixtures/d1-database.ts";
 
 
 class Database extends TestD1Database {
+  /** Errors thrown by batches, so a test can say what an overlapping pass failed on. */
+  readonly batchErrors: string[] = [];
+  /** Passes are held after reading the module migration ledger until this many have read it (0: no holding). */
+  ledgerReaders = 0;
+  /** Make the next batch fail without running, as a dropped D1 request does. */
+  failNextBatch = false;
+  /** Run once, just before the next batch that records an update failure. */
+  beforeFailureRecord: (() => Promise<unknown>) | undefined;
+  private waiting: (() => void)[] = [];
+  writes() { return Number((this.sqlite.prepare("SELECT total_changes() AS n").get() as { n: number }).n); }
+  override prepare(sql: string) {
+    const statement = super.prepare(sql);
+    if (!this.ledgerReaders || !/FROM platform_module_migrations/.test(sql)) return statement;
+    // Both passes read the ledger before either writes: the interleaving two Worker isolates produce on a deployment's
+    // first requests. Held by a count, not a timer, so the test does not depend on timing.
+    const hold = async <T>(read: Promise<T>) => {
+      const result = await read;
+      if (this.ledgerReaders) await new Promise<void>((resolve) => {
+        this.waiting.push(resolve);
+        if (this.waiting.length >= this.ledgerReaders) { this.ledgerReaders = 0; for (const release of this.waiting.splice(0)) release(); }
+      });
+      return result;
+    };
+    return { bind: (...values: unknown[]) => { const bound = statement.bind(...values); return { all: () => hold(bound.all()) }; } } as never;
+  }
+  override async batch(statements: Parameters<TestD1Database["batch"]>[0]) {
+    if (this.failNextBatch) { this.failNextBatch = false; throw new Error("D1_ERROR: synthetic dropped request"); }
+    const before = this.beforeFailureRecord;
+    if (before && statements.some((statement) => /INSERT INTO platform_module_update_failures/.test((statement as unknown as { sql: string }).sql))) { this.beforeFailureRecord = undefined; await before(); }
+    try { return await super.batch(statements); }
+    catch (error) { this.batchErrors.push(error instanceof Error ? error.message : String(error)); throw error; }
+  }
   constructor() {
     super({ recordMigrations: true, seed: `INSERT INTO installations(id,created_at,auth_mode) VALUES('primary','2026-10-26','local');
       INSERT INTO users(id,installation_id,local_username,role,created_at) VALUES('admin','primary','synthetic-admin','admin','2026-10-26');
@@ -76,4 +108,78 @@ test("the recorded message keeps a refusal's explanation and replaces anything e
   const other = moduleUpdateFailureFor("Synthetic Notes", new ModuleMigrationError("module_migration_hash_review_required", "Module x: applied 0001 has a different hash"));
   assert.equal(other.code, "module_migration_hash_review_required"); assert.match(other.message, /Synthetic Notes/); assert.doesNotMatch(other.message, /different hash/);
   assert.equal(moduleUpdateFailureFor("Synthetic Notes", new Error("D1_ERROR: boom")).code, "module_migration_failed");
+});
+
+// A real update (2.0.0 to 2.1.0-beta.10) left a module_migration_failed record for a module whose migrations another pass
+// had applied 130 ms earlier, and nothing ever deleted it. These tests hold two passes at the point that update reached:
+// both have read the ledger and planned the same pending migrations before either writes.
+for (const [title, statements, loserError] of [
+  ["its own SQL", [table("synthetic_records")], /table synthetic_records already exists/],
+  ["the ledger's primary key", [table("synthetic_records").replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS")], /UNIQUE constraint failed: platform_module_migrations/],
+] as const) {
+  test(`two passes that start together both succeed when the second one's batch fails on ${title}`, async () => {
+    const db = new Database();
+    const migrations = release([{ ...first, statements: [...statements] }, second]);
+    db.ledgerReaders = 2;
+    const results = await Promise.all([
+      reconcileInstalledModules(db, new Date("2026-11-20T16:02:17.646Z"), { migrations }),
+      reconcileInstalledModules(db, new Date("2026-11-20T16:02:17.775Z"), { migrations }),
+    ]);
+    // The second pass's batch really did fail and roll back; that is not a failed migration.
+    assert.equal(db.batchErrors.length, 1); assert.match(db.batchErrors[0]!, loserError);
+    assert.deepEqual(results.map((result) => result.failures), [[], []]);
+    assert.deepEqual(failureRows(db), []);
+    assert.deepEqual(db.rows("SELECT sequence, name FROM platform_module_migrations WHERE module_id='attendance' ORDER BY sequence"), [{ sequence: 1, name: first.name }, { sequence: 2, name: second.name }]);
+    assert.deepEqual(db.rows("SELECT name FROM sqlite_master WHERE name IN ('synthetic_records','synthetic_moved') ORDER BY name"), [{ name: "synthetic_moved" }, { name: "synthetic_records" }]);
+    assert.deepEqual(await reconcileInstalledModules(db, new Date("2026-11-20T16:03:00.000Z"), { migrations }), { changed: false, failures: [] });
+    assert.deepEqual(failureRows(db), []);
+    db.sqlite.close();
+  });
+}
+
+test("a pass whose batch was lost records no failure once another pass has brought the module up to date", async () => {
+  const db = new Database();
+  const migrations = release([first]);
+  // This pass's migration batch never reaches the database, and the ledger still shows the migration pending when it
+  // looks again. Before it records that, another pass applies the migration and records the module.
+  db.failNextBatch = true;
+  db.beforeFailureRecord = () => reconcileInstalledModules(db, new Date("2026-11-20T16:02:17.646Z"), { migrations });
+  const lost = await reconcileInstalledModules(db, new Date("2026-11-20T16:02:17.775Z"), { migrations });
+  assert.equal(lost.failures.length, 1, "this pass did fail, so its isolate tries again");
+  assert.deepEqual(failureRows(db), [], "but the module is up to date, so Admins are shown nothing");
+  assert.deepEqual(await reconcileInstalledModules(db, new Date("2026-11-20T16:03:17.775Z"), { migrations }), { changed: false, failures: [] });
+  db.sqlite.close();
+});
+
+test("a failure record left for an up-to-date module is deleted by the next pass, at no cost when there is none", async () => {
+  const db = new Database();
+  const migrations = release([first]);
+  await reconcileInstalledModules(db, new Date("2026-11-20T16:02:17.646Z"), { migrations });
+  // The record installations already hold from the overlapping passes above.
+  const stale = moduleUpdateFailureFor("Attendance", new Error("duplicate column name"));
+  db.sqlite.prepare("INSERT INTO platform_module_update_failures VALUES('primary','attendance',?,?,?,?)").run(stale.code, stale.message, "2026-11-20T16:02:17.775Z", "2026-11-20T16:02:17.775Z");
+  assert.equal((await readModuleUpdateFailures(db)).length, 1);
+
+  let reads = db.reads;
+  assert.deepEqual(await reconcileInstalledModules(db, new Date("2026-11-20T16:05:00.000Z"), { migrations }), { changed: false, failures: [] });
+  assert.equal(db.reads - reads, 1, "learned from the catalog read every pass already makes");
+  assert.deepEqual(failureRows(db), []);
+
+  // Steady state afterwards: the same single read, and nothing written.
+  reads = db.reads; const writes = db.writes();
+  assert.deepEqual(await reconcileInstalledModules(db, new Date("2026-11-20T16:10:00.000Z"), { migrations }), { changed: false, failures: [] });
+  assert.equal(db.reads - reads, 1); assert.equal(db.writes(), writes);
+  assert.equal(db.batchErrors.length, 0);
+  db.sqlite.close();
+});
+
+test("a migration that keeps failing keeps its record, with the latest attempt", async () => {
+  const db = new Database();
+  const broken = release([first, { ...second, statements: ["CREATE TABLE synthetic_records(installation_id TEXT)"] }]);
+  assert.equal((await reconcileInstalledModules(db, new Date("2026-11-01T10:00:00.000Z"), { migrations: broken })).failures.length, 1);
+  assert.equal((await reconcileInstalledModules(db, new Date("2026-11-01T10:01:00.000Z"), { migrations: broken })).failures.length, 1);
+  assert.deepEqual(failureRows(db), [{ module_id: "attendance", code: "module_migration_failed", first_failed_at: "2026-11-01T10:00:00.000Z", last_tried_at: "2026-11-01T10:01:00.000Z" }]);
+  // The first migration stayed applied and recorded; only the broken one is pending.
+  assert.deepEqual(db.rows("SELECT name FROM platform_module_migrations WHERE module_id='attendance'"), [{ name: first.name }]);
+  db.sqlite.close();
 });

@@ -17,6 +17,8 @@ import { commandPacket, createR503, parseAcknowledgement } from "../apps/kiosk/s
 import { createR503PacketDecoder, encodeR503Packet } from "../apps/kiosk/src/r503-packets.mjs";
 import { createR503Transaction } from "../apps/kiosk/src/r503-transaction.mjs";
 import { createR503TemplateTransfer, r503TemplateBytes } from "../apps/kiosk/src/r503-template-transfer.mjs";
+// Tests that script the exact sequence of reader answers fix the capacity, as a reader that already reported it would.
+const scriptedR503 = (exchange) => createR503(exchange, { capacity: 200 });
 import { generateFingerprintIdentity, fingerprintPublicIdentity, fingerprintIdentityId, sealFingerprintTemplate, openFingerprintTemplate, fingerprintEnvelopeDigest } from "../apps/kiosk/src/fingerprint-envelope.mjs";
 import { createFingerprintIdentityStore } from "../apps/kiosk/src/fingerprint-identity-store.mjs";
 import { acquireFingerprintStateLock } from "../apps/kiosk/src/fingerprint-state-lock.mjs";
@@ -1697,7 +1699,7 @@ test("R503 packets are checksummed and expose only slot matches", async () => {
   assert.deepEqual([...commandPacket(0x1d)], [0xef, 0x01, 0xff, 0xff, 0xff, 0xff, 0x01, 0x00, 0x03, 0x1d, 0x00, 0x21]);
   assert.deepEqual(parseAcknowledgement(acknowledgement(0, [0, 3])).parameters, Uint8Array.from([0, 3]));
   const replies = [acknowledgement(0), acknowledgement(0, [0, 3]), acknowledgement(0), acknowledgement(0), acknowledgement(0, [0, 12, 0, 80])];
-  const sensor = createR503(async () => replies.shift());
+  const sensor = scriptedR503(async () => replies.shift());
   assert.deepEqual(await sensor.status(), { connected: true, templateCount: 3 });
   const match = await sensor.match();
   assert.deepEqual(match, { slot: 12, score: 80 });
@@ -1705,13 +1707,13 @@ test("R503 packets are checksummed and expose only slot matches", async () => {
 });
 
 test("R503 no-finger response is a normal unmatched scan", async () => {
-  const sensor = createR503(async () => acknowledgement(0x02));
+  const sensor = scriptedR503(async () => acknowledgement(0x02));
   assert.equal(await sensor.match(), undefined);
 });
 
 test("R503 semantic display states control only the reader aura LED", async () => {
   let packet;
-  const sensor = createR503(async (value) => { packet = value; return acknowledgement(0); });
+  const sensor = scriptedR503(async (value) => { packet = value; return acknowledgement(0); });
   await sensor.led({ color: 2, mode: 1, speed: 128, cycles: 0 });
   assert.equal(packet[9], 0x35);
   assert.deepEqual([...packet.slice(10, 14)], [1, 128, 2, 0]);
@@ -1719,12 +1721,12 @@ test("R503 semantic display states control only the reader aura LED", async () =
 
 test("R503 erases exactly one requested template slot and reports reader failures", async () => {
   let packet;
-  const sensor = createR503(async (value) => { packet = value; return acknowledgement(0); });
+  const sensor = scriptedR503(async (value) => { packet = value; return acknowledgement(0); });
   await sensor.deleteTemplate(130);
   assert.equal(packet[9], 0x0c);
   assert.deepEqual([...packet.slice(10, 14)], [0, 130, 0, 1], "page 130, one template");
   for (const slot of [-1, 200, 1.5]) await assert.rejects(sensor.deleteTemplate(slot), /slot must be between/);
-  await assert.rejects(createR503(async () => acknowledgement(0x10)).deleteTemplate(3));
+  await assert.rejects(scriptedR503(async () => acknowledgement(0x10)).deleteTemplate(3));
 });
 
 test("continuous scanner records a mapped match without a meeting ID", async () => {
@@ -1916,7 +1918,7 @@ test("R503 enrollment creates and stores a template without returning biometric 
   const replies = [acknowledgement(0, Array(32).fill(0)), acknowledgement(0), acknowledgement(0), acknowledgement(0x02), acknowledgement(0), acknowledgement(0), acknowledgement(0), acknowledgement(0)];
   const instructions = [];
   const progress = [];
-  const sensor = createR503(async (packet) => { instructions.push(packet[9]); return replies.shift(); });
+  const sensor = scriptedR503(async (packet) => { instructions.push(packet[9]); return replies.shift(); });
   const enrolled = await sensor.enroll(12, { attempts: 2, delayMs: 0, onProgress: async (state) => progress.push(state) });
   assert.deepEqual(enrolled, { slot: 12 });
   assert.deepEqual(instructions, [0x1f, 0x01, 0x02, 0x01, 0x01, 0x02, 0x05, 0x06]);
@@ -1927,7 +1929,7 @@ test("R503 enrollment creates and stores a template without returning biometric 
 test("R503 remote enrollment cannot create or store a template after authority is revoked", async () => {
   const replies = [acknowledgement(0, Array(32).fill(0)), acknowledgement(0), acknowledgement(0), acknowledgement(2), acknowledgement(0), acknowledgement(0)];
   const instructions = [];
-  const sensor = createR503(async packet => { instructions.push(packet[9]); return replies.shift(); });
+  const sensor = scriptedR503(async packet => { instructions.push(packet[9]); return replies.shift(); });
   await assert.rejects(sensor.enroll(3, { delayMs: 0, attempts: 2, beforeStore: async () => { throw new Error("Session cancelled"); } }), /Session cancelled/);
   assert.deepEqual(instructions, [0x1f, 0x01, 0x02, 0x01, 0x01, 0x02]);
   assert.equal(instructions.includes(0x05), false); assert.equal(instructions.includes(0x06), false);
@@ -1948,7 +1950,7 @@ test("R503 slot index reads bitmap pages without downloading fingerprint templat
 test("R503 refuses an occupied sensor slot even without a local mapping", async () => {
   const commands = [];
   const index = Array(32).fill(0); index[1] = 16;
-  const sensor = createR503(async (packet) => { commands.push(packet[9]); return acknowledgement(0, index); });
+  const sensor = scriptedR503(async (packet) => { commands.push(packet[9]); return acknowledgement(0, index); });
   await assert.rejects(() => sensor.enroll(12), /already contains a fingerprint/);
   assert.deepEqual(commands, [0x1f]);
 });
@@ -1956,7 +1958,7 @@ test("R503 refuses an occupied sensor slot even without a local mapping", async 
 test("R503 enrollment fails closed when slot availability is unreadable", async () => {
   for (const reply of [acknowledgement(0, [0]), acknowledgement(1)]) {
     const commands = [];
-    const sensor = createR503(async (packet) => { commands.push(packet[9]); return reply; });
+    const sensor = scriptedR503(async (packet) => { commands.push(packet[9]); return reply; });
     await assert.rejects(() => sensor.enroll(12, { replaceExisting: true }));
     assert.deepEqual(commands, [0x1f]);
   }
@@ -1965,13 +1967,13 @@ test("R503 enrollment fails closed when slot availability is unreadable", async 
 test("R503 permits explicitly confirmed replacement after checking the occupied slot", async () => {
   const index = Array(32).fill(0); index[1] = 16;
   const replies = [acknowledgement(0,index), acknowledgement(0), acknowledgement(0), acknowledgement(2), acknowledgement(0), acknowledgement(0), acknowledgement(0), acknowledgement(0)];
-  const sensor = createR503(async () => replies.shift());
+  const sensor = scriptedR503(async () => replies.shift());
   assert.deepEqual(await sensor.enroll(12,{replaceExisting:true,attempts:2,delayMs:0}),{slot:12});
   assert.equal(replies.length,0);
 });
 
 test("R503 enrollment errors are plain language for touch users", async () => {
-  const sensor = createR503(async () => acknowledgement(0x0a));
+  const sensor = scriptedR503(async () => acknowledgement(0x0a));
   await assert.rejects(() => sensor.enroll(12, { attempts: 1, delayMs: 0 }), (error) => {
     assert.match(error.message, /finger may already be stored|same finger/i);
     assert.doesNotMatch(error.message, /0x0a|R503/);

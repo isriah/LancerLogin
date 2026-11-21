@@ -222,9 +222,10 @@ test("Sync to Discord, Retry failed and turning on two-way sync each stay within
   assert.equal(review.status, 200, JSON.stringify(review.body)); assert.equal(review.body.mismatches.length, 11);
   const confirmed = await twoWay.call(`${base}/two-way/confirm`, { previewId: review.body.previewId, all: "dashboard" }, true);
   assert.equal(confirmed.status, 200, JSON.stringify(confirmed.body)); assert.equal(confirmed.body.rolesAdded + confirmed.body.rolesRemoved, 11);
-  within("two-way confirm with its first job pass", confirmed);
+  within("two-way confirm", confirmed);
+  // The confirmation runs no pass of its own: the queued changes are the scheduler's label job, which its response pokes.
   const confirmId = confirmed.body.jobId as string;
-  assert.ok(done(twoWay.db, confirmId) > 0 && pending(twoWay.db, confirmId) > 0); assert.equal(done(twoWay.db, confirmId) + pending(twoWay.db, confirmId), 11);
+  assert.equal(done(twoWay.db, confirmId), 0); assert.equal(pending(twoWay.db, confirmId), 11);
 });
 
 test("Apply all reports each preview it cannot use and starts the rest", async (context) => {

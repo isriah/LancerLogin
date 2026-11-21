@@ -160,7 +160,7 @@ test("meeting-local calendar and Discord actions retain their scoped outcomes", 
   await page.locator(".meeting-more-actions > summary").click();
   await expect(page.getByRole("group", { name: "Meeting actions" })).toBeVisible();
   await page.getByRole("button", { name: "Sync configured calendars" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Google Calendar: 1 updated · Discord: 0 updated, 1 queued" })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "Google Calendar: 1 updated · Discord: 1 queued. Queued changes are sent in the background, soonest meetings first." })).toBeVisible();
   await page.getByRole("button", { name: "Send Discord absence notice" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Discord absence notice sent to 1 linked member." })).toBeVisible();
   expect(calendarBodies).toEqual([{ meetingId: "active-meeting" }]);
@@ -221,6 +221,9 @@ test("meeting operations preserve the custom brand in light and dark desktop lay
   await page.goto("/meetings/active-meeting");
   const app = page.locator(".app");
   await expect(app).toHaveAttribute("data-theme", "dark");
+  // "Checking your installation…" is an .app too, in LancerLogin's own colors: the organization's colors arrive with the
+  // setup status. Read them once the meeting is on the page.
+  await expect(page.getByRole("heading", { name: "Build session" })).toBeVisible();
   const tokens = await app.evaluate((element) => { const style = getComputedStyle(element); return { primary: style.getPropertyValue("--primary").trim(), secondary: style.getPropertyValue("--secondary").trim() }; });
   expect(tokens).toEqual({ primary: "#8b2f72", secondary: "#e9b949" });
   await page.locator(".meeting-more-actions > summary").click();

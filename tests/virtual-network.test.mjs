@@ -18,7 +18,7 @@ test("the real network manager reads wired, Wi-Fi and disconnected states from t
   nmcli.set({ connection: "wifi", ssid: "Virtual Guest" });
   assert.deepEqual(await network.diagnostics(), { type: "wifi", signal: 52 });
   assert.deepEqual((await network.wifi()).map(({ ssid, active, secured }) => ({ ssid, active, secured })), [
-    { ssid: "Virtual Guest", active: true, secured: false }, { ssid: "Virtual Lab", active: false, secured: true }, { ssid: "Virtual Shop", active: false, secured: true },
+    { ssid: "Virtual Guest", active: true, secured: false }, { ssid: "Virtual Lab", active: false, secured: true }, { ssid: "Virtual Shop", active: false, secured: true }, { ssid: "Virtual Campus", active: false, secured: true },
   ]);
   assert.throws(() => nmcli.set({ connection: "wifi", ssid: "Somewhere else" }), /listed network/);
 });

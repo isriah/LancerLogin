@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { r503FallbackCapacity } from "./r503.mjs";
 import { requireRosterIdentity } from "./verified-enrollment.mjs";
 
 // Enrollment, mapping edits and incoming template transfers must share the same
@@ -11,7 +12,8 @@ export async function enrollFingerprint({ sensor, mappings, withSensor, slot, au
     if (autoSlot) {
       if (replaceExisting) throw new Error("Dashboard enrollment cannot replace reader slots.");
       const occupied = new Set(await sensor.occupiedSlots());
-      slot = Array.from({ length: 200 }, (_, index) => index).find(candidate => !occupied.has(candidate) && !current[String(candidate)]);
+      // The capacity the reader reports (r503.mjs); a sensor that cannot say is the standard 200-slot reader.
+      slot = Array.from({ length: await sensor.capacity?.() ?? r503FallbackCapacity }, (_, index) => index).find(candidate => !occupied.has(candidate) && !current[String(candidate)]);
       if (slot === undefined) throw new Error("No verified free fingerprint slot is available. Review local mappings and reader slots.");
     }
     if (current[String(slot)] && !replaceExisting) throw new Error(`Sensor slot ${slot} is already mapped; confirm replacement to continue`);

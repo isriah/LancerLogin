@@ -5,6 +5,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { createFingerprintJournal } from "./fingerprint-journal.mjs";
 import { createFingerprintImporter } from "./fingerprint-importer.mjs";
 import { freshFingerprintSource } from "./fingerprint-source.mjs";
+import { r503FallbackCapacity } from "./r503.mjs";
 
 const id = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const memberId = value => typeof value === "string" && value.length > 0 && value.length <= 100 && value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
@@ -15,7 +16,7 @@ const signature = (slot, mapping) => digest(JSON.stringify([slot, mapping.member
 // Installation enablement authorizes new local enrollment export and import for paired
 // R503 kiosks. No model is written to local files: only the existing safe import
 // journal records delivery/member/slot metadata. Attendance delivery is separate.
-export function createFingerprintVault({ directory, config, client, sensor, templates, mappings, withSensor, fetchRoster, capacity = 200, now = Date.now }) {
+export function createFingerprintVault({ directory, config, client, sensor, templates, mappings, withSensor, fetchRoster, capacity: configuredCapacity, now = Date.now }) {
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(config?.kioskId ?? "") || !/^[A-Za-z0-9._:-]{1,128}$/.test(config?.pairingId ?? "")) throw new Error("Fingerprint cloud storage requires a bound kiosk pairing");
   let running, vaultId, journal, importer, cursor, downloadCursor = 0, captureCursor = 0, resetPaused = false;
   let members = new Map(), rosterUntil = 0, captured = new Set();
@@ -37,7 +38,7 @@ export function createFingerprintVault({ directory, config, client, sensor, temp
       if (remote.vaultId !== vaultId) {
         vaultId = remote.vaultId; captured.clear(); cursor = undefined;
         journal = createFingerprintJournal(join(directory, `${config.kioskId}-${config.pairingId}`, vaultId, "received.json"), { installationId: vaultId, kioskId: config.kioskId, pairingId: config.pairingId }, { allowSuperseded: true });
-        importer = createFingerprintImporter({ journal, sensor, templates, mappings, withSensor, isMemberActive: active, capacity, reuseExisting: true });
+        importer = createFingerprintImporter({ journal, sensor, templates, mappings, withSensor, isMemberActive: active, capacity: configuredCapacity, reuseExisting: true });
       }
       stage = "roster_unavailable";
       const roster = await (metadata?.roster ?? fetchRoster)();
@@ -45,6 +46,9 @@ export function createFingerprintVault({ directory, config, client, sensor, temp
       members = new Map(roster.members.map(member => [member.memberId, member.rosterId])); rosterUntil = Math.min(now() + 60000, roster.freshUntil ?? Infinity);
       if (!(rosterUntil > now())) throw new Error("Fresh active roster is unavailable");
       stage = "local_state_review";
+      // The capacity the reader reports (r503.mjs). A reader that cannot be asked right now is taken as the standard
+      // one; anything that then needs the reader fails on its own.
+      const capacity = configuredCapacity ?? await withSensor(async () => await sensor.capacity?.() ?? r503FallbackCapacity).catch(() => r503FallbackCapacity);
       const entries = Object.entries(await mappings.read());
       if (entries.length > capacity || entries.some(([slot, mapping]) => !/^\d{1,4}$/.test(slot) || Number(slot) >= capacity || !memberId(mapping.memberId))) throw new Error("Fingerprint mappings require local review");
       const currentSignatures = new Set(entries.map(([slot, mapping]) => signature(slot, mapping)));

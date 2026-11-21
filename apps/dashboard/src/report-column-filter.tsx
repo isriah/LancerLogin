@@ -2,6 +2,7 @@ import { useState } from "react";
 import { hoursMinutesAsMinutes, minutesAsHoursMinutes } from "./report-view";
 import { ReportFilterActions, ReportPopoverHeading } from "./report-filter-popover";
 import type { ReportColumnFilter, ReportDataset, ReportDurationUnit } from "./saved-reports";
+import { DateInput } from "./date-input";
 
 export const reportFilterLabels = { contains: "Contains", minimum: "Minimum", equals: "Equals", maximum: "Maximum", between: "Between", empty: "Is empty", not_empty: "Is not empty" };
 const operatorHelp: Record<ReportColumnFilter["operator"], string> = { contains: "Matches part of the text, ignoring case.", minimum: "Includes the value you enter.", equals: "Matches the value exactly.", maximum: "Includes the value you enter.", between: "Includes both endpoints. Enter the lower value first.", empty: "Rows with no value.", not_empty: "Rows with any value." };
@@ -18,7 +19,8 @@ export function ReportColumnFilterControl({ title, status, field, filter, unit, 
   const [upper, setUpper] = useState(shown(filter?.upperValue));
   const empty = operator === "empty" || operator === "not_empty";
   const dateInput = field.valueType === "date" && operator !== "contains";
-  const inputType = hoursMinutes ? "text" : field.valueType === "number" ? "number" : dateInput ? "date" : "search";
+  // A date filter uses DateInput (its Tab handling); every other filter is a plain input of this type.
+  const inputType = hoursMinutes ? "text" : field.valueType === "number" ? "number" : "search";
   const parse = (value: string) => {
     const text = value.trim();
     if (!text) return undefined;
@@ -36,7 +38,7 @@ export function ReportColumnFilterControl({ title, status, field, filter, unit, 
     setOperator(next);
     if (field.valueType === "date" && next !== "contains" && !/^\d{4}-\d{2}-\d{2}$/.test(lower)) setLower("");
   }
-  const input = (label: string, value: string, set: (value: string) => void) => <label className="report-column-filter">{label}{unitText}<input type={inputType} inputMode={hoursMinutes ? "numeric" : undefined} placeholder={hoursMinutes ? "0:00" : undefined} step={inputType === "number" ? "any" : undefined} aria-invalid={hoursMinutes && value.trim() && parse(value) === undefined ? true : undefined} value={value} onChange={(event) => set(event.target.value)} /></label>;
+  const input = (label: string, value: string, set: (value: string) => void) => <label className="report-column-filter">{label}{unitText}{dateInput ? <DateInput value={value} onChange={(event) => set(event.target.value)} /> : <input type={inputType} inputMode={hoursMinutes ? "numeric" : undefined} placeholder={hoursMinutes ? "0:00" : undefined} step={inputType === "number" ? "any" : undefined} aria-invalid={hoursMinutes && value.trim() && parse(value) === undefined ? true : undefined} value={value} onChange={(event) => set(event.target.value)} />}</label>;
   return <form className="report-filter-form report-column-filter-control" onSubmit={(event) => { event.preventDefault(); if (!canApply) return; if (empty) onApply(operator, ""); else onApply(operator, lowerValue!, operator === "between" ? upperValue : undefined); }}>
     <ReportPopoverHeading title={title} status={status} onBack={onBack} />
     <label className="report-column-filter">Filter condition<select value={operator} onChange={(event) => selectOperator(event.target.value as typeof operator)}>{field.filterOperators.map((value) => <option key={value} value={value}>{reportFilterLabels[value]}</option>)}</select></label>

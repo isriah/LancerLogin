@@ -3,16 +3,22 @@
 // "member:1001:1"; the reader stores which finger each slot holds and finds it again when that finger is presented.
 //
 // Modeled: password check, template count, slot index, image capture, image to template, search, template creation
-// and storage, template deletion and LED control, plus faults (faint, messy or unusable images, no match, a chosen
-// match score, slow answers, and an unplugged reader). Not modeled: template upload and download (fingerprint
-// sharing between kiosks), the reader's own match scoring, and any instruction the kiosk doesn't send.
+// and storage, template deletion, system parameters (the capacity the reader reports) and LED control, plus faults
+// (faint, messy, unusable or garbled images, no match, a chosen match score, slow answers, answers that arrive after
+// the kiosk stopped waiting, line noise, and an unplugged reader). Not modeled: template upload and download
+// (fingerprint sharing between kiosks), the reader's own match scoring, and any instruction the kiosk doesn't send.
+//
+// The reader can be reached two ways. exchange() takes one command and returns its answer. openHandle() is the serial
+// port itself, for the kiosk's real serial transport (apps/kiosk/src/serial-transport.mjs): bytes written to it are
+// commands and the answers arrive as bytes to read, which is where late answers and noise can be modeled.
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 
 const header = [0xef, 0x01, 0xff, 0xff, 0xff, 0xff];
 const checksum = (bytes) => bytes.reduce((sum, value) => (sum + value) & 0xffff, 0);
 const pause = (ms) => ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 
-export const imageFaults = Object.freeze({ faint: 0x03, messy: 0x06, unusable: 0x07 });
+// garbled is the reader's "could not receive the request" answer (0x01): it is working, the exchange was not.
+export const imageFaults = Object.freeze({ faint: 0x03, messy: 0x06, unusable: 0x07, garbled: 0x01 });
 export const defaultMatchScore = 180;
 
 /** An acknowledgement packet with a confirmation code and parameters. */
@@ -32,7 +38,11 @@ export function readCommand(packet) {
   return { instruction: bytes[9], parameters: [...bytes.slice(10, -2)] };
 }
 
-export function createVirtualR503({ path, capacity = 200, timeoutMs = 600 } = {}) {
+// Readers that differ from the manual, to check the kiosk still works as it did before it asked for the system
+// parameters: reportsCapacity false refuses the question; reportedCapacity is the size it claims (0 with system id 0 for
+// a reader that reports nothing useful); systemParameterBytes is how many parameter bytes it answers with instead of
+// 16; ignoresSystemParameters never answers the question at all; trailingBytes follow every acknowledgement.
+export function createVirtualR503({ path, capacity = 200, reportsCapacity = true, reportedCapacity = capacity, systemParameterBytes = 16, ignoresSystemParameters = false, trailingBytes = [], timeoutMs = 600 } = {}) {
   const slots = new Map();
   if (path && existsSync(path)) for (const [slot, finger] of Object.entries(JSON.parse(readFileSync(path, "utf8")).slots ?? {})) slots.set(Number(slot), finger);
   const save = () => {
@@ -42,10 +52,17 @@ export function createVirtualR503({ path, capacity = 200, timeoutMs = 600 } = {}
     renameSync(temporary, path);
   };
   const state = { finger: null, image: null, buffers: { 1: null, 2: null }, model: null, led: null, liftTimer: undefined };
-  const faults = { image: null, imageReads: 0, noMatch: false, score: defaultMatchScore, delayMs: 0, unplugged: false };
+  const faults = { image: null, imageReads: 0, noMatch: false, score: defaultMatchScore, delayMs: 0, unplugged: false, lateReplies: 0, lateMs: 0, noiseReplies: 0 };
+  const instructions = [];
 
   function answer({ instruction, parameters }) {
+    instructions.push(instruction); if (instructions.length > 500) instructions.shift();
     switch (instruction) {
+      case 0x0f: { // System parameters: status, system id, library size, security level, address, packet size, baud
+        if (!reportsCapacity) return acknowledgement(0x01);
+        const parameters = [0, 0, 0, 0, reportedCapacity >> 8, reportedCapacity & 0xff, 0, 3, 0xff, 0xff, 0xff, 0xff, 0, 2, 0, 6];
+        return acknowledgement(0, Array.from({ length: systemParameterBytes }, (_, index) => parameters[index] ?? 0));
+      }
       case 0x13: return acknowledgement(0); // Password verification
       case 0x1d: return acknowledgement(0, [slots.size >> 8, slots.size & 0xff]); // Template count
       case 0x1f: { // Slot index for one page of 256 slots
@@ -89,7 +106,34 @@ export function createVirtualR503({ path, capacity = 200, timeoutMs = 600 } = {}
     }
   }
 
+  // The serial port: bytes the reader has sent and the kiosk has not read yet. They stay queued while no handle is open.
+  const inbox = [];
+  const noise = [0x00, 0xef, 0x01, 0xff, 0x07, 0xef];
+  const eagain = () => Object.assign(new Error("EAGAIN: resource temporarily unavailable, read"), { code: "EAGAIN" });
+  function receive(bytes) {
+    const command = readCommand(bytes);
+    if (faults.unplugged || ignoresSystemParameters && command?.instruction === 0x0f) return;
+    const reply = command ? answer(command) : acknowledgement(0x01);
+    let wait = faults.delayMs;
+    if (faults.lateReplies > 0) { faults.lateReplies -= 1; wait += faults.lateMs; }
+    const send = () => { if (faults.noiseReplies > 0) { faults.noiseReplies -= 1; inbox.push(...noise); } inbox.push(...reply, ...trailingBytes); };
+    if (wait > 0) setTimeout(send, wait).unref?.(); else send();
+  }
+
   return {
+    /** The serial port for createSerialExchange's openHandle option: non-blocking, like /dev/serial0 on a Pi. */
+    async openHandle() {
+      return {
+        async write(bytes) { receive(Uint8Array.from(bytes)); return { bytesWritten: bytes.length }; },
+        async read(target, offset = 0, length = target.length) {
+          if (!inbox.length) throw eagain();
+          const chunk = inbox.splice(0, length); target.set(chunk, offset); return { bytesRead: chunk.length };
+        },
+        async close() {},
+      };
+    },
+    /** The instructions the reader has answered, oldest first (the last 500). */
+    instructions: () => [...instructions],
     /** The serial exchange: one command packet in, one acknowledgement out, as createSerialExchange does on a Pi. */
     async exchange(packet) {
       await pause(faults.delayMs);
@@ -105,11 +149,18 @@ export function createVirtualR503({ path, capacity = 200, timeoutMs = 600 } = {}
     },
     lift() { clearTimeout(state.liftTimer); state.finger = null; },
     setFaults(next) {
-      if (next.image !== undefined) { if (next.image !== null && !Object.hasOwn(imageFaults, next.image)) throw new Error("Image fault must be faint, messy or unusable"); faults.image = next.image === null ? null : imageFaults[next.image]; faults.imageReads = next.image === null ? 0 : Math.min(Math.max(Number(next.imageReads ?? 1), 1), 20); }
+      if (next.image !== undefined) { if (next.image !== null && !Object.hasOwn(imageFaults, next.image)) throw new Error("Image fault must be faint, messy, unusable or garbled"); faults.image = next.image === null ? null : imageFaults[next.image]; faults.imageReads = next.image === null ? 0 : Math.min(Math.max(Number(next.imageReads ?? 1), 1), 20); }
       if (next.noMatch !== undefined) faults.noMatch = Boolean(next.noMatch);
       if (next.score !== undefined) { const score = Number(next.score); if (!Number.isInteger(score) || score < 0 || score > 65_535) throw new Error("Match score must be 0 to 65535"); faults.score = score; }
       if (next.delayMs !== undefined) { const delay = Number(next.delayMs); if (!Number.isInteger(delay) || delay < 0 || delay > 10_000) throw new Error("Delay must be 0 to 10000 ms"); faults.delayMs = delay; }
       if (next.unplugged !== undefined) faults.unplugged = Boolean(next.unplugged);
+      // The next lateReplies answers arrive lateMs later than usual: set lateMs past the kiosk's timeout for answers
+      // that turn up after it stopped waiting. The next noiseReplies answers have stray bytes in front of them.
+      for (const [name, limit] of [["lateReplies", 20], ["lateMs", 10_000], ["noiseReplies", 20]]) {
+        if (next[name] === undefined) continue;
+        const value = Number(next[name]); if (!Number.isInteger(value) || value < 0 || value > limit) throw new Error(`${name} must be 0 to ${limit}`);
+        faults[name] = value;
+      }
     },
     status() {
       const image = Object.entries(imageFaults).find(([, code]) => code === faults.image)?.[0] ?? null;

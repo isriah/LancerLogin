@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { configureKioskPlatform } from "../../apps/kiosk/src/kiosk-platform.mjs";
 import { createNetworkManager } from "../../apps/kiosk/src/network-manager.mjs";
 import { createR503 } from "../../apps/kiosk/src/r503.mjs";
+import { createSerialExchange } from "../../apps/kiosk/src/serial-transport.mjs";
 import { prepareVerifiedKioskUpdate } from "../../apps/kiosk/src/update-command.mjs";
 import { createVirtualNmcli, rebootExitCode, updateExitCode } from "./fakes.mjs";
 import { createVirtualR503 } from "./virtual-r503.mjs";
@@ -36,7 +37,8 @@ process.on("message", (message) => {
 });
 
 configureKioskPlatform({
-  sensor: () => createR503(reader.exchange),
+  // The real serial transport on the virtual reader's serial port, with a short timeout so an unplugged reader shows quickly.
+  sensor: () => createR503(createSerialExchange("virtual-r503", { openHandle: reader.openHandle, timeoutMs: 600 })),
   templateTransaction: () => async () => { throw new Error("Virtual kiosks don't share fingerprint templates"); },
   networkManager: () => createNetworkManager({ run: nmcli.run, connectSecure: nmcli.connectSecure }),
   // A boot keeps its identity across service restarts and gets a new one on a virtual reboot, like /proc on a Pi.

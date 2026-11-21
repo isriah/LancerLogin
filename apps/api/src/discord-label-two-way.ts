@@ -125,10 +125,21 @@ const labelChangeStatement = (db: D1Database, pair: TwoWayPair, labelId: string,
   db.prepare("INSERT INTO member_label_changes (id, installation_id, member_id, label_id, action, effective_date, created_by, created_at, source) VALUES (?, 'primary', ?, ?, ?, ?, NULL, ?, 'discord') ON CONFLICT (installation_id, member_id, label_id, effective_date) DO UPDATE SET action = excluded.action, created_by = NULL, created_at = excluded.created_at, source = 'discord'").bind(crypto.randomUUID(), pair.memberRowId, labelId, action, today, at);
 const snapshotStatement = (db: D1Database, labelId: string, pair: TwoWayPair, state: boolean, at: string) =>
   db.prepare("INSERT INTO discord_label_two_way_members (installation_id, label_id, member_id, discord_user_id, synced_state, synced_at) VALUES ('primary', ?, ?, ?, ?, ?) ON CONFLICT (installation_id, label_id, member_id) DO UPDATE SET discord_user_id = excluded.discord_user_id, synced_state = excluded.synced_state, synced_at = excluded.synced_at").bind(labelId, pair.memberRowId, pair.discordUserId, state ? 1 : 0, at);
-const unmatchedStatements = (db: D1Database, labelId: string, unmatched: TwoWayUnmatched[], at: string) => [
-  db.prepare("DELETE FROM discord_label_unmatched_role_members WHERE installation_id = 'primary' AND label_id = ?").bind(labelId),
-  ...unmatched.map((user) => db.prepare("INSERT INTO discord_label_unmatched_role_members (installation_id, label_id, discord_user_id, display_name, seen_at) VALUES ('primary', ?, ?, ?, ?)").bind(labelId, user.discordUserId, user.displayName.slice(0, 100), at)),
-];
+/**
+ * Brings a label's stored unmatched role holders in line with the server, writing only the differences: holders no
+ * longer unmatched are deleted, new ones inserted, a changed display name updated, and every other row left untouched.
+ * Two statements whatever the number of holders, and no rows written when nothing changed. (Deleting and re-inserting
+ * every holder on each five-minute check wrote about 127,000 rows a day for a role with 110 unlinked holders, more than
+ * D1 Free's 100,000, after which every write in the installation fails.) `seen_at` is therefore when a holder was first
+ * seen unmatched; when the list was last checked is the label's own `two_way_checked_at`, which the dashboard shows.
+ */
+const unmatchedStatements = (db: D1Database, labelId: string, unmatched: TwoWayUnmatched[], at: string) => {
+  const holders = JSON.stringify(unmatched.map((user) => ({ id: user.discordUserId, name: user.displayName.slice(0, 100) })));
+  return [
+    db.prepare("DELETE FROM discord_label_unmatched_role_members WHERE installation_id = 'primary' AND label_id = ? AND discord_user_id NOT IN (SELECT json_extract(value, '$.id') FROM json_each(?))").bind(labelId, holders),
+    db.prepare("INSERT INTO discord_label_unmatched_role_members (installation_id, label_id, discord_user_id, display_name, seen_at) SELECT 'primary', ?, json_extract(value, '$.id'), json_extract(value, '$.name'), ? FROM json_each(?) WHERE true ON CONFLICT (installation_id, label_id, discord_user_id) DO UPDATE SET display_name = excluded.display_name WHERE discord_label_unmatched_role_members.display_name IS NOT excluded.display_name").bind(labelId, at, holders),
+  ];
+};
 const auditStatement = (db: D1Database, actorUserId: string | null, action: string, labelId: string, metadata: unknown, at: string) =>
   db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, ?, 'member_label', ?, ?, ?)").bind(crypto.randomUUID(), actorUserId, action, labelId, JSON.stringify(metadata), at);
 

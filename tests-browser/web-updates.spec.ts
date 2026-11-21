@@ -42,6 +42,33 @@ const webStatus = (page: Page) => page.locator(".web-update-status");
 const refresh = (page: Page) => page.getByRole("button", { name: "Refresh update status", exact: true });
 const backupConfirmation = (page: Page) => page.getByRole("checkbox", { name: "I saved this update’s entire-installation backup file securely." });
 
+test("the update's backup downloads in parts and counts as exported only once the download completes", async ({ page }) => {
+  // The other tests run against an API without backups in parts (the preview API answers 404), which uses one request.
+  const state = await setup(page); const session = "7a1f0c7e-4c1b-4d5e-9f3a-2b6c8d0e1f2c"; const calls: string[] = []; let failPart = true;
+  await page.route("**/admin/data/backup/sessions", (route) => {
+    calls.push("start"); expect(route.request().postDataJSON()).toEqual({ scope: "installation", updateRequestId: state.request?.requestId });
+    return route.fulfill({ status: 201, json: { id: session, expiresAt: "2099-01-01T00:00:00.000Z", filename: "synthetic-update-backup.json", document: { product: "LancerLogin", scope: "installation", tables: { installations: [], members: [] } }, columns: { installations: ["id"], members: ["id", "first_name"] }, parts: [{ seq: 0, rows: 1, table: "installations" }, { seq: 1_000_000, rows: 2, table: "members" }] } });
+  });
+  await page.route(`**/admin/data/backup/sessions/${session}/parts/*`, (route) => { const seq = Number(route.request().url().split("/").at(-1)); calls.push("part"); return seq && failPart ? route.fulfill({ status: 404, json: { error: "This backup is no longer being prepared. Download the backup again.", code: "transfer_session_missing" } }) : route.fulfill({ json: seq ? [["test-member-1", "Test Student A"], ["test-member-2", "Test Student B"]] : [["primary"]] }); });
+  await page.route(`**/admin/data/backup/sessions/${session}`, (route) => { calls.push(route.request().method()); return route.fulfill({ json: { cancelled: true } }); });
+  await page.route(`**/admin/data/backup/sessions/${session}/complete`, (route) => { calls.push("complete"); state.request = { ...state.request!, backupExported: true }; return route.fulfill({ json: { completed: true } }); });
+  await page.goto("/settings/updates");
+  await page.getByRole("button", { name: "Back up and begin update" }).click();
+  // A part that fails leaves the update without its backup: nothing was recorded, and the download is cancelled.
+  await page.getByRole("button", { name: "Download entire-installation backup" }).click();
+  await expect(webStatus(page)).toContainText("required pre-update backup could not be created");
+  expect(calls).toContain("DELETE"); expect(calls).not.toContain("complete"); expect(state.request?.backupExported).toBeFalsy();
+  await expect(page.getByRole("button", { name: `Start update to ${targetTag}` })).toHaveCount(0);
+  failPart = false; calls.length = 0;
+  const saved = page.waitForEvent("download"); await page.getByRole("button", { name: "Download entire-installation backup" }).click();
+  const download = await saved; expect(download.suggestedFilename()).toBe("synthetic-update-backup.json");
+  const stream = await download.createReadStream(); const chunks: Buffer[] = []; for await (const chunk of stream) chunks.push(chunk as Buffer);
+  expect(JSON.parse(Buffer.concat(chunks).toString("utf8"))).toEqual({ product: "LancerLogin", scope: "installation", tables: { installations: [{ id: "primary" }], members: [{ id: "test-member-1", first_name: "Test Student A" }, { id: "test-member-2", first_name: "Test Student B" }] } });
+  expect(calls).toEqual(["start", "part", "part", "complete"]); expect(state.backups).toBe(0);
+  await expect(backupConfirmation(page)).toBeFocused();
+  await expect(page.getByRole("button", { name: `Start update to ${targetTag}` })).toBeDisabled();
+});
+
 test("pins release, retries associated backup, requires saved confirmation and tracks verified completion without dispatch reload", async ({ page }) => {
   const state = await setup(page); await page.goto("/settings/updates");
   await page.getByRole("button", { name: "Back up and begin update" }).click();
@@ -146,8 +173,10 @@ test("missing workflow and stalled backup cannot duplicate or start an update", 
   let finish!: () => void; const held = new Promise<void>((resolve) => { finish = resolve; }); let backups = 0;
   await page.route("**/admin/data/backup?scope=installation&updateRequestId=*", async (route) => { backups++; await held; await route.fulfill({ status: 503, body: "{}" }); });
   const download = page.getByRole("button", { name: "Download entire-installation backup" }); await download.focus(); await page.keyboard.press("Enter");
-  await expect(page.getByRole("button", { name: "Working…" })).toBeDisabled(); await page.keyboard.press("Enter"); expect(backups).toBe(1); expect(state.starts).toBe(0);
-  finish(); await expect(webStatus(page)).toContainText("backup could not be created"); await expect(download).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Working…" })).toBeDisabled(); await page.keyboard.press("Enter");
+  // The dashboard asks for a backup in parts first, and makes the single request only once the API has answered that it has none.
+  await expect.poll(() => backups).toBe(1); await page.keyboard.press("Enter"); expect(state.starts).toBe(0);
+  finish(); await expect(webStatus(page)).toContainText("backup could not be created"); await expect(download).toBeEnabled(); expect(backups).toBe(1);
 });
 
 test("prepared backup confirmation follows native keyboard, branded theme and responsive UI standards", async ({ page }, testInfo) => {
@@ -460,4 +489,33 @@ test("the latest credential refresh failure is explained in plain words with a l
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`repository-files-${width}-${theme}.png`), fullPage: true });
   }
+});
+
+test("release notes render their Markdown, with only safe links and no remote markup or images", async ({ page }) => {
+  await setup(page);
+  const body = [
+    "# LancerLogin " + targetTag, "", "This beta makes **PIN requests** hard to miss.", "",
+    "## Bugs fixed", "", "- **Backups work again.** Read [the guide](https://isriah.github.io/LancerLogin/updates.html) or the `latest beta` choice.", "  - A nested point.",
+    "- A [compare link](../../compare/v1...v2) and a [bad link](javascript:alert(1)).", "",
+    "<script>window.__notesScript = true</script> ![diagram](https://example.test/diagram.png)",
+  ].join("\n");
+  await page.route("**/admin/releases/latest", route => route.fulfill({ json: discovered({ tag_name: targetTag, html_url: releaseUrl, body }) }));
+  await page.goto("/settings/updates");
+  const notes = page.locator(".web-update-notes .release-notes");
+  await expect(notes.getByRole("heading", { level: 4, name: `LancerLogin ${targetTag}` })).toBeVisible();
+  await expect(notes.getByRole("heading", { level: 5, name: "Bugs fixed" })).toBeVisible();
+  await expect(notes.locator("strong").first()).toHaveText("PIN requests");
+  await expect(notes.locator("ul ul li")).toHaveText("A nested point.");
+  await expect(notes.locator("code")).toHaveText("latest beta");
+  const guide = notes.getByRole("link", { name: "the guide" });
+  await expect(guide).toHaveAttribute("href", "https://isriah.github.io/LancerLogin/updates.html");
+  await expect(guide).toHaveAttribute("target", "_blank"); await expect(guide).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(notes.getByRole("link", { name: "compare link" })).toHaveAttribute("href", "https://github.com/isriah/LancerLogin/compare/v1...v2");
+  await expect(notes.getByRole("link", { name: "bad link" })).toHaveCount(0);
+  await expect(notes).toContainText("<script>window.__notesScript = true</script>");
+  await expect(notes.locator("script, img")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as { __notesScript?: boolean }).__notesScript)).toBeUndefined();
+  await expect(notes.getByRole("link", { name: "Image: diagram" })).toHaveAttribute("href", "https://example.test/diagram.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });

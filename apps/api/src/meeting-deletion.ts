@@ -1,5 +1,5 @@
 import { HttpError } from "./http-error.ts";
-import type { D1Database } from "./d1-usage.ts";
+import type { D1Database, D1Result, D1Statement } from "./d1-usage.ts";
 
 export type MeetingDeletion = { meetingIds: string[]; deletedAt: string };
 
@@ -14,8 +14,11 @@ export function meetingDeletion(value: unknown, anchorId: string): MeetingDeleti
   return deletion as MeetingDeletion;
 }
 
-/** Restore existing rows together, leaving attendance, audiences and module links intact. */
-export async function restoreMeetingDeletion(db: D1Database, deletion: MeetingDeletion): Promise<void> {
+/**
+ * Restore existing rows together, leaving attendance, audiences and module links intact. `after` statements (the
+ * calendar work for the restored meetings) run in the same batch, after the restore; their results are returned.
+ */
+export async function restoreMeetingDeletion(db: D1Database, deletion: MeetingDeletion, after: D1Statement[] = []): Promise<D1Result[]> {
   const ids = JSON.stringify(deletion.meetingIds);
   const marker = "meeting-undo-conflict";
   // A D1 batch is transactional. Recheck both the deletion revision and current
@@ -30,7 +33,7 @@ export async function restoreMeetingDeletion(db: D1Database, deletion: MeetingDe
         AND julianday(other.starts_at)-COALESCE((SELECT early_scan_minutes FROM organization_settings WHERE installation_id='primary'),15)/1440.0<=julianday(target.ends_at)+COALESCE((SELECT late_scan_minutes FROM organization_settings WHERE installation_id='primary'),30)/1440.0
     ) THEN 1 ELSE json_extract('{}','${marker}') END AS meeting_undo_available`).bind(deletion.deletedAt, ids, deletion.meetingIds.length, ids, ids);
   try {
-    await db.batch([guard, db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id='primary' AND deleted_at=? AND id IN (SELECT value FROM json_each(?))").bind(deletion.deletedAt, ids)]);
+    return (await db.batch([guard, db.prepare("UPDATE meetings SET deleted_at = NULL WHERE installation_id='primary' AND deleted_at=? AND id IN (SELECT value FROM json_each(?))").bind(deletion.deletedAt, ids), ...after])).slice(2);
   } catch (error) {
     if (error instanceof Error && error.message.includes(marker)) throw new HttpError(409, "Meetings changed or their attendance windows now overlap. Nothing was restored. Refresh the meeting list before continuing.");
     throw error;

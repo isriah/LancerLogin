@@ -4,6 +4,38 @@ import { useModalFocus } from "./modal-focus";
 export type ReportSaveResult = { ok: boolean; error?: string };
 export type ReportEditorHandle = { save: () => Promise<ReportSaveResult> };
 
+/**
+ * Asks before a report control that removes something, such as a report tab's ×. Cancel has focus first, and Escape
+ * cancels. danger styles the confirm button for actions that cannot be undone.
+ */
+export function ReportConfirmDialog({ title, description, confirmLabel, busyLabel, danger = false, onConfirm, onCancel }: {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  busyLabel: string;
+  danger?: boolean;
+  onConfirm: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const dialog = useRef<HTMLElement>(null);
+  const pending = useRef(false);
+  const [busy, setBusy] = useState(false);
+  useModalFocus(dialog, true, busy, onCancel);
+  async function confirm() {
+    if (pending.current) return;
+    pending.current = true; setBusy(true);
+    try { await onConfirm(); } finally { pending.current = false; setBusy(false); }
+  }
+  return <div className="dialog-backdrop"><section ref={dialog} className="ui-dialog report-leave-dialog report-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="report-confirm-title" aria-describedby="report-confirm-help" aria-busy={busy} tabIndex={-1}>
+    <h2 id="report-confirm-title">{title}</h2>
+    <p id="report-confirm-help">{description}</p>
+    <div className="dialog-actions">
+      <button className="ui-button" type="button" disabled={busy} data-modal-initial-focus onClick={onCancel}>Cancel</button>
+      <button className={`ui-button ${danger ? "ui-button--danger" : "ui-button--primary"}`} type="button" disabled={busy} onClick={() => void confirm()}>{busy ? busyLabel : confirmLabel}</button>
+    </div>
+  </section></div>;
+}
+
 export function ReportLeaveDialog({ onSave, onLeave, onCancel }: {
   onSave: () => Promise<ReportSaveResult>;
   onLeave: () => void | Promise<void>;

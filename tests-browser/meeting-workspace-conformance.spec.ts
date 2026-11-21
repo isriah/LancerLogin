@@ -194,7 +194,7 @@ test("meeting detail distinguishes timing gates, unavailable configuration, empt
   expect(disabledAppearance.background).not.toBe("rgba(0, 0, 0, 0)");
   await expect(page.getByText("No active roster records are available.")).toBeVisible();
   await page.getByRole("button", { name: "Sync configured calendars" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "Discord: 0 updated, 1 need attention" })).toHaveAttribute("data-tone", "error");
+  await expect(page.getByRole("status").filter({ hasText: "Discord: 1 need attention" })).toHaveAttribute("data-tone", "error");
 
   await page.goto("/meetings/missing-meeting");
   await expect(page.getByRole("heading", { level: 1, name: "Meeting unavailable" })).toBeVisible();

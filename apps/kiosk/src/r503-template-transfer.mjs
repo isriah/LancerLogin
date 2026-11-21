@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { r503CapacityFromParameters, r503MaximumCapacity } from "./r503.mjs";
 
 // R503/R503-M22 manual v1.4, ModelBuffer format. Other template formats must
 // receive their own verified compatibility profile, not be padded or guessed.
@@ -15,13 +16,15 @@ export function createR503TemplateTransfer(transaction, { password = 0, wait = m
     } finally { response.payload.fill(0); }
   };
   const prepare = async (io, slot) => {
-    if (!Number.isInteger(slot) || slot < 0 || slot > 1023) throw new Error("Invalid template slot");
+    if (!Number.isInteger(slot) || slot < 0 || slot >= r503MaximumCapacity) throw new Error("Invalid template slot");
     await command(io, 0x13, [password >>> 24, (password >>> 16) & 255, (password >>> 8) & 255, password & 255]);
     const parameters = await command(io, 0x0f, [], 16);
     try {
-      const capacity = (parameters[4] << 8) | parameters[5];
+      // The same reading of the reader's capacity as the driver (r503.mjs). Transfer has no fallback: a reader whose
+      // capacity cannot be read is not written to.
+      const capacity = r503CapacityFromParameters(parameters);
       const packetCode = (parameters[12] << 8) | parameters[13];
-      if (capacity < 1 || capacity > 1024 || slot >= capacity || packetCode > 3) throw new Error("Unsupported reader parameters");
+      if (capacity === undefined || slot >= capacity || packetCode > 3) throw new Error("Unsupported reader parameters");
       return { packetBytes: 32 * (2 ** packetCode) };
     } finally { parameters.fill(0); }
   };

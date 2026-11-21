@@ -83,7 +83,9 @@ export class FakeDatabase {
     }
     return undefined;
   }
-  runChanges(sql: string, values: unknown[]) { return this.runChangeHandler?.(sql, values) ?? 1; }
+  // Two calendar repairs match no row in these fixtures unless a test says so: the delete of a Discord event whose meeting
+  // was edited into the past, and Sync all making failed deletes due again.
+  runChanges(sql: string, values: unknown[]) { return this.runChangeHandler?.(sql, values) ?? (sql.includes("FROM meetings pm JOIN discord_calendar_event_mappings pd") || sql.includes("action = 'delete' AND status = 'failed'") ? 0 : 1); }
 }
 
 export function seedInstallationBackupFoundation(database: FakeDatabase, users: Record<string, unknown>[] = [{ id: "admin-1", installation_id: "primary", email: null, local_username: "admin", password_hash: "hash", failed_login_count: 0, locked_until: null, role: "admin", active: 1, created_at: "2026-09-01T00:00:00Z", member_id: null, debug_mode: 0 }]) {

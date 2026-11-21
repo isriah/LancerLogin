@@ -21,7 +21,7 @@ export type CatalogDefinition = {
   /** Hash of the last reviewed module migration (or adopted baseline), so new migrations trigger reconciliation. */
   readonly migrationHead?: string | null;
 };
-type CatalogRow = { moduleId: string; definitionSha256: string; installed: number; source: string | null; sourceCommit: string | null };
+type CatalogRow = { moduleId: string; definitionSha256: string; installed: number; source: string | null; sourceCommit: string | null; updateFailed: number };
 /** `unconfigured` means there was work to record but the installation does not exist yet (before first-Admin setup). */
 export type ModuleReconciliation = { readonly changed: boolean; readonly failures: readonly { readonly moduleId: string; readonly message: string }[]; readonly unconfigured?: true };
 type ReconcileOptions = {
@@ -51,8 +51,15 @@ async function sha256Hex(value: string): Promise<string> {
  * without affecting other modules. Steady state costs one read; writes happen only when installed code changed: a
  * module's definition or migrations changed, or a plugin's pinned source or commit moved. A pin-only move takes the same
  * path as any other change; its migrations are already applied, so that step only reads the ledger and applies nothing.
- * A module's refused or failed migrations are recorded in platform_module_update_failures for Settings > Modules, and
- * the record is deleted on the pass that reconciles the module.
+ * A module's refused or failed migrations are recorded in platform_module_update_failures for Settings > Modules. The
+ * record never outlives the failure: the batch that records a module's definition deletes it, a failure is only written
+ * while the catalog does not yet record the definition the pass was installing, and a pass that finds a record for a
+ * module that is already up to date deletes it. That last case is learned from the steady-state read itself (a column
+ * on the catalog rows), so a pass with nothing to do still costs one read, plus one delete only when such a record exists.
+ *
+ * Passes can overlap: each Worker isolate reconciles on its first request, and the scheduler and some routes reconcile
+ * too. Every write here is safe to repeat, and a migration another pass applied first counts as applied (see
+ * applyModuleMigrations), so an overlapping pass reports no failure for work that was done.
  *
  * A module that moved from first-party into a plugin may have lifecycle state from before the catalog existed. When its
  * plugin is not installed and the catalog never recorded it, the definition it had as a first-party module is recorded as
@@ -61,10 +68,13 @@ async function sha256Hex(value: string): Promise<string> {
 export async function reconcileInstalledModules(db: D1Database, now = new Date(), options: ReconcileOptions = {}): Promise<ModuleReconciliation> {
   const migrationPackages = new Map((options.migrations ?? externalModuleMigrations).map((pkg) => [pkg.moduleId, pkg]));
   const sources = options.sources ?? externalModuleSources;
-  const recorded = new Map(((await db.prepare(`SELECT module_id AS moduleId,definition_sha256 AS definitionSha256,installed,source,source_commit AS sourceCommit
-    FROM platform_module_catalog WHERE installation_id=?`).bind(installationId).all<CatalogRow>()).results ?? []).map((row) => [row.moduleId, row]));
+  const recorded = new Map(((await db.prepare(`SELECT module_id AS moduleId,definition_sha256 AS definitionSha256,installed,source,source_commit AS sourceCommit,
+    EXISTS(SELECT 1 FROM platform_module_update_failures f WHERE f.installation_id=c.installation_id AND f.module_id=c.module_id) AS updateFailed
+    FROM platform_module_catalog c WHERE c.installation_id=?`).bind(installationId).all<CatalogRow>()).results ?? []).map((row) => [row.moduleId, row]));
   const external = new Set(externalModuleManifests.map((module) => module.id));
   const changedModules: { module: ModuleDefinition; definitionJson: string; definitionSha256: string }[] = [];
+  // Up-to-date modules that still have a recorded update failure: the failure is over, so its record is deleted.
+  const healed: string[] = [];
   for (const module of bundledModuleRegistry.modules) {
     const definitionJson = JSON.stringify(definitionFor(module, migrationPackages.get(module.id))); const definitionSha256 = await sha256Hex(definitionJson);
     const current = recorded.get(module.id);
@@ -73,16 +83,21 @@ export async function reconcileInstalledModules(db: D1Database, now = new Date()
     const source = sources[module.id];
     if (current?.installed !== 1 || current.definitionSha256 !== definitionSha256
       || (current.source ?? null) !== (source?.source ?? null) || (current.sourceCommit ?? null) !== (source?.commit ?? null)) changedModules.push({ module, definitionJson, definitionSha256 });
+    else if (current.updateFailed) healed.push(module.id);
   }
   const removed = [...recorded.values()].filter((row) => row.installed === 1 && !bundledModuleRegistry.get(row.moduleId));
   const retiredModules = extractedModules.filter((module) => !bundledModuleRegistry.get(module.id) && !recorded.has(module.id));
-  if (!changedModules.length && !removed.length && !retiredModules.length) return { changed: false, failures: [] };
+  const clearFailures = (moduleIds: readonly string[]) => db.prepare(`DELETE FROM platform_module_update_failures WHERE installation_id=? AND module_id IN (${moduleIds.map(() => "?").join(",")})`).bind(installationId, ...moduleIds);
+  if (!changedModules.length && !removed.length && !retiredModules.length) {
+    if (healed.length) await clearFailures(healed).run();
+    return { changed: false, failures: [] };
+  }
   const configured = await db.prepare("SELECT 1 AS configured FROM platform_module_administration WHERE installation_id=?").bind(installationId).first();
   if (!configured) return { changed: false, failures: [], unconfigured: true };
 
   const timestamp = now.toISOString();
   const failures: { moduleId: string; message: string }[] = [];
-  const failed: { moduleId: string; code: string; message: string }[] = [];
+  const failed: FailedModuleUpdate[] = [];
   const statements: D1Statement[] = [];
   let coreApplied: string[] | undefined;
   for (const { module, definitionJson, definitionSha256 } of changedModules) {
@@ -93,7 +108,7 @@ export async function reconcileInstalledModules(db: D1Database, now = new Date()
       try { await applyModuleMigrations(d1ModuleMigrationExecutor(db), migrations, { coreAppliedMigrations: coreApplied ??= await coreAppliedMigrations(db), now: () => timestamp, label: module.label }); }
       catch (error) {
         failures.push({ moduleId: module.id, message: error instanceof Error ? error.message : "Module migrations failed" });
-        failed.push({ moduleId: module.id, ...moduleUpdateFailureFor(module.label, error) });
+        failed.push({ moduleId: module.id, definitionSha256, source: sources[module.id]?.source ?? null, sourceCommit: sources[module.id]?.commit ?? null, ...moduleUpdateFailureFor(module.label, error) });
         continue;
       }
     }
@@ -116,12 +131,16 @@ export async function reconcileInstalledModules(db: D1Database, now = new Date()
       VALUES(?,?,'first-party',NULL,NULL,?,?,?,0,?) ON CONFLICT(installation_id,module_id) DO NOTHING`)
       .bind(installationId, module.id, module.contractVersion, definitionJson, await sha256Hex(definitionJson), timestamp));
   }
+  const changed = statements.length > 0;
+  // A reconciled module's failure record is deleted in the batch that records its definition, so the two cannot disagree,
+  // and it costs no read: the delete matches nothing when there is no record.
+  const reconciled = [...changedModules.map(({ module }) => module.id).filter((moduleId) => !failed.some((failure) => failure.moduleId === moduleId)), ...removed.map((row) => row.moduleId), ...healed];
+  if (reconciled.length) statements.push(clearFailures(reconciled));
   if (statements.length) await db.batch(statements);
   // Bookkeeping for Settings > Modules, after the catalog is recorded and never in its way: an Admin sees the last refused
   // or failed attempt on the module until a later pass succeeds.
-  const reconciled = [...changedModules.map(({ module }) => module.id).filter((moduleId) => !failed.some((failure) => failure.moduleId === moduleId)), ...removed.map((row) => row.moduleId)];
-  try { await recordModuleUpdateFailures(db, failed, reconciled, timestamp); } catch { /* Shown again after the next attempt. */ }
-  return { changed: statements.length > 0, failures };
+  try { await recordModuleUpdateFailures(db, failed, timestamp); } catch { /* Shown again after the next attempt. */ }
+  return { changed, failures };
 }
 
 /** A module's migration failure as Admins see it in Settings > Modules. */
@@ -139,16 +158,21 @@ export function moduleUpdateFailureFor(label: string, error: unknown): { code: s
   return { code, message: `LancerLogin could not finish updating ${label}'s database, so parts of ${label} may not work until it does. LancerLogin tries again automatically. If this message stays, install a newer release of ${label} or contact its maintainer (error code ${code}).` };
 }
 
-async function recordModuleUpdateFailures(db: D1Database, failed: readonly { moduleId: string; code: string; message: string }[], reconciled: readonly string[], timestamp: string): Promise<void> {
-  const statements = failed.map((failure) => db.prepare(`INSERT INTO platform_module_update_failures(installation_id,module_id,code,message,first_failed_at,last_tried_at) VALUES(?,?,?,?,?,?)
+type FailedModuleUpdate = { readonly moduleId: string; readonly code: string; readonly message: string; readonly definitionSha256: string; readonly source: string | null; readonly sourceCommit: string | null };
+
+/**
+ * Record each failed module's last attempt. A failure is written only while the catalog does not record the definition
+ * and source this pass was installing: if another pass recorded them in the meantime, the module is up to date and there
+ * is nothing to show. That pass's delete and this conditional insert are single statements, so whichever order the
+ * database runs them in, no record is left for an up-to-date module.
+ */
+async function recordModuleUpdateFailures(db: D1Database, failed: readonly FailedModuleUpdate[], timestamp: string): Promise<void> {
+  if (!failed.length) return;
+  await db.batch(failed.map((failure) => db.prepare(`INSERT INTO platform_module_update_failures(installation_id,module_id,code,message,first_failed_at,last_tried_at)
+    SELECT ?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM platform_module_catalog WHERE installation_id=? AND module_id=? AND installed=1 AND definition_sha256=? AND source IS ? AND source_commit IS ?)
     ON CONFLICT(installation_id,module_id) DO UPDATE SET first_failed_at=CASE WHEN platform_module_update_failures.code=excluded.code AND platform_module_update_failures.message=excluded.message
       THEN platform_module_update_failures.first_failed_at ELSE excluded.first_failed_at END,code=excluded.code,message=excluded.message,last_tried_at=excluded.last_tried_at`)
-    .bind(installationId, failure.moduleId, failure.code, failure.message, timestamp, timestamp));
-  // Reconciliation only gets here when installed code changed, so this read is rare; it keeps successful passes write-free.
-  const recorded = reconciled.length ? new Set(((await db.prepare("SELECT module_id AS moduleId FROM platform_module_update_failures WHERE installation_id=?").bind(installationId).all<{ moduleId: string }>()).results ?? []).map((row) => row.moduleId)) : new Set<string>();
-  const cleared = reconciled.filter((moduleId) => recorded.has(moduleId));
-  if (cleared.length) statements.push(db.prepare(`DELETE FROM platform_module_update_failures WHERE installation_id=? AND module_id IN (${cleared.map(() => "?").join(",")})`).bind(installationId, ...cleared));
-  if (statements.length) await db.batch(statements);
+    .bind(installationId, failure.moduleId, failure.code, failure.message, timestamp, timestamp, installationId, failure.moduleId, failure.definitionSha256, failure.source, failure.sourceCommit)));
 }
 
 /** Recorded update failures for modules installed in this build, for Settings > Modules. */

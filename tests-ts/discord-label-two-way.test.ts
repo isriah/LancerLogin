@@ -239,3 +239,45 @@ test("a role the bot can no longer manage pauses the label instead of clearing i
   assert.equal(result.status, "error"); assert.equal(labelState(db, "m-ada")?.action, "add");
   assert.match((db.sqlite.prepare("SELECT two_way_error AS error FROM discord_label_role_mappings").get() as { error: string }).error, /no longer exists/);
 });
+
+// D1 Free allows 100,000 rows written a day, and past that every write in the installation fails, kiosk scans included.
+// A two-way label is checked every five minutes (288 times a day), so what one unchanged check writes is what matters.
+test("a check that finds nothing changed writes two rows however many unmatched users hold the role", async () => {
+  const strangers = Array.from({ length: 110 }, (_, index) => String(700000000000000000n + BigInt(index)));
+  const written: Record<number, number> = {};
+  for (const count of [0, 1, 110]) {
+    const db = seed(); const holders = new Set([ids.ada, ids.cy, ids.gus, ...strangers.slice(0, count)]);
+    const discord = server(holders, [ids.ada, ids.bo, ids.cy, ids.di, ids.fay, ids.gus, ...strangers.slice(0, count)]);
+    const preview = await previewTwoWay(db, "admin-1", "label-build", discord, deps(0));
+    await confirmTwoWay(db, "admin-1", { previewId: preview.previewId, all: "dashboard" }, discord, deps(1));
+    const changes = () => Number((db.sqlite.prepare("SELECT total_changes() AS n").get() as { n: number }).n);
+    const stored = () => db.sqlite.prepare("SELECT discord_user_id AS id, display_name AS name, seen_at AS seenAt FROM discord_label_unmatched_role_members ORDER BY discord_user_id").all();
+    // The first scheduled check settles anything the confirmation left; the second and third find nothing changed.
+    assert.equal((await pollTwoWayLabels(db, discord, deps(5)))[0]!.unmatched, count);
+    const settled = stored(); assert.equal(settled.length, count);
+    const before = changes();
+    assert.equal((await pollTwoWayLabels(db, discord, deps(10)))[0]!.status, "checked");
+    written[count] = changes() - before;
+    assert.deepEqual(stored(), settled, "no unmatched row is rewritten");
+    // The dashboard's "Discord users not on the roster" section still shows when the list was last checked.
+    const listed = (await unmatchedRoleMembers(db)).labels[0]!;
+    assert.equal(listed.checkedAt, at(10).toISOString()); assert.equal(listed.users.length, count);
+  }
+  // The two rows are the label's own: the lease that keeps passes from overlapping, and its checked time.
+  assert.deepEqual(written, { 0: 2, 1: 2, 110: 2 }, "rows written by one unchanged check, by unmatched holders");
+});
+
+test("the unmatched list follows the server: users who leave it are removed, new ones added, and a new name updated", async () => {
+  const db = seed(); const holders = new Set([ids.ada, ids.cy, ids.gus, ids.stranger]);
+  const discord = server(holders);
+  const preview = await previewTwoWay(db, "admin-1", "label-build", discord, deps(0));
+  await confirmTwoWay(db, "admin-1", { previewId: preview.previewId, all: "dashboard" }, discord, deps(1));
+  const stored = () => (db.sqlite.prepare("SELECT discord_user_id AS id, display_name AS name, seen_at AS seenAt FROM discord_label_unmatched_role_members ORDER BY discord_user_id").all() as { id: string; name: string; seenAt: string }[]).map((row) => ({ ...row }));
+  assert.deepEqual(stored(), [{ id: ids.stranger, name: "test-999", seenAt: at(1).toISOString() }]);
+  holders.add(ids.visitor); await pollTwoWayLabels(db, discord, deps(5));
+  assert.deepEqual(stored(), [{ id: ids.visitor, name: "test-888", seenAt: at(5).toISOString() }, { id: ids.stranger, name: "test-999", seenAt: at(1).toISOString() }], "a new holder is added; the other row keeps the time it was first seen");
+  holders.delete(ids.stranger);
+  const renamed: TwoWayServer = { ...discord, guildMembers: discord.guildMembers.map((member) => member.user?.id === ids.visitor ? { ...member, nick: "Test Visitor" } : member) };
+  await pollTwoWayLabels(db, renamed, deps(10));
+  assert.deepEqual(stored(), [{ id: ids.visitor, name: "Test Visitor", seenAt: at(5).toISOString() }], "the user who lost the role is removed and the new name stored");
+});

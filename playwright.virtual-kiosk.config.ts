@@ -2,7 +2,10 @@ import { defineConfig, devices } from "@playwright/test";
 
 // Virtual Pi scenarios: the real kiosk service with fake hardware, paired to a local Worker (scripts/virtual-kiosk.mjs).
 // The tests share one stack and one kiosk, so they run in order in one worker.
-const portBase = Number(process.env.LANCERLOGIN_VIRTUAL_KIOSK_PORT_BASE ?? 43_300);
+// The stack listens on fixed ports from this base (scripts/virtual-kiosk.mjs, virtualPorts). The default stays below
+// 32768: from there up, Linux hands ports to outgoing connections and to servers that ask for any free port, such as
+// the Worker runtime's own sockets, so one of them can hold a port the stack is about to bind ("Address already in use").
+const portBase = Number(process.env.LANCERLOGIN_VIRTUAL_KIOSK_PORT_BASE ?? 23_300);
 if (!Number.isInteger(portBase) || portBase < 1_024 || portBase > 65_500) throw new Error("LANCERLOGIN_VIRTUAL_KIOSK_PORT_BASE must be a valid port.");
 process.env.LANCERLOGIN_VIRTUAL_KIOSK_PANEL = `http://127.0.0.1:${portBase}`;
 

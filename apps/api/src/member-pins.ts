@@ -1,4 +1,4 @@
-import type { D1Database } from "./d1-usage.ts";
+import type { D1Database, D1Result } from "./d1-usage.ts";
 import { HttpError } from "./http-error.ts";
 
 /**
@@ -335,10 +335,15 @@ export async function kioskPinRoute(request: Request, path: string, context: { d
     const input = await readJson<{ memberId?: unknown }>(request, 4096); const member = await memberPin(db, object(input) ? input.memberId : undefined, true);
     if (hasPin(member)) throw new HttpError(409, "This member already has a PIN.", undefined, "pin_already_set");
     const now = new Date(); const nowText = now.toISOString();
-    const existing = await db.prepare(`SELECT ${requestColumns} FROM pin_setup_requests r WHERE r.installation_id = 'primary' AND r.kiosk_id = ? AND r.member_id = ? AND r.status = 'pending' AND r.expires_at > ? ORDER BY r.created_at DESC LIMIT 1`).bind(kiosk.id, member.rosterId, nowText).first<RequestRow>();
-    if (existing) return respond({ request: kioskRequestView(existing, nowText) }, 201);
-    const row: RequestRow = { id: crypto.randomUUID(), kioskId: kiosk.id, memberRosterId: member.rosterId, status: "pending", createdAt: nowText, expiresAt: new Date(now.getTime() + PIN_REQUEST_MS).toISOString() };
-    await db.prepare("INSERT INTO pin_setup_requests (id, installation_id, kiosk_id, member_id, status, created_at, expires_at) VALUES (?, 'primary', ?, ?, 'pending', ?, ?)").bind(row.id, kiosk.id, member.rosterId, row.createdAt, row.expiresAt).run();
+    // A request still pending is answered again rather than doubled. The check is part of the insert, and the answer is
+    // read in the same batch, so two asks at once both get the one request an Operator sees.
+    const pending = "FROM pin_setup_requests r WHERE r.installation_id = 'primary' AND r.kiosk_id = ? AND r.member_id = ? AND r.status = 'pending' AND r.expires_at > ?";
+    const [, latest] = await db.batch([
+      db.prepare(`INSERT INTO pin_setup_requests (id, installation_id, kiosk_id, member_id, status, created_at, expires_at) SELECT ?, 'primary', ?, ?, 'pending', ?, ? WHERE NOT EXISTS (SELECT 1 ${pending})`).bind(crypto.randomUUID(), kiosk.id, member.rosterId, nowText, new Date(now.getTime() + PIN_REQUEST_MS).toISOString(), kiosk.id, member.rosterId, nowText),
+      db.prepare(`SELECT ${requestColumns} ${pending} ORDER BY r.created_at DESC LIMIT 1`).bind(kiosk.id, member.rosterId, nowText),
+    ]);
+    const row = (latest as D1Result<RequestRow> | undefined)?.results?.[0];
+    if (!row) throw new HttpError(503, "The PIN request could not be saved. Try again.");
     return respond({ request: kioskRequestView(row, nowText) }, 201);
   }
   const requestMatch = /^\/kiosk\/pin-requests\/([^/]+)(\/pin)?$/.exec(path);

@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { registeredCoreSchedulerJobs, registeredModuleSchedulerJobs, type Env } from "../apps/api/src/index.ts";
-import { SchedulerBudget, passSlot, rotateJobs, scheduledPassLimits } from "../apps/api/src/scheduler-budget.ts";
+import { FREE_PLAN_SUBREQUESTS, SchedulerBudget, SchedulerBudgetError, passSlot, rotateJobs, scheduledPassLimits, scheduledSliceLimits } from "../apps/api/src/scheduler-budget.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
 import { FakeDatabase, sessionSecret } from "./fixtures/worker-fake-database.ts";
 
@@ -10,7 +10,7 @@ const jobIds = [...registeredCoreSchedulerJobs, ...registeredModuleSchedulerJobs
 type Controller = { cron: string; scheduledTime?: number };
 
 test("the pass budget counts every query and batch once and stops below the Free plan's limits", async () => {
-  const budget = new SchedulerBudget({ d1: 5, external: 2 });
+  const budget = new SchedulerBudget({ total: 7, reserve: 0, d1: 5, external: 2 });
   const database = new FakeDatabase(); const db = budget.database(database as never);
   await db.prepare("SELECT 1").first(); await db.prepare("SELECT 2").bind(1).all(); await db.prepare("UPDATE x SET y = 1").run();
   // The fake records a batch that writes in `batches` (an all-read batch is recorded as separate reads).
@@ -22,7 +22,43 @@ test("the pass budget counts every query and batch once and stops below the Free
   assert.equal(budget.allows({ external: 1 }), false); assert.equal(budget.allows({}), true);
   budget.defer("example.job");
   assert.deepEqual(budget.snapshot(), { d1Queries: 4, externalRequests: 2, deferred: ["example.job"] });
-  assert.ok(scheduledPassLimits.d1 < 50 && scheduledPassLimits.external < 50);
+});
+
+test("D1 queries and provider requests share one limit of 50, with headroom, in a cron pass and in a slice", () => {
+  // Cloudflare documents 50 subrequests per invocation on Workers Free, D1 queries included; the budget takes the
+  // strict reading that queries and outbound requests draw on the same 50.
+  assert.equal(FREE_PLAN_SUBREQUESTS, 50);
+  // The cron invocation makes one request outside its pass (it tells a bound Durable Object to stand down).
+  assert.ok(scheduledPassLimits.total + 1 < FREE_PLAN_SUBREQUESTS, "a cron pass leaves headroom under the limit");
+  assert.ok(scheduledSliceLimits.total < scheduledPassLimits.total, "a slice is smaller than a pass");
+  for (const limits of [scheduledPassLimits, scheduledSliceLimits]) {
+    assert.ok(limits.reserve >= 1, "room is kept for the closing write");
+    assert.ok(limits.d1 <= limits.total && limits.external <= limits.total);
+    const budget = new SchedulerBudget(limits);
+    // A mix of the two kinds is refused at the shared total, well before either would reach its own cap.
+    const half = Math.floor((limits.total - limits.reserve) / 2);
+    assert.equal(budget.allows({ d1: Math.min(half, limits.d1), external: Math.min(half, limits.external) }), true);
+    assert.equal(budget.allows({ d1: limits.total - limits.reserve, external: 1 }), false, "one over the shared total");
+  }
+});
+
+test("the budget refuses a query or request past its limit before it is sent, and keeps its reserve for the closing write", async () => {
+  const budget = new SchedulerBudget({ total: 6, reserve: 2, d1: 6, external: 6 });
+  const database = new FakeDatabase(); const db = budget.database(database as never);
+  await db.prepare("SELECT 1").first(); await db.prepare("SELECT 2").first(); budget.chargeExternal(); budget.chargeExternal();
+  assert.equal(budget.allows({ d1: 1 }), false, "the jobs' share is used up");
+  // A job whose estimate was too low is stopped here, not by the platform failing the whole invocation.
+  await assert.rejects(db.prepare("SELECT 3").first(), SchedulerBudgetError);
+  await assert.rejects(db.prepare("UPDATE x SET y = 1").run(), SchedulerBudgetError);
+  await assert.rejects(db.batch([db.prepare("UPDATE x SET y = 2")]), SchedulerBudgetError);
+  assert.throws(() => budget.chargeExternal(), SchedulerBudgetError);
+  assert.equal(database.calls.length, 2, "a refused query never reaches D1");
+  assert.equal(budget.refused, 4); assert.equal(budget.used, 4);
+  // The closing state write uses the reserve, so a busy pass still records what it did.
+  budget.close();
+  await db.prepare("UPDATE platform_scheduler_state SET jobs_json = '{}'").run(); await db.prepare("SELECT 4").first();
+  assert.equal(budget.used, 6);
+  await assert.rejects(db.prepare("SELECT 5").first(), SchedulerBudgetError, "and never more than the total");
 });
 
 test("each slot starts the job order one job later and every job leads one slot in turn", () => {
@@ -47,7 +83,7 @@ async function configuredDatabase() {
 const environment = (database: FakeDatabase) => ({ APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database }) as unknown as Env;
 async function scheduled(env: Env, controller: Controller) {
   const originalFetch = globalThis.fetch; const originalLog = console.log; const logs: string[] = []; const outbound: string[] = [];
-  globalThis.fetch = async (input) => { outbound.push(String(input)); return Response.json({ id: "message-1" }); };
+  globalThis.fetch = async (input) => { outbound.push(String(input)); return Response.json({ id: "message-1", access_token: "synthetic-access-token", expires_in: 3600 }); };
   console.log = (line: unknown) => { logs.push(String(line)); };
   try { await worker.scheduled(controller as never, env); } finally { globalThis.fetch = originalFetch; console.log = originalLog; }
   return { logs, outbound };
@@ -86,14 +122,18 @@ test("jobs the pass budget cannot cover are deferred and logged, and a later slo
   database.lists.set("LEFT JOIN discord_attendance_notifications", []);
   const env = environment(database);
   const googleFirst = jobIds.indexOf("attendance.google-calendar");
-  const passes: { deferred: string[]; d1: number; reports: number }[] = [];
+  const passes: { deferred: string[]; d1: number; external: number; reports: number; closed: boolean }[] = [];
   for (const slot of [googleFirst, googleFirst + 1, googleFirst + 2, googleFirst + 3, googleFirst + 4]) {
     const before = database.calls.length + database.batches.length;
     const { logs, outbound } = await scheduled(env, { cron: "*/5 * * * *", scheduledTime: slot * 300_000 });
     const deferredLog = logs.map((line) => JSON.parse(line) as { event: string; deferred: string[] }).find((entry) => entry.event === "scheduler_jobs_deferred");
-    passes.push({ deferred: deferredLog?.deferred ?? [], d1: database.calls.length + database.batches.length - before, reports: outbound.filter((url) => url.endsWith("/channels/323456789012345678/messages")).length });
+    // The pass's last query is its closing state write: a busy pass still records what its jobs did.
+    passes.push({ deferred: deferredLog?.deferred ?? [], d1: database.calls.length + database.batches.length - before, external: outbound.length, reports: outbound.filter((url) => url.endsWith("/channels/323456789012345678/messages")).length, closed: Boolean(database.calls.at(-1)?.sql.startsWith("INSERT INTO platform_scheduler_state")) });
   }
-  assert.ok(passes.every((pass) => pass.d1 <= 50), `every pass stays within 50 D1 queries: ${JSON.stringify(passes)}`);
+  assert.ok(passes.some((pass) => pass.external > 0 && pass.d1 > 20), `the backlog makes a busy pass: ${JSON.stringify(passes)}`);
+  // D1 queries and provider requests together, the worst case of a cron pass with a backlog in every job.
+  assert.ok(passes.every((pass) => pass.d1 + pass.external <= scheduledPassLimits.total), `every pass stays within ${scheduledPassLimits.total} subrequests in all: ${JSON.stringify(passes)}`);
+  assert.ok(passes.every((pass) => pass.closed), `every pass writes its closing state: ${JSON.stringify(passes)}`);
   assert.ok(passes[0]!.deferred.length > 0, "the first pass defers the jobs it cannot cover, and says so");
   assert.ok(passes.some((pass) => pass.reports > 0), "a later slot reaches the anomaly reports the first pass deferred");
 });

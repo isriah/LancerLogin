@@ -1,3 +1,4 @@
+// quick-check: covers .github/workflows/**
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -209,6 +210,74 @@ test("the virtual kiosk scenarios run on private pull requests that touch kiosk-
   const fromRunner = (job) => job.slice(job.indexOf("    runs-on:"));
   assert.match(fromRunner(gate), /timeout-minutes: 40\n    steps:\n[\s\S]*timeout-minutes: 25\n        run: npm run test:kiosk-virtual\n/);
   assert.equal(fromRunner(jobs).trimEnd(), fromRunner(gate).trimEnd());
+});
+
+// The private workflow that runs every browser spec on main once a night (.github/workflows/nightly-browser.yml). It is
+// excluded from public exports, so this checks it only where it exists.
+const nightlyBrowserWorkflow = ".github/workflows/nightly-browser.yml";
+const jobsOf = (workflow) => Object.fromEntries(workflow.split(/^jobs:\n/m)[1].split(/^(?=  [a-z0-9-]+:\n)/m)
+  .filter((chunk) => /^  [a-z0-9-]+:\n/.test(chunk)).map((chunk) => [chunk.match(/^  ([a-z0-9-]+):/)[1], chunk]));
+
+test("the nightly browser run repeats Verify's browser shards on main, privately, when main has moved", { skip: !existsSync(nightlyBrowserWorkflow) && "public export" }, () => {
+  const workflow = readFileSync(nightlyBrowserWorkflow, "utf8").replace(/\r\n/g, "\n");
+  // A nightly schedule and a manual run. Pull requests and pushes keep Quick check as their only check.
+  const triggers = workflow.match(/\non:\n([\s\S]*?)\npermissions:\n/)?.[1];
+  assert.ok(triggers);
+  assert.deepEqual(triggers.split("\n").filter((line) => /^  \S/.test(line)), ["  schedule:", "  workflow_dispatch:"]);
+  assert.match(triggers, /^    - cron: "\d{1,2} \d{1,2} \* \* \*"$/m);
+  // Read-only, no new secrets, and a run that is still going finishes before the next one starts.
+  assert.match(workflow, /^permissions:\n  contents: read\nconcurrency:\n  group: nightly-browser-\$\{\{ github\.ref \}\}\n  cancel-in-progress: false\n/m);
+  assert.deepEqual([...new Set(workflow.match(/secrets\.\w+/g))], ["secrets.LANCERLOGIN_PLUGIN_TOKEN"]);
+  assert.match(workflow, /^env:\n(?: {2}#[^\n]*\n)* {2}LANCERLOGIN_PLUGIN_FREE_BUILD: "1"$/m);
+
+  const jobs = jobsOf(workflow);
+  assert.deepEqual(Object.keys(jobs), ["changes", "core-browser-shard", "plugin-browser-shard", "integration-browser-shard", "passed"]);
+  // Only the private repository runs it; every other job needs that one.
+  assert.match(jobs.changes, /^    if: github\.event\.repository\.private && github\.repository == '[\w.-]+\/[\w.-]+'$/m);
+  // A scheduled run skips the browsers when this commit already passed; a passing run on main leaves that marker.
+  const restore = jobs.changes.match(/uses: actions\/cache\/restore@v4\n\s+with:\n\s+path: (.+)\n\s+key: (.+)\n\s+lookup-only: true/);
+  assert.ok(restore);
+  assert.match(jobs.changes, /if: github\.event_name == 'schedule'\n\s+uses: actions\/cache\/restore@v4/);
+  assert.match(jobs.changes, /"\$GITHUB_EVENT_NAME" == "schedule" && "\$PASSED" == "true"[\s\S]*run=false[\s\S]*else[\s\S]*run=true/);
+  assert.match(jobs.passed, /^    needs: \[core-browser-shard, plugin-browser-shard, integration-browser-shard\]\n    if: github\.ref == 'refs\/heads\/main'$/m);
+  assert.ok(jobs.passed.includes(`uses: actions/cache/save@v4\n        with:\n          path: ${restore[1]}\n          key: ${restore[2]}\n`));
+  assert.equal(restore[2], "nightly-browser-passed-${{ github.sha }}");
+
+  // Each shard job runs Verify's commands with Verify's matrix, environment and time limits, and keeps the traces of a failure.
+  const verify = jobsOf(readFileSync(".github/workflows/ci.yml", "utf8").replace(/\r\n/g, "\n"));
+  const same = (job) => job.match(/^ {4}name: .+$|^ {4}timeout-minutes: .+$|^ {8}shard: .+$|^ {6,8}(?:- )?run: .+$|^ {8}timeout-minutes: .+$|^ {10}LANCERLOGIN_\w+: .+$/gm);
+  for (const name of ["core-browser-shard", "plugin-browser-shard", "integration-browser-shard"]) {
+    const nightly = jobs[name];
+    assert.ok(verify[name], name);
+    assert.match(nightly, /^    needs: changes\n    if: needs\.changes\.outputs\.run == 'true'$/m, name);
+    assert.deepEqual(same(nightly), same(verify[name]), name);
+    assert.ok(same(nightly).some((line) => line.includes("npm run test:browser -- --group ")), name);
+    const group = name.replace("-browser-shard", "");
+    assert.ok(nightly.includes(`if: \${{ failure() && steps.browser-specs.outcome == 'failure' }}\n        uses: actions/upload-artifact@v4\n        with:\n          name: browser-failure-${group}-\${{ matrix.shard }}\n          path: |\n            test-results/\n            playwright-report/\n`), name);
+    assert.doesNotMatch(nightly, /continue-on-error|--grep|--project|--shard=/, name);
+  }
+  // The dev server smoke runs after the build shard's traces are kept, since Playwright clears test-results/ on start.
+  const core = jobs["core-browser-shard"];
+  assert.ok(core.indexOf("name: browser-failure-core-${{ matrix.shard }}\n") < core.indexOf("--server dev"));
+  assert.match(core, /if: \$\{\{ failure\(\) && steps\.dev-server-smoke\.outcome == 'failure' \}\}\n\s+uses: actions\/upload-artifact@v4\n\s+with:\n\s+name: browser-failure-core-\$\{\{ matrix\.shard \}\}-dev-server\n\s+path: test-results\//);
+});
+
+test("every private-only workflow is excluded from the public export in the release runbooks", { skip: !existsSync("private/BETA-RELEASE.md") && "public export" }, async () => {
+  const { readdir } = await import("node:fs/promises");
+  const privateOnly = (await readdir(".github/workflows")).filter((file) => /Exclude this file from public exports/.test(readFileSync(`.github/workflows/${file}`, "utf8").split("\n")[0]));
+  assert.deepEqual(privateOnly.sort(), ["nightly-browser.yml", "quick-check.yml", "virtual-kiosk-pr.yml"]);
+  const beta = readFileSync("private/BETA-RELEASE.md", "utf8");
+  const exportCommand = beta.match(/^git -C \$D diff --binary .+$/m)?.[0];
+  const unchangedCheck = beta.match(/^3\. \*\*The excluded paths didn't change\.\*\* `([^`]+)`/m)?.[1];
+  assert.ok(exportCommand && unchangedCheck);
+  const stable = readFileSync("private/STABLE-RELEASE.md", "utf8");
+  const workflowGuide = readFileSync("private/WORKFLOW.md", "utf8");
+  for (const file of privateOnly) {
+    assert.ok(exportCommand.includes(`':(exclude).github/workflows/${file}'`), `BETA-RELEASE.md step 3 exports ${file}`);
+    assert.ok(unchangedCheck.includes(` .github/workflows/${file}`), `BETA-RELEASE.md check 3 omits ${file}`);
+    assert.ok(stable.includes(`\`.github/workflows/${file}\``), `STABLE-RELEASE.md omits ${file}`);
+    assert.ok(workflowGuide.match(/^Public exports must explicitly exclude .+$/m)?.[0].includes(`.github/workflows/${file}`), `WORKFLOW.md omits ${file}`);
+  }
 });
 
 test("Quick check and Verify do not run the virtual kiosk scenarios on pull requests themselves", () => {

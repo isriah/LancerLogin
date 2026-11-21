@@ -6,7 +6,10 @@ import { prepareTestComposition, readTestSelection } from "./test-plugin-sources
 
 const workspace = process.cwd();
 const seed = Number.parseInt(createHash("sha256").update(workspace).digest("hex").slice(0, 8), 16);
-const portBase = 30_000 + (seed % 10_000) * 3;
+// Each checkout gets its own three ports, from 20000 to 31999. They stay below 32768: from there up, Linux (and from
+// 49152, Windows and macOS) hands ports to outgoing connections and to servers that ask for any free port, so one of
+// those can already hold a port a test server is about to bind.
+const portBase = 20_000 + (seed % 4_000) * 3;
 const playwrightCli = join(workspace, "node_modules", "playwright", "cli.js");
 
 // --compose-selection <file> composes a test plugin selection (file:// sources allowed) into this checkout before the run

@@ -39,13 +39,12 @@ import { installedDashboardModules } from "./installed-dashboard-modules";
 import { contributedModules, dashboardModuleWideLayout, decodeDashboardPathParams, resolveDashboardModulePage } from "./module-contributions.ts";
 import { DashboardModuleRuntime, ModuleRoot } from "./module-slots";
 import { FingerprintResetPanel } from "./fingerprint-reset-panel";
+import { createCapabilitiesReader, disabledCapabilities, type IntegrationCapabilities } from "./integration-capabilities";
 
-type IntegrationCapabilities = Record<"google" | "resend" | "discord", { enabled: boolean; configured: boolean }> & { google_calendar?: { enabled: boolean; configured: boolean } };
 const deferredSetupKey = "lancerlogin-module-setup-deferred";
 function setupDeferralId(module: { id: string; generation: number }) { return `${module.id}:${module.generation}`; }
 function readDeferredSetups() { try { const value = JSON.parse(localStorage.getItem(deferredSetupKey) ?? "[]") as unknown; return new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []); } catch { return new Set<string>(); } }
 function saveDeferredSetups(value: Set<string>) { try { localStorage.setItem(deferredSetupKey, JSON.stringify([...value])); } catch { /* Browser storage can be unavailable; the choice lasts for this visit. */ } }
-const disabledCapabilities: IntegrationCapabilities = { google: { enabled: false, configured: false }, resend: { enabled: false, configured: false }, discord: { enabled: false, configured: false } };
 
 export function AppShell({ initialModules, role, branding, onBrandingChanged, onSignedOut, onSessionExpired, themeControl, debugMode, onDebugModeChanged }: { initialModules?: Promise<ModuleNavigationResult>; themeControl: React.ReactNode; role: "admin" | "operator"; branding: Branding; onBrandingChanged: (branding: Branding) => void; onSignedOut: () => void; onSessionExpired?: () => void; debugMode: boolean; onDebugModeChanged: (enabled: boolean) => void }) {
   const moduleAccess = useModuleNavigation(initialModules);
@@ -103,11 +102,14 @@ export function AppShell({ initialModules, role, branding, onBrandingChanged, on
     window.requestAnimationFrame(() => primaryNavigation.current?.querySelector<HTMLAnchorElement>("a[href]")?.focus());
     return () => { document.removeEventListener("keydown", keydown); mobileMenuButton.current?.focus(); };
   }, [mobileNavOpen, walkthrough.open]);
-  // One capabilities read serves the shell and its pages. It does not depend on module access, so it starts with the session; an unavailable answer disables every integration.
-  const integrationsRequest = useRef<Promise<IntegrationCapabilities>>(undefined);
-  function loadIntegrations() { const request = api<{ integrations: IntegrationCapabilities }>("/integrations/capabilities").then((result) => result.integrations, () => disabledCapabilities); integrationsRequest.current = request; void request.then((value) => { if (integrationsRequest.current === request) setIntegrations(value); }); return request; }
-  const readIntegrations = () => integrationsRequest.current ?? loadIntegrations();
-  useEffect(() => { void readIntegrations(); }, []);
+  // One capabilities read serves the shell and its pages. It does not depend on module access, so it starts with the session.
+  // A failed read keeps the last known capabilities and reads again shortly (integration-capabilities.ts), so one failed
+  // request no longer hides Reviews and the other Discord features.
+  const integrationsReader = useRef<ReturnType<typeof createCapabilitiesReader>>(undefined);
+  integrationsReader.current ??= createCapabilitiesReader({ fetch: () => api<{ integrations: IntegrationCapabilities }>("/integrations/capabilities").then((result) => result.integrations), onValue: setIntegrations });
+  const loadIntegrations = () => integrationsReader.current!.load();
+  const readIntegrations = () => integrationsReader.current!.read();
+  useEffect(() => { void readIntegrations(); return () => integrationsReader.current?.stop(); }, []);
   // Verification and credential changes on Integrations are not announced individually, so leaving that page reads capabilities again.
   const integrationsPath = useRef(path);
   useEffect(() => { if (integrationsPath.current === "/settings/integrations" && path !== integrationsPath.current) void loadIntegrations(); integrationsPath.current = path; }, [path]);
@@ -133,8 +135,8 @@ export function AppShell({ initialModules, role, branding, onBrandingChanged, on
   else if (path.startsWith("/meetings/") && path.slice("/meetings/".length)) page = <AttendanceWorkspace meetingId={decodeURIComponent(path.slice("/meetings/".length))} role={role} readIntegrations={readIntegrations} />;
   else if (path === "/attendance") page = <LegacyAttendanceRedirect search={search} navigate={navigate} />;
   else if (path === "/reports" || path === "/reports/new" || path.startsWith("/reports/view/")) page = <ReportsPage discordEnabled={attendanceReady && integrations.discord.configured} debugMode={debugMode} onWalkthroughChange={setWalkthrough} />;
-  else if (path === "/roster") page = <RosterPage role={role} attendanceEnabled={attendanceReady} />;
-  else if (path.startsWith("/roster/")) page = attendanceReady ? <MemberDetailPage role={role} memberId={decodeURIComponent(path.slice("/roster/".length))} discordEnabled={integrations.discord.enabled} debugMode={debugMode} /> : <CoreMemberPage memberId={decodeURIComponent(path.slice("/roster/".length))} />;
+  else if (path === "/roster") page = <RosterPage role={role} attendanceEnabled={attendanceReady} timeZone={branding.timeZone} />;
+  else if (path.startsWith("/roster/")) page = attendanceReady ? <MemberDetailPage role={role} memberId={decodeURIComponent(path.slice("/roster/".length))} discordEnabled={integrations.discord.enabled} debugMode={debugMode} timeZone={branding.timeZone} /> : <CoreMemberPage memberId={decodeURIComponent(path.slice("/roster/".length))} />;
   else if (attendanceReady && /^\/kiosks\/[^/]+\/manage$/.test(path)) page = <KiosksPage role={role} discordConfigured={integrations.discord.configured} walkthroughOpen={walkthrough.open} kioskId={decodeURIComponent(path.split("/")[2]!)} debugMode={debugMode} />;
   else if (attendanceReady && path === "/kiosks") page = <KiosksPage role={role} discordConfigured={integrations.discord.configured} walkthroughOpen={walkthrough.open} debugMode={debugMode} />;
   else if (path === "/settings/session") page = <section className="settings-page" aria-labelledby="session-title"><div className="page-intro"><h1 id="session-title">Settings</h1><p>Choose your display theme or sign out of this browser.</p></div></section>;

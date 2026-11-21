@@ -9,7 +9,7 @@ import worker, { type Env } from "../apps/api/src/index.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { legacyPassword, reauthenticate, storedPassword } from "./fixtures/passwords.ts";
 import { latestUpdate, recordUpdateBackup, startWebUpdate } from "../apps/api/src/web-updates.ts";
-import { clearPluginReleaseCache, commitPluginChange, freshUntil, lookupPluginRelease, newestTrackRelease, parseAllowlist, pendingChanges, pluginManagementState, pluginVersionAt, pluginVersionInfo, readPluginMetadata, releaseIndexTtlMs, reauthenticationWindowMs, reviewPluginChange, selectionCredentialState, sourceAllowed, type InstalledPlugins } from "../apps/api/src/plugin-selection.ts";
+import { clearPluginReleaseCache, commitPluginChange as commitReviewedChange, freshUntil, pluginReviewToken, reviewValidityMs, lookupPluginRelease, newestTrackRelease, parseAllowlist, pendingChanges, pluginManagementState, pluginVersionAt, pluginVersionInfo, readPluginMetadata, releaseIndexTtlMs, reauthenticationWindowMs, reviewPluginChange, selectionCredentialState, sourceAllowed, type InstalledPlugins } from "../apps/api/src/plugin-selection.ts";
 import { credentialStatus, resetCredentialObservations } from "../apps/api/src/github-credential.ts";
 import { parseSelectionFile, serializeSelection } from "../packages/shared/src/module-selection.ts";
 import { applyCoreMigrations } from "./fixtures/d1-database.ts";
@@ -145,6 +145,9 @@ async function withGitHub(run: (github: GitHub) => Promise<void>, github = new G
 const signedInAt = Date.now();
 const fresh = { userId: "admin", expiresAt: signedInAt + 8 * 3_600_000, authenticatedAt: signedInAt };
 const add = { action: "add", id: "carpool", source: carpoolSource, commit: pluginCommit };
+/** Commit as the dashboard does: with the value the review of this exact change, against this selection, returned. */
+const commitPluginChange: typeof commitReviewedChange = async (env, principal, input, installed) =>
+  commitReviewedChange(env, principal, { ...input, reviewToken: await pluginReviewToken(env, principal.userId, input, String(input.selectionSha)) }, installed);
 
 test("selection parsing, serialization, pending changes and allowlists follow composition's rules", () => {
   const document = parseSelectionFile(serializeSelection({ modules: [{ id: "carpool", source: carpoolSource, commit: pluginCommit }] }));
@@ -786,7 +789,12 @@ test("routes require an active Admin, the exact dashboard Origin and fresh re-au
     assert.equal(reauth.status, 200);
     const renewed = /lancerlogin_session=([^;]+)/.exec(reauth.headers.get("set-cookie") ?? "")?.[1];
     assert.ok(renewed);
-    const changed = await call("/admin/plugins/change", `lancerlogin_session=${renewed}`, { ...add, selectionSha: "0".repeat(40), trustConfirmed: true });
+    // An older dashboard tab, which sends no review value, is told to reload; the reviewed request commits.
+    const unreviewed = await call("/admin/plugins/change", `lancerlogin_session=${renewed}`, { ...add, selectionSha: "0".repeat(40), trustConfirmed: true });
+    assert.equal(unreviewed.status, 409); assert.deepEqual(await unreviewed.json(), { error: "This page is out of date. Reload the page and try again.", code: "reload_required" });
+    const reviewed = await (await call("/admin/plugins/review", `lancerlogin_session=${renewed}`, add)).json();
+    assert.equal(typeof reviewed.reviewToken, "string");
+    const changed = await call("/admin/plugins/change", `lancerlogin_session=${renewed}`, { ...add, selectionSha: reviewed.selectionSha, reviewToken: reviewed.reviewToken, trustConfirmed: true });
     assert.equal(changed.status, 201);
     assert.equal(JSON.stringify(await changed.json()).includes(selectionToken), false);
     assert.equal(env.DB.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'auth.reauthenticated'").get()?.n, 1);
@@ -956,4 +964,41 @@ test("Google re-authentication must sign in the same Admin and returns to Settin
     } finally { globalThis.fetch = previous; }
   }
   assert.equal(env.DB.sqlite.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'auth.reauthenticated'").get()?.n, 1);
+});
+
+test("only the change an Admin just reviewed can be committed", async () => {
+  const env = environment();
+  await withGitHub(async (github) => {
+    const review = await reviewPluginChange(env, add, installed, fresh);
+    const reviewed = { ...add, selectionSha: review.selectionSha, trustConfirmed: true };
+    assert.match(review.reviewToken!, /^\d{13}\.[A-Za-z0-9_-]{43}$/);
+    assert.equal((await reviewPluginChange(env, add, installed)).reviewToken, undefined, "only a signed-in Admin's review is confirmable");
+    const refused = (input: Record<string, unknown>, principal = fresh) => assert.rejects(commitReviewedChange(env, principal, input, installed), { status: 409, code: "review_required", message: /^Review the change again before confirming it\./ });
+
+    // A hand-made request cannot reuse the review for another commit, source, module, track or action, or as another Admin.
+    await refused({ ...reviewed, commit: nextCommit, reviewToken: review.reviewToken });
+    await refused({ ...reviewed, source: "https://github.com/example/other.git", reviewToken: review.reviewToken });
+    await refused({ ...reviewed, id: "rideshare", reviewToken: review.reviewToken });
+    await refused({ ...reviewed, track: "nightly", reviewToken: review.reviewToken });
+    await refused({ ...reviewed, action: "upgrade", reviewToken: review.reviewToken });
+    await refused({ ...reviewed, reviewToken: review.reviewToken }, { ...fresh, userId: "other-admin" });
+    // Nor against a selection other than the one reviewed, with a made-up or altered value, or after the review expired.
+    await refused({ ...reviewed, selectionSha: "1".repeat(40), reviewToken: review.reviewToken });
+    await refused({ ...reviewed, reviewToken: `${Date.now() + 60_000}.${"A".repeat(43)}` });
+    await refused({ ...reviewed, reviewToken: review.reviewToken!.replace(/^\d{13}/, String(Date.now() + 10 * reviewValidityMs)) });
+    await refused({ ...reviewed, reviewToken: await pluginReviewToken(env, fresh.userId, add, review.selectionSha, Date.now() - 1) });
+    await refused({ ...reviewed, reviewToken: 7 });
+    // A dashboard tab opened before this release sends no value: it is told to reload, not shown a confusing error.
+    await assert.rejects(commitReviewedChange(env, fresh, reviewed, installed), { status: 409, code: "reload_required", message: "This page is out of date. Reload the page and try again." });
+    assert.equal(github.files.has("lancerlogin.modules.json"), false, "nothing was committed");
+    assert.equal(github.calls.some((call) => call.method === "PUT"), false);
+
+    // The reviewed request itself commits, and its value does not carry over to the next change.
+    await commitReviewedChange(env, fresh, { ...reviewed, reviewToken: review.reviewToken }, installed);
+    assert.equal(JSON.parse(github.files.get("lancerlogin.modules.json")!).modules[0].commit, pluginCommit);
+    await refused({ action: "remove", id: "carpool", selectionSha: blob(github.files.get("lancerlogin.modules.json")!), reviewToken: review.reviewToken });
+    const removal = await reviewPluginChange(env, { action: "remove", id: "carpool" }, installed, fresh);
+    await commitReviewedChange(env, fresh, { action: "remove", id: "carpool", selectionSha: removal.selectionSha, reviewToken: removal.reviewToken }, installed);
+    assert.deepEqual(JSON.parse(github.files.get("lancerlogin.modules.json")!).modules, []);
+  });
 });

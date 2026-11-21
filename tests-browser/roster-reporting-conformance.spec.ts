@@ -2358,15 +2358,14 @@ test("a column's funnel keeps its size with a 44 px tap area that leaves the col
   expect(built.funnels.length).toBeGreaterThanOrEqual(3);
   const control = 2.75 * built.root;
   for (const funnel of built.funnels) {
-    // The look: a 2rem square. The tap area: the standard control height, as wide as fits without covering a neighbour.
+    // The look: a 2rem square. The tap area: the standard control size, with or without an info tip after the funnel.
     expect(funnel.box.width, funnel.label).toBeCloseTo(2 * built.root, 1); expect(funnel.box.height, funnel.label).toBeCloseTo(2 * built.root, 1);
     expect(funnel.area.height, funnel.label).toBeGreaterThanOrEqual(44); expect(funnel.area.height, funnel.label).toBeCloseTo(control, 1);
-    expect(funnel.area.width, funnel.label).toBeCloseTo(funnel.lastInHeader ? control : 2.5 * built.root, 1);
-    if (funnel.lastInHeader) expect(funnel.area.width, funnel.label).toBeGreaterThanOrEqual(44);
+    expect(funnel.area.width, funnel.label).toBeGreaterThanOrEqual(44); expect(funnel.area.width, funnel.label).toBeCloseTo(control, 1);
     expect(funnel.area.left, funnel.label).toBeGreaterThanOrEqual(funnel.name.right - 0.05);
     expect(funnel.area.right, funnel.label).toBeLessThanOrEqual(funnel.cell.right + 0.05);
     expect(funnel.area.top, funnel.label).toBeGreaterThanOrEqual(funnel.cell.top - 0.05); expect(funnel.area.bottom, funnel.label).toBeLessThanOrEqual(funnel.cell.bottom + 0.05);
-    if (funnel.tip) { expect(funnel.area.right, funnel.label).toBeLessThanOrEqual(funnel.tip.box.left + 0.05); expect(funnel.tip.keepsItsEdge, funnel.label).toBe(true); }
+    if (funnel.tip) { expect(funnel.area.right, funnel.label).toBeLessThanOrEqual(funnel.tip.box.left + 0.05); expect(funnel.tip.keepsItsEdge, funnel.label).toBe(true); expect(funnel.tip.box.width, funnel.label).toBeCloseTo(control, 1); expect(funnel.tip.box.right, funnel.label).toBeLessThanOrEqual(funnel.cell.right + 0.05); }
     expect(funnel.edgesHitFunnel, funnel.label).toBe(true);
     expect(funnel.nameKeepsItsEdge, funnel.label).toBe(true);
   }
@@ -2398,8 +2397,9 @@ test("a column's funnel keeps its size with a 44 px tap area that leaves the col
   await expect(table.locator("tbody tr").first()).toContainText("Avery Stone");
   const sorted = await measure();
 
-  // Without the tap area the header measures the same: it adds no height or width.
-  await page.addStyleTag({ content: ".app button.report-column-filter-button { position: static !important; } .app button.report-column-filter-button::after { content: none !important; }" });
+  // Without the tap area, and without the space before an info tip and the padding it comes out of, the header measures
+  // the same: the tap area adds no height or width.
+  await page.addStyleTag({ content: ".app button.report-column-filter-button { position: static !important; margin-inline-end: 0 !important; } .app button.report-column-filter-button::after { content: none !important; } .report-results .editable-report-table th { padding-inline-end: var(--space-2) !important; }" });
   const plain = await measure();
   expect(sorted.rowHeight).toBe(plain.rowHeight);
   expect(sorted.widths).toEqual(plain.widths);
@@ -2409,4 +2409,37 @@ test("a column's funnel keeps its size with a 44 px tap area that leaves the col
   // On a phone the funnel stays hidden, as before.
   await page.setViewportSize({ width: 375, height: 900 });
   await expect(page.locator(".report-column-filter-button").first()).toBeHidden();
+});
+
+test("a report tab's × asks before unpinning, Cancel and Escape keep it, and nothing is deleted", async ({ page }) => {
+  await useReferenceContext(page);
+  const writes: string[] = [];
+  page.on("request", request => { if (/\/reports\/(tabs|views\/)/.test(request.url()) && ["PUT", "DELETE"].includes(request.method())) writes.push(`${request.method()} ${new URL(request.url()).pathname}`); });
+  await page.goto("/reports");
+  const tabs = page.getByRole("navigation", { name: "Report pages" });
+  const close = tabs.getByRole("button", { name: "Unpin Class attendance", exact: true });
+  await close.click();
+  const dialog = page.getByRole("alertdialog", { name: "Unpin Class attendance?" });
+  await expect(dialog).toContainText("The report stays saved for everyone who can access it, and you can open or pin it again from Browse reports.");
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(close).toBeFocused();
+  // Keyboard: Enter opens, Escape cancels back to the ×, then Tab and Enter confirm.
+  await page.keyboard.press("Enter");
+  await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(close).toBeFocused();
+  expect(writes).toEqual([]);
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Tab");
+  await expect(dialog.getByRole("button", { name: "Unpin report" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(dialog).toHaveCount(0);
+  await expect(close).toHaveCount(0);
+  await expect(page.locator(".report-browser > summary")).toBeFocused();
+  expect(writes).toEqual(["PUT /reports/tabs"]);
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".report-browser-popover").getByRole("button", { name: "Class attendance shared", exact: true })).toBeVisible();
 });

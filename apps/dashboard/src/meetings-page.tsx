@@ -7,6 +7,7 @@ import { useModalFocus } from "./modal-focus";
 import type { MemberLabel } from "./member-labels";
 import { ModuleSlot, ModuleSlotData } from "./module-slots";
 import { followInApp, followRowInApp } from "./router";
+import { DateInput } from "./date-input";
 
 export type { Meeting } from "./meeting-management";
 export function MeetingCreationDialog({ open, initialDate, meetings, discordEnabled, onClose, onCreated, practice = false }: { practice?: boolean; open: boolean; initialDate?: string; meetings: Meeting[]; discordEnabled: boolean; onClose: () => void; onCreated: (created: number, calendarSync?: CalendarSync, calendarDelivery?: CalendarDelivery, createdMeetingIds?: string[]) => Promise<void> }) {
@@ -30,7 +31,7 @@ export function MeetingCreationDialog({ open, initialDate, meetings, discordEnab
       <details className="meeting-duplicate-disclosure" data-walkthrough="meeting-duplicate"><summary>Duplicate an existing meeting</summary><label>Source meeting<select defaultValue="" onChange={(event) => { const meeting = meetings.find((item) => item.id === event.target.value); if (meeting) duplicateMeeting(meeting); event.currentTarget.value = ""; }}><option value="">Start with blank fields</option>{meetings.map((meeting) => <option key={meeting.id} value={meeting.id}>{new Date(meeting.startsAt).toLocaleDateString()} · {meeting.title}</option>)}</select></label></details>
       <MeetingFields value={form} onChange={setForm} categories={categories} initialFocus />
       {categoryNotice && <p className="inline-messages" role="status">{categoryNotice}</p>}
-      <div className="form-grid" data-walkthrough="meeting-recurrence"><label>Frequency<select value={frequency} onChange={(event) => setFrequency(event.target.value as "once" | Frequency)}><option value="once">One time</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="biweekly">Every two weeks</option><option value="monthly">Monthly</option></select></label>{frequency !== "once" && <label>Series end date<input required type="date" value={seriesUntil} min={form.date} onChange={(event) => setSeriesUntil(event.target.value)} /></label>}</div>
+      <div className="form-grid" data-walkthrough="meeting-recurrence"><label>Frequency<select value={frequency} onChange={(event) => setFrequency(event.target.value as "once" | Frequency)}><option value="once">One time</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="biweekly">Every two weeks</option><option value="monthly">Monthly</option></select></label>{frequency !== "once" && <label>Series end date<DateInput required value={seriesUntil} min={form.date} onChange={(event) => setSeriesUntil(event.target.value)} /></label>}</div>
       {error && <p ref={errorAlert} id="meeting-create-error" className="inline-messages error" role="alert" tabIndex={-1}>{error}</p>}
       <div className="dialog-actions"><button type="button" disabled={busy} onClick={close}>Cancel</button><button className="primary-button" type="submit" disabled={busy || practice}>{busy ? "Creating…" : frequency === "once" ? "Create meeting" : "Create recurring series"}</button></div>
       {discordEnabled && !practice && <p className="meeting-sync-note">Configured calendar delivery is requested after creation and never blocks a successful meeting.</p>}

@@ -6,6 +6,7 @@ import type { LabelData } from "./member-labels";
 import { useModalFocus } from "./modal-focus";
 import { attendanceRateText } from "./report-attendance";
 import type { RosterMember } from "./user-settings";
+import { DateInput } from "./date-input";
 
 type Action = "deactivate" | "reactivate" | "add" | "remove";
 type Preview = { previewToken: string; changed?: number; members?: { memberId: string; name: string; active: boolean; willChange: boolean }[]; changes?: { memberId: string; label: string; action: "add" | "remove"; effectiveDate: string }[]; impact?: { memberId: string; beforeRate: number | null; afterRate: number | null; affectedCompletedMeetings: number }[] };
@@ -75,7 +76,7 @@ export function BulkRosterActions({ selected, showingInactive, labels, onClear, 
       <div className="bulk-roster-fields" id="bulk-roster-fields">
         <label>Action<select value={action} disabled={busy} onChange={(event) => setAction(event.target.value as Action)}><option value="add">Add label</option><option value="remove">Remove label</option><option value="deactivate">Deactivate members</option><option value="reactivate">Reactivate members</option></select></label>
         {labelAction && <label>Label<select value={labelId} disabled={busy} onChange={(event) => setLabelId(event.target.value)}><option value="">Choose label</option>{labels?.labels.filter((item) => action === "remove" || item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
-        {labelAction && (dateOpen ? <><label>Effective date<input type="date" value={effectiveDate} disabled={busy} aria-describedby="bulk-roster-date-help" onChange={(event) => setEffectiveDate(event.target.value)} /></label><small className="bulk-roster-date-help" id="bulk-roster-date-help">Leave blank to start today.</small></> : <p className="bulk-roster-date">Starts {dateText(effectiveDate)} · <button className="bulk-roster-link" type="button" disabled={busy} aria-label="Change effective date" onClick={() => setDateOpen(true)}>Change</button></p>)}
+        {labelAction && (dateOpen ? <><label>Effective date<DateInput value={effectiveDate} disabled={busy} aria-describedby="bulk-roster-date-help" onChange={(event) => setEffectiveDate(event.target.value)} /></label><small className="bulk-roster-date-help" id="bulk-roster-date-help">Leave blank to start today.</small></> : <p className="bulk-roster-date">Starts {dateText(effectiveDate)} · <button className="bulk-roster-link" type="button" disabled={busy} aria-label="Change effective date" onClick={() => setDateOpen(true)}>Change</button></p>)}
         {action === "reactivate" && !showingInactive && <div className="ui-status bulk-roster-notice" data-tone="warning" role="status"><span>Inactive members are hidden while Show is set to Active members.</span><button className="ui-button" type="button" disabled={busy} onClick={onShowInactive}>Show all members</button></div>}
         <button className="ui-button ui-button--primary bulk-roster-preview-button" type="button" aria-describedby={blocked ? "bulk-roster-blocked" : undefined} disabled={busy || Boolean(blocked)} onClick={() => void prepare()}>{busy && !preview ? "Preparing…" : "Preview"}</button>
         {blocked && <small className="bulk-roster-blocked" id="bulk-roster-blocked">{blocked}</small>}

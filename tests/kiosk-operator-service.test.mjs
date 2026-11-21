@@ -443,3 +443,54 @@ test("an older Worker without the endpoint parks enrollment reports without hold
   await until(() => f.enrollmentReportsAccepted.length === 1);
   assert.equal(f.enrollmentReportsAccepted[0].eventId, parked[0].eventId);
 });
+
+test("a damaged network PIN file is restored from its backup copy, explained locally and reported in the heartbeat", { timeout: 20000 }, async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.root, "network-pin.json"), "");
+  const runtime = await f.start({ initializeClock: false });
+  const session = await (await runtime.request("/maintenance/session")).json();
+  assert.equal(session.configured, true); assert.equal(session.recovery.state, "restored");
+  assert.equal((await runtime.request("/network/unlock", { pin: "123456" })).status, 200, "the same PIN unlocks");
+  await until(() => f.heartbeatReports.length > 0);
+  assert.equal(f.heartbeatReports[0].storage.networkPin.state, "restored");
+  assert.ok(Number.isFinite(Date.parse(f.heartbeatReports[0].storage.networkPin.at)));
+});
+
+test("an unreadable network PIN keeps local settings locked, says what to do, and the dashboard reset clears it", { timeout: 25000 }, async t => {
+  const f = await fixture(t, { modern: true, commandType: "reset_network_pin" });
+  await writeFile(join(f.root, "network-pin.json"), "{\"version\":1"); await writeFile(join(f.root, "network-pin.json.backup"), "");
+  const runtime = await f.start({ initializeClock: false });
+  const session = await (await runtime.request("/maintenance/session")).json();
+  assert.deepEqual({ ...session, recovery: session.recovery?.state }, { configured: true, authorized: false, lockedUntil: null, recovery: "unreadable" });
+  const unlock = await runtime.request("/network/unlock", { pin: "123456" });
+  assert.equal(unlock.status, 409); assert.match((await unlock.json()).error, /could not be read\. Ask an Admin to use Reset network PIN/);
+  const create = await runtime.request("/network/pin", { pin: "999999" });
+  assert.equal(create.status, 400, "nobody at the kiosk can choose a new PIN"); assert.match((await create.json()).error, /could not be read/);
+  assert.equal((await runtime.request("/network/wifi")).status, 403);
+  await until(() => f.heartbeatReports.length > 0);
+  assert.equal(f.heartbeatReports[0].storage.networkPin.state, "unreadable");
+  f.queueCommand();
+  // Commands arrive with the next five-second cloud poll.
+  for (let n = 0; n < 400 && !f.commandResults.length; n++) await wait(30);
+  assert.equal(f.commandResults[0]?.success, true, f.commandResults[0]?.message);
+  assert.deepEqual(await (await runtime.request("/maintenance/session")).json(), { configured: false, authorized: false, lockedUntil: null });
+  assert.equal((await runtime.request("/network/pin", { pin: "999999" })).status, 201, "after the reset someone at the kiosk sets a new PIN");
+});
+
+test("unreadable queue entries set aside are reported per queue in the heartbeat and to the maintenance screen", { timeout: 20000 }, async t => {
+  const f = await fixture(t);
+  // A journal line cut short in the middle of each queue's journal.
+  for (const name of ["attendance-queue.json.journal", "local-enrollment-reports.json.journal"]) await writeFile(join(f.root, name), '{"s":1,"t":"e","event":{"eventId":"synthetic-cut\n', { mode: 0o600 });
+  const runtime = await f.start();
+  await until(() => f.heartbeatReports.some(report => report.storage?.setAside?.enrollmentReports));
+  const { setAside } = f.heartbeatReports.find(report => report.storage?.setAside?.enrollmentReports).storage;
+  assert.deepEqual(Object.keys(setAside).sort(), ["attendance", "enrollmentReports"]);
+  for (const entry of Object.values(setAside)) {
+    assert.deepEqual(Object.keys(entry).sort(), ["count", "lastAt"], "the file path stays on the kiosk");
+    assert.equal(entry.count, 1); assert.ok(Number.isFinite(Date.parse(entry.lastAt)));
+  }
+  const display = await (await runtime.request("/display-state")).json();
+  assert.equal(display.setAside.attendance.file, join(f.root, "attendance-queue.json.journal.damaged"));
+  assert.equal(display.setAside.enrollmentReports.file, join(f.root, "local-enrollment-reports.json.journal.damaged"));
+  assert.equal(display.attendance.pending, 0, "nothing from the damaged lines is replayed");
+});

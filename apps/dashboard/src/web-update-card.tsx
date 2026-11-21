@@ -7,6 +7,9 @@ import { credentialExpiryNotice, DashboardUpdatesNotSetUp, FixLinks } from "./we
 
 const loadedAt = Date.now();
 import { InfoHeading } from "./info-tip";
+import { saveBlob } from "./browser-storage";
+import { fetchBackup } from "./backup-transfer-api";
+import { ReleaseNotes } from "./release-notes-markdown";
 
 /**
  * The durable back up, confirm, start and progress flow. mode "release" is Settings > Updates and handles release updates
@@ -64,11 +67,11 @@ export function WebUpdateCard({ current, served, running, converged, reloadAvail
     const id = request.requestId;
     await mutate(async () => {
       setSaved(false);
-      const response = await fetch(`${apiBaseUrl}/admin/data/backup?scope=installation&updateRequestId=${encodeURIComponent(id)}`, { credentials: "include", cache: "no-store" });
-      if (!response.ok) throw new Error("The required pre-update backup could not be created. Download it again before starting.");
-      const blob = await response.blob(); const url = URL.createObjectURL(blob);
-      try { const link = document.createElement("a"); link.href = url; link.download = response.headers.get("content-disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "lancerlogin-installation-backup.json"; document.body.append(link); link.click(); link.remove(); }
-      finally { window.setTimeout(() => URL.revokeObjectURL(url), 1_000); }
+      // Downloaded in parts when the installation is large; the update's backup is recorded once every part has arrived.
+      let backup: Awaited<ReturnType<typeof fetchBackup>>;
+      try { backup = await fetchBackup({ scope: "installation", updateRequestId: id }); }
+      catch { throw new Error("The required pre-update backup could not be created. Download it again before starting."); }
+      saveBlob(backup.blob, backup.filename);
       const result = await read("/admin/web-updates/status");
       const active = result.activeRequest ?? result.request;
       if (alive.current) { setStatus(result); onStatus?.(result); if (active?.requestId === id && active.backupExported) setDownloaded(id); }
@@ -90,6 +93,8 @@ export function WebUpdateCard({ current, served, running, converged, reloadAvail
   const notesUrl = diagnosticUrl(releaseUrl);
   const notesTag = request?.targetTag ?? latestTag;
   const notes = request ? request.releaseNotes : releaseNotes;
+  // Relative links in the notes resolve against their release page.
+  const notesBase = request ? diagnosticUrl(request.releaseUrl) : notesUrl;
   const pluginReload = canReloadPluginChanges(previousRequest, loadedAt);
   const reloadReady = reloadAvailable || pluginReload;
   const modules = mode === "modules";
@@ -122,8 +127,8 @@ export function WebUpdateCard({ current, served, running, converged, reloadAvail
     </div>}
     {reloadReady && <button className="primary-button" type="button" onClick={() => window.location.reload()}>Reload updated dashboard</button>}
     <button className="quiet-button" type="button" disabled={busy} onClick={() => void refresh()}>Refresh update status</button>
-    {notesTag && !modules && !requestModules && <section className="web-update-notes" aria-label="Update release notes"><h3>Release notes for {notesTag}</h3><p>{notes || (notesUrl ? "Read the release notes using the link above." : "No release notes supplied.")}</p></section>}
-    <details className="web-update-diagnostics"><summary>Diagnostics and manual recovery</summary>{previousRequest && <section aria-label="Previous update"><h3>{previousRequest.mode === "modules" ? `Previous module changes for ${previousRequest.targetTag}` : `Previous update to ${previousRequest.targetTag}`}</h3><p className="field-help">{webUpdateStatus(previousRequest)}</p><p>{previousRequest.releaseNotes}</p></section>}{request && <p className="field-help">Stage: {request.stage.replaceAll("_", " ")}. Request: {request.requestId}. Last updated {new Date(request.updatedAt).toLocaleString()}.</p>}{diagnostics && <a href={diagnostics} target="_blank" rel="noreferrer">Open diagnostic workflow / manual recovery</a>}</details>
+    {notesTag && !modules && !requestModules && <section className="web-update-notes" aria-label="Update release notes"><h3>Release notes for {notesTag}</h3>{notes ? <ReleaseNotes markdown={notes} base={notesBase} /> : <p>{notesUrl ? "Read the release notes using the link above." : "No release notes supplied."}</p>}</section>}
+    <details className="web-update-diagnostics"><summary>Diagnostics and manual recovery</summary>{previousRequest && <section aria-label="Previous update"><h3>{previousRequest.mode === "modules" ? `Previous module changes for ${previousRequest.targetTag}` : `Previous update to ${previousRequest.targetTag}`}</h3><p className="field-help">{webUpdateStatus(previousRequest)}</p>{previousRequest.releaseNotes && <ReleaseNotes markdown={previousRequest.releaseNotes} base={diagnosticUrl(previousRequest.releaseUrl)} />}</section>}{request && <p className="field-help">Stage: {request.stage.replaceAll("_", " ")}. Request: {request.requestId}. Last updated {new Date(request.updatedAt).toLocaleString()}.</p>}{diagnostics && <a href={diagnostics} target="_blank" rel="noreferrer">Open diagnostic workflow / manual recovery</a>}</details>
     {!request && !previousRequest && !modules && <details className="settings-disclosure"><summary>Update steps</summary><ol className="update-steps"><li>Review the available release and prepare your update.</li><li>Download the entire-installation backup and confirm the file was saved.</li><li>Start once here. Track GitHub approval, deployment and health verification.</li><li>Reload only after the installation is verified.</li></ol></details>}
   </article>;
 }

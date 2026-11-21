@@ -12,6 +12,6 @@ export const attendanceApiModule: ApiModuleContribution<unknown> = Object.freeze
   setup: { predicates: attendanceSetupPredicates, stepValid: attendanceSetupStepValid },
   cleanup: {
     steps: attendanceCleanupSteps,
-    blocker: { sql: attendanceCleanupBlocker, bindings: (installationId) => [installationId, installationId, installationId], recordFailure: true },
+    blocker: { sql: attendanceCleanupBlocker, bindings: (installationId) => [installationId, installationId], recordFailure: true },
   },
 });

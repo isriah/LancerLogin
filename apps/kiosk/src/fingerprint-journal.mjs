@@ -138,6 +138,14 @@ export function createFingerprintJournal(path, binding, { allowSuperseded = fals
       state.records = state.records.filter(record => record.phase !== "superseded" || !empty.has(record.slot) || owned.has(record.slot));
       return { forgotten: before - state.records.length };
     }),
+    // After a completed fingerprint reset, the reader cleanup found these slots unlinked. Their complete records are
+    // history from before the reset; left as complete they would refuse a later unlink of whoever enrolls into the slot.
+    releaseAfterReset: (slots) => mutate(state => {
+      if (!allowSuperseded || !Array.isArray(slots) || !slots.every(slot => Number.isInteger(slot) && slot >= 0 && slot < 1024)) return fail();
+      const released = new Set(slots); let count = 0;
+      for (const record of state.records) if (record.phase === "complete" && released.has(record.slot)) { record.phase = "superseded"; count += 1; }
+      return { released: count };
+    }),
     advance: (transferId, expectedPhase, nextPhase) => mutate((state) => {
       const record = state.records.find((item) => item.transferId === transferId);
       if (!record || !phases.includes(expectedPhase) || (nextPhase !== "needs_review" && phases.indexOf(nextPhase) !== phases.indexOf(expectedPhase) + 1)) return fail();

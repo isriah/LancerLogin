@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MissingEndpointError, sendLocalEnrollment } from "../apps/kiosk/src/cloud-client.mjs";
@@ -126,4 +126,15 @@ test("an unconfirmed or failed response keeps the report queued", async t => {
   }
   assert.equal((await createFileQueue(path).pending()).length, 3);
   await assert.rejects(createEnrollmentReports({ path, send: async () => ({}) }).record({ rosterId: "" }), /roster id/);
+});
+
+test("unreadable enrollment report entries are counted in their own side file, apart from attendance", async t => {
+  const path = await directory(t), journalPath = `${path}.journal`;
+  const reports = createEnrollmentReports({ path, send: async () => ({ accepted: true }), log: () => undefined });
+  for (const rosterId of ["synthetic-roster-1", "synthetic-roster-2"]) await reports.record({ rosterId, pairingId: "synthetic-pairing" });
+  const [first, second] = (await readFile(journalPath, "utf8")).split("\n");
+  await writeFile(journalPath, `${first.slice(0, 20)}\n${second}\n`);
+  const restarted = createEnrollmentReports({ path, queue: createFileQueue(path, { log: () => undefined, now: () => Date.UTC(2026, 10, 20, 9) }), send: async () => ({ accepted: true }) });
+  assert.equal((await restarted.pending()).length, 1);
+  assert.deepEqual(await restarted.setAside(), { count: 1, lastAt: "2026-11-20T09:00:00.000Z", file: `${journalPath}.damaged` });
 });

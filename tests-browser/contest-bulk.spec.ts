@@ -130,3 +130,105 @@ test("contest review popup links each member to their member page in a new tab w
   await unselected();
   await expect(page).toHaveURL(/\/dashboard$/);
 });
+
+test("a failed refresh of the contest count keeps the Reviews button and the open dialog, and the next refresh recovers", async ({ page }) => {
+  const contest = (memberId: string, firstName: string) => ({ meetingId: "active-meeting", meetingTitle: "Build session", meetingStartsAt: "2026-09-03T20:00:00Z", memberId, externalId: memberId.toUpperCase(), firstName, lastName: "Test", status: "open", createdAt: "2026-09-03T20:05:00Z", lifetimeContestCount: 1, hasPartialScan: false, rawScanStatus: "none" });
+  let contests = [contest("test-student-a", "Student A"), contest("test-student-b", "Student B")];
+  let failNext = false; const reads: number[] = [];
+  await page.route(/\/discord\/contests(?:\?.*)?$/, (route) => {
+    if (failNext) { failNext = false; reads.push(503); return route.fulfill({ status: 503, json: { error: "Contests are unavailable right now." } }); }
+    reads.push(200); return route.fulfill({ json: { contests } });
+  });
+  await page.route("**/discord/contests/resolve", (route) => {
+    const body = route.request().postDataJSON() as { memberId: string }; contests = contests.filter((item) => item.memberId !== body.memberId);
+    return route.fulfill({ json: { resolved: true } });
+  });
+  await page.goto("/dashboard");
+  const reviews = page.locator(".contest-indicator:not(.pin-request-indicator)");
+  await reviews.click();
+  const dialog = page.getByRole("dialog", { name: "Contests awaiting review" });
+  await expect(dialog.locator(".contest-member-link")).toHaveCount(2);
+
+  // The refresh after an approval fails once: the dialog stays open on what it knew, less the contest just approved.
+  failNext = true;
+  const article = dialog.locator("article").filter({ hasText: "Student A Test" });
+  await article.getByLabel("Review reason").fill("Seen at the build session");
+  await article.getByRole("button", { name: "Approve and mark present" }).click();
+  await expect(dialog.getByRole("status")).toHaveText("Contest approved.");
+  await expect.poll(() => reads.at(-1)).toBe(503);
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".contest-member-link")).toHaveText(["Student B TestTEST-STUDENT-B"]);
+  await expect(reviews).toHaveAccessibleName("1 attendance contest awaiting review. Open contest review.");
+
+  // The next refresh recovers: a contest submitted meanwhile appears.
+  contests = [...contests, contest("test-student-c", "Student C")];
+  await page.evaluate(() => window.dispatchEvent(new Event("lancerlogin:contests-changed")));
+  await expect(dialog.locator(".contest-member-link")).toHaveCount(2);
+  await expect(reviews).toHaveAccessibleName("2 attendance contests awaiting review. Open contest review.");
+  await dialog.getByRole("button", { name: "Close contest review dialog" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(reviews).toBeVisible();
+
+  // A failed refresh with the dialog closed keeps the button and its count too.
+  failNext = true;
+  await page.evaluate(() => window.dispatchEvent(new Event("lancerlogin:contests-changed")));
+  await expect.poll(() => reads.at(-1)).toBe(503);
+  await expect(reviews).toHaveAccessibleName("2 attendance contests awaiting review. Open contest review.");
+});
+
+test("a failed capabilities read does not hide Reviews: the shell keeps what it knew and reads again", async ({ page }) => {
+  // The first read fails; before this fix that hid Reviews until the page was reloaded.
+  const reads: number[] = []; let fail = 1;
+  await page.route("**/integrations/capabilities", async (route) => {
+    if (fail > 0) { fail--; reads.push(503); return route.fulfill({ status: 503, json: { error: "Capabilities are unavailable right now." } }); }
+    reads.push(200); return route.continue();
+  });
+  await page.goto("/dashboard");
+  const reviews = page.locator(".contest-indicator:not(.pin-request-indicator)");
+  await expect(reviews).toBeVisible();
+  expect(reads).toEqual([503, 200]);
+
+  // Leaving Integrations reads capabilities again. When that read and its first retry fail, Reviews stays.
+  const move = (path: string) => page.evaluate((next) => { history.pushState({}, "", next); window.dispatchEvent(new PopStateEvent("popstate")); }, path);
+  await move("/settings/integrations"); await expect(page.getByRole("heading", { level: 1, name: "Integrations" })).toBeVisible();
+  fail = 2; await move("/dashboard");
+  await expect.poll(() => reads.slice(2)).toEqual([503, 503]);
+  await expect(reviews).toBeVisible();
+  await expect.poll(() => reads.slice(2), { timeout: 15_000 }).toEqual([503, 503, 200]);
+  await expect(reviews).toBeVisible();
+});
+
+test("a failed first contests read does not leave Reviews hidden: the indicator reads again on its own", async ({ page }) => {
+  // Before, only a contest change read again, so Reviews stayed hidden after one failed read at sign-in.
+  const reads: number[] = []; let fail = 1;
+  await page.route(/\/discord\/contests$/, async (route) => {
+    if (fail > 0) { fail--; reads.push(503); return route.fulfill({ status: 503, json: { error: "Contests are unavailable right now." } }); }
+    reads.push(200); return route.continue();
+  });
+  await page.goto("/dashboard");
+  const reviews = page.locator(".contest-indicator:not(.pin-request-indicator)");
+  await expect.poll(() => reads[0]).toBe(503);
+  await expect(reviews).toBeVisible();
+  expect(reads).toEqual([503, 200]);
+});
+
+test("a failed capabilities re-read keeps the Reviews dialog open and the indicator shown", async ({ page }) => {
+  // The reported case: one failed refresh closed the review dialog and hid Reviews. The refresh was the shell's
+  // capabilities re-read on leaving Integrations, which turned Discord off when it failed.
+  let fail = false; const reads: number[] = [];
+  await page.route("**/integrations/capabilities", async (route) => {
+    if (fail) { reads.push(503); return route.fulfill({ status: 503, json: { error: "Capabilities are unavailable right now." } }); }
+    reads.push(200); return route.continue();
+  });
+  const move = (path: string) => page.evaluate((next) => { history.pushState({}, "", next); window.dispatchEvent(new PopStateEvent("popstate")); }, path);
+  await page.goto("/settings/integrations");
+  const reviews = page.locator(".contest-indicator:not(.pin-request-indicator)");
+  await reviews.click();
+  const dialog = page.getByRole("dialog", { name: "Contests awaiting review" });
+  await expect(dialog).toBeVisible();
+  fail = true; await move("/dashboard");
+  await expect.poll(() => reads.at(-1)).toBe(503);
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Close contest review dialog" }).click();
+  await expect(reviews).toBeVisible();
+});

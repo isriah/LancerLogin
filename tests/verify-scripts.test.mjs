@@ -1,6 +1,7 @@
+// quick-check: covers tests/kiosk-*.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { runJobs } from "../scripts/parallel-jobs.mjs";
 import { workspaceTypechecks } from "../scripts/typecheck-workspaces.mjs";
 import { communityBaselines } from "../scripts/rehearse-community-upgrade.mjs";
@@ -57,4 +58,20 @@ test("typecheck covers every workspace with a typecheck script, and verify:all b
   assert.deepEqual(built, withBuild);
   assert.match(scripts["build:after-typecheck"], /npm run build:vite --workspace @lancerlogin\/dashboard && node scripts\/verify-template-config\.mjs$/);
   assert.match(scripts.build, /--workspaces --if-present && node scripts\/verify-template-config\.mjs$/);
+});
+
+test("test:kiosk lists every kiosk test file, and the area scripts name only files that exist", () => {
+  // npm test globs every file, but verify:kiosk (CI's kiosk job) runs only the files test:kiosk names, so a new
+  // tests/kiosk-*.test.mjs left out of it would run only under npm test.
+  const { scripts } = JSON.parse(readFileSync("package.json", "utf8"));
+  const listed = (name) => scripts[name].split(/\s+/).filter((word) => /^tests(?:-ts)?\//.test(word));
+  const kiosk = new Set(listed("test:kiosk"));
+  const missing = readdirSync("tests").filter((file) => /^kiosk-.+\.test\.mjs$/.test(file)).map((file) => `tests/${file}`).filter((file) => !kiosk.has(file));
+  assert.deepEqual(missing, [], "add these files to test:kiosk in package.json");
+  for (const name of ["test:api", "test:dashboard", "test:kiosk", "test:provisioning", "test:docs"]) {
+    const files = listed(name);
+    assert.ok(files.length > 0, name);
+    assert.deepEqual(files.filter((file) => !existsSync(file)), [], `${name} names a test file that does not exist`);
+    assert.equal(new Set(files).size, files.length, `${name} names a test file twice`);
+  }
 });

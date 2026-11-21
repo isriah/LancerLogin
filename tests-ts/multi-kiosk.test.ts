@@ -316,6 +316,47 @@ test("heartbeat attention details reach the Kiosks page and report open cloud re
   for (const invalid of [{ ...attention, scansNeedReview: -1 }, { ...attention, clockConfirmed: "no" }, { ...attention, extra: 1 }, [attention]]) assert.equal((await heartbeat(invalid)).status, 400);
 });
 
+test("heartbeat storage details reach the Kiosks page leniently and clear when a kiosk reports none", async context => {
+  const { database, call, pair } = await fixture(context);
+  const device = await pair("Front entrance");
+  const heartbeat = (storage?: unknown) => call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "2.1.0-beta.11", ...(storage === undefined ? {} : { storage }) }, device.kioskToken);
+  const listed = async () => (await (await call("/admin/kiosks")).json() as { kiosks: Array<Record<string, unknown>> }).kiosks[0];
+  const networkPin = { state: "unreadable", at: "2026-11-20T10:00:00.000Z" };
+  const reply = await heartbeat({ networkPin, laterDetail: { synthetic: true } }); assert.equal(reply.status, 200, await reply.clone().text());
+  assert.deepEqual((await listed()).storageDiagnostics, { networkPin }, "an unknown detail from a later kiosk is dropped");
+  assert.equal((await listed()).errorCategory, null, "storage details never change the kiosk's health");
+  for (const invalid of [{ networkPin: { state: "synthetic", at: networkPin.at } }, { networkPin: { state: "restored", at: "not a time" } }, [{ networkPin }], "synthetic", 1]) {
+    await heartbeat({ networkPin });
+    assert.equal((await heartbeat(invalid)).status, 200, "an invalid detail never refuses the heartbeat");
+    assert.equal((await listed()).storageDiagnostics, null);
+  }
+  await heartbeat({ networkPin });
+  assert.equal((await heartbeat({})).status, 200); assert.equal((await listed()).storageDiagnostics, null, "nothing to show clears the row");
+  await heartbeat({ networkPin });
+  assert.equal((await heartbeat()).status, 200); assert.equal((await listed()).storageDiagnostics, null, "a kiosk before 2.1.0-beta.11 sends none");
+  database.sqlite.prepare("UPDATE kiosks SET storage_diagnostics = '{damaged'").run();
+  assert.equal((await listed()).storageDiagnostics, null, "a damaged stored value shows nothing");
+});
+
+test("heartbeat set-aside counts reach the Kiosks page per queue and change nothing else", async context => {
+  const { call, pair } = await fixture(context);
+  const device = await pair("Front entrance");
+  const heartbeat = (storage?: unknown) => call("/kiosk/heartbeat", { readerOnline: true, releaseVersion: "2.1.0-beta.11", pendingEvents: 0, ...(storage === undefined ? {} : { storage }) }, device.kioskToken);
+  const listed = async () => (await (await call("/admin/kiosks")).json() as { kiosks: Array<Record<string, unknown>> }).kiosks[0];
+  const attendance = { count: 2, lastAt: "2026-11-20T09:30:00.000Z" }, enrollmentReports = { count: 1, lastAt: null };
+  const reply = await heartbeat({ setAside: { attendance, enrollmentReports, laterQueue: { count: 4, lastAt: null } } }); assert.equal(reply.status, 200, await reply.clone().text());
+  const kiosk = await listed();
+  assert.deepEqual(kiosk.storageDiagnostics, { setAside: { attendance, enrollmentReports } });
+  assert.deepEqual([kiosk.errorCategory, kiosk.pendingEvents, kiosk.scansNeedReview], [null, 0, null], "set-aside entries are not waiting scans and change no other field");
+  const networkPin = { state: "restored", at: "2026-11-20T10:00:00.000Z" };
+  await heartbeat({ networkPin, setAside: { attendance, enrollmentReports: { count: 0, lastAt: null } } });
+  assert.deepEqual((await listed()).storageDiagnostics, { networkPin, setAside: { attendance } }, "a queue with nothing set aside shows nothing");
+  for (const invalid of [{ count: -1, lastAt: null }, { count: 1.5, lastAt: null }, { count: "2", lastAt: null }, { count: 2, lastAt: "synthetic" }, { count: 2 }, [attendance]]) {
+    assert.equal((await heartbeat({ setAside: { attendance: invalid } })).status, 200, "an invalid count never refuses the heartbeat");
+    assert.equal((await listed()).storageDiagnostics, null);
+  }
+});
+
 test("rejected scans never degrade a kiosk while attendance stuck on it still does", async context => {
   const { call, pair } = await fixture(context);
   const device = await pair("Front entrance");

@@ -61,8 +61,11 @@ test("exact deletion Undo restores original meetings and preserves related recor
     assert.deepEqual(db.rows("meetings"), before);
     assert.deepEqual(["attendance_events", "attendance_corrections", "meeting_audience_labels"].map(table => db.rows(table)), related);
     assert.equal(db.rows("carpool_plans")[0]!.title, "Edited while meeting was deleted"); assert.equal(db.rows("carpool_plans")[0]!.meeting_id, "meeting-1");
-    const google = db.rows("google_calendar_operations"); assert.ok(google.some(row => row.action === "delete" && row.event_id === "llsynthetic")); assert.ok(google.some(row => row.action === "upsert" && row.event_id === db.rows("google_calendar_event_mappings")[0]!.event_id)); assert.equal(db.rows("google_calendar_event_mappings")[0]!.generation, 2);
-    const discord = db.rows("discord_calendar_operations"); assert.ok(discord.some(row => row.action === "delete" && row.event_id === "synthetic-event")); assert.ok(discord.some(row => row.action === "upsert" && row.generation === 2));
+    // Neither calendar integration is set up here, so the delete and the restore queue nothing and leave the mappings as
+    // they were, for Sync all to act on once an integration is on. tests-ts/calendar-queue.test.ts covers delete and
+    // restore with the integrations on: the delete, the new generation and the upsert.
+    assert.deepEqual(db.rows("google_calendar_operations"), []); assert.deepEqual(db.rows("discord_calendar_operations"), []);
+    assert.deepEqual(db.rows("google_calendar_event_mappings").map(row => [row.event_id, row.active, row.generation]), [["llsynthetic", 1, 1]]); assert.deepEqual(db.rows("discord_calendar_event_mappings").map(row => [row.event_id, row.active, row.generation]), [["synthetic-event", 1, 1]]);
     const audits = db.rows("audit_log").length;
     assert.equal((await call(db, "/meetings/meeting-1/restore", "POST", { deletion })).status, 409); assert.equal(db.rows("audit_log").length, audits);
   } finally { db.close(); }

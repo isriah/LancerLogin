@@ -58,6 +58,7 @@ export function createEnrollmentReports({ path, queue = createFileQueue(path), s
       return flushing;
     },
     pending: () => queue.pending(),
+    setAside: () => queue.setAside(),
     compact: () => queue.compact(),
   };
 }

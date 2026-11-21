@@ -18,6 +18,8 @@ export function createUnpairingStore(root, { pinPath, statePaths = [], move = re
   root = resolve(root);
   if (dirname(root) === root) return failure();
   const pinName = pinPath ? basename(pinPath) : "network-pin.json";
+  // The local settings PIN stays with the kiosk, and so does its backup copy (network-pin.mjs).
+  const pinNames = [pinName, `${pinName}.backup`];
   const supported = pinPath && safeName(pinName) && samePath(dirname(resolve(pinPath)), root) && pinName !== controlName
     && statePaths.every(path => { const part = relative(root, resolve(path)); return part && !isAbsolute(part) && !part.startsWith("..") && !samePath(resolve(path), resolve(pinPath)) && part.split(/[\\/]/)[0] !== controlName; });
   const control = join(root, controlName);
@@ -60,7 +62,7 @@ export function createUnpairingStore(root, { pinPath, statePaths = [], move = re
       if (state.version !== 1 || !["archiving", "complete"].includes(state.phase)
         || !/^[0-9a-f-]{36}$/.test(state.archiveId) || !Array.isArray(state.entries) || state.entries.length > 128
         || new Set(state.entries.map(item => item.name)).size !== state.entries.length
-        || state.entries.some(item => !safeName(item.name) || [pinName, controlName].includes(item.name)
+        || state.entries.some(item => !safeName(item.name) || [...pinNames, controlName].includes(item.name)
           || typeof item.directory !== "boolean" || !/^[0-9]{1,32}$/.test(item.ino) || !/^[0-9]{1,32}$/.test(item.dev))) return failure();
       return state;
     } catch { return failure(); } finally { await file.close(); }
@@ -76,7 +78,7 @@ export function createUnpairingStore(root, { pinPath, statePaths = [], move = re
   async function finish(state) {
     const archive = join(control, state.archiveId);
     await directory(archive);
-    const allowed = new Set([pinName, controlName, ...state.entries.map(item => item.name)]);
+    const allowed = new Set([...pinNames, controlName, ...state.entries.map(item => item.name)]);
     if ((await readdir(root)).some(name => !allowed.has(name))) return failure();
     const archivedNames = new Set(state.entries.map(item => item.name));
     if ((await readdir(archive)).some(name => !archivedNames.has(name))) return failure();
@@ -133,10 +135,11 @@ export function createUnpairingStore(root, { pinPath, statePaths = [], move = re
       try {
         if (!supported) return failure();
         await privateTree(pinPath);
+        if (await entry(`${pinPath}.backup`)) await privateTree(`${pinPath}.backup`);
         const previous = await readJournal();
         if (previous?.phase === "archiving") return await finish(previous);
         await directory(root);
-        const names = (await readdir(root)).filter(name => ![pinName, controlName].includes(name)).sort();
+        const names = (await readdir(root)).filter(name => ![...pinNames, controlName].includes(name)).sort();
         if (!names.length || names.length > 128 || names.some(name => !safeName(name))) return failure();
         const entries = [];
         for (const name of names) entries.push(await privateTree(join(root, name)));

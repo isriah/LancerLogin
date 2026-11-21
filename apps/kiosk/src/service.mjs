@@ -30,6 +30,7 @@ import { createPinFailureStore, normalizeMemberSettings, pinLockedUntil, reportP
 import { findMemberById, searchMembers } from "../../../packages/shared/src/member-lookup.mjs";
 import { createFingerprintRosterReader } from "./fingerprint-roster.mjs";
 import { decodePairingKey } from "./pairing-key.mjs";
+import { createReaderHealth, r503MaximumCapacity } from "./r503.mjs";
 import { createR503TemplateTransfer } from "./r503-template-transfer.mjs";
 import { createFingerprintCloudClient } from "./fingerprint-cloud-client.mjs";
 import { createFingerprintSync } from "./fingerprint-sync.mjs";
@@ -79,6 +80,8 @@ const attendanceClock = createAttendanceClock(`${process.env.LANCERLOGIN_QUEUE ?
 const mappings = createMappingStore(process.env.LANCERLOGIN_MAPPINGS ?? "/var/lib/lancerlogin/slot-mappings.json");
 const credentials = createCredentialStore(credentialPath); const rosterCache = createRosterCache(rosterPath); const identityInput = createIdentityInput(); const pinFailures = createPinFailureStore(pinFailuresPath);
 const network = kioskPlatform.networkManager(); const networkPin = createNetworkPinStore(networkPinPath);
+// Both copies of the local settings PIN are unreadable: it still counts as set, so nobody can unlock or choose one here.
+const networkPinUnreadableError = "The saved local settings PIN could not be read. Ask an Admin to use Reset network PIN on this kiosk's Manage page in the dashboard.";
 const desktopControl = createDesktopControl();
 const sensor = kioskPlatform.sensor(process.env.LANCERLOGIN_SENSOR_PATH ?? "/dev/serial0");
 const serviceStartedAt = Date.now();
@@ -282,7 +285,9 @@ async function pollFingerprintSyncNow(metadata) {
 async function assertFingerprintMutationAllowed() {
   if ((await loadPairing())?.pairingId && !await (await resetController()).enrollmentAllowed()) throw new Error("Finish fingerprint mapping reset recovery before editing or enrolling. Existing reader templates are unchanged.");
 }
-async function testSensor() { readerObserved = true; if (!sensor) { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } try { const status = await useSensor(() => sensor.status()); state.readerOnline = status.connected; return { readerOnline: status.connected, templateCount: status.templateCount }; } catch { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } }
+async function testSensor() { readerObserved = true; if (!sensor) { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } // A refusal the reader itself sent (a garbled request, say) is asked once more before the reader counts as offline.
+  const status = () => useSensor(() => sensor.status());
+  try { const result = await status().catch(error => { if (Number.isInteger(error?.code)) return status(); throw error; }); state.readerOnline = result.connected; return { readerOnline: result.connected, templateCount: result.templateCount }; } catch { state.readerOnline = false; return { readerOnline: false, templateCount: 0 }; } }
 async function testAuthenticator() { if (authenticationMethod === "fingerprint") return testSensor(); state.readerOnline = true; return { readerOnline: true, authenticationMethod }; }
 // Archives of earlier pairings expire after 30 days. The window is measured
 // with the wall clock, so it is applied only while the clock is confirmed.
@@ -316,6 +321,19 @@ async function applyRemoteConfiguration(config, remote) {
   }
   if (remote.kiosk?.name) await saveKioskName(config, remote.kiosk.name);
 }
+// Local state the kiosk had to repair, for Manage kiosk > Diagnostics. Sent empty when there is nothing to show, so the
+// dashboard row clears. Workers before 2.1.0-beta.11 ignore it.
+async function storageDiagnostics() {
+  const [pin, setAside] = await Promise.all([networkPin.status().catch(() => undefined), setAsideEntries()]);
+  const reported = Object.fromEntries(Object.entries(setAside).map(([name, { count, lastAt }]) => [name, { count, lastAt }]));
+  return { ...(pin?.recovery ? { networkPin: pin.recovery } : {}), ...(Object.keys(reported).length ? { setAside: reported } : {}) };
+}
+// Unreadable queue journal entries kept in each queue's .journal.damaged side file (file-queue.mjs), per queue, only
+// for queues that have some. The file path stays on the kiosk: the heartbeat sends only the count and time.
+async function setAsideEntries() {
+  const entries = await Promise.all([["attendance", queue], ["enrollmentReports", enrollmentReports]].map(async ([name, source]) => [name, await source.setAside().catch(() => undefined)]));
+  return Object.fromEntries(entries.filter(([, value]) => value?.count > 0));
+}
 async function heartbeatNow() {
   const config = await loadPairing(); if (!config) return;
   await attendanceClock.refresh().catch(() => undefined);
@@ -336,10 +354,11 @@ async function heartbeatNow() {
     if (authenticationMethod === "fingerprint" && sensor && state.readerOnline && Number.isInteger(authenticator.templateCount)) readerCounts = { stored: authenticator.templateCount, linked: Object.keys(await mappings.read().catch(() => ({}))).length };
     else readerCounts = undefined;
     const attendance = await queue.diagnostics();
+    const storage = await storageDiagnostics();
     const reviewSyncFailing = reviewSyncFailed || scanReviewSync.hasFailures(), clockConfirmed = attendanceClock.isVerified();
     state.errorCategory = reviewSyncFailing ? "cloud_sync" : !clockConfirmed || attendance.needsReview || attendance.clockPending ? "offline_queue" : attendance.pending ? "cloud_sync" : undefined;
     const reply = await sendHeartbeat(config, { fetchImpl: boundedCloudFetch, readerOnline: state.readerOnline, authenticationMethod, releaseVersion, updatePolicyVersion: await kioskUpdatePolicyVersion(), uptimeSeconds: Math.floor(process.uptime()), networkType: networkDiagnostics.type, networkSignal: networkDiagnostics.signal, lastWifiScanAt: state.lastWifiScanAt ?? null, pendingEvents: attendance.pending, lastSyncAt: state.lastSyncAt, errorCategory: state.errorCategory ?? null,
-      attention: { scansNeedReview: attendance.needsReview, clockConfirmed, clockPendingScans: attendance.clockPending, reviewSyncFailing, weakMatches, ...(readerCounts ? { readerTemplates: readerCounts.stored, linkedTemplates: readerCounts.linked } : {}) } }); state.cloudOnline = true;
+      attention: { scansNeedReview: attendance.needsReview, clockConfirmed, clockPendingScans: attendance.clockPending, reviewSyncFailing, weakMatches, ...(readerCounts ? { readerTemplates: readerCounts.stored, linkedTemplates: readerCounts.linked } : {}) }, storage }); state.cloudOnline = true;
     // Fewer open reviews in the cloud than unreviewed scans here means an Admin reviewed some in the dashboard.
     // Poll them on the next heartbeat; react once per change so a persistent mismatch cannot resend every minute.
     const openScanReviews = Number.isSafeInteger(reply?.openScanReviews) ? reply.openScanReviews : undefined;
@@ -381,7 +400,8 @@ async function runKioskCommand(command, config) {
   }
   throw new Error("Unsupported kiosk command");
 }
-// Retired and replaced fingerprints stay on the reader after their member link is removed, filling its 200 slots.
+// Retired and replaced fingerprints stay on the reader after their member link is removed, filling its slots (200 on a
+// standard R503). So do the templates a fingerprint reset unlinked; once that reset has completed they are erased too.
 // Enrollment, cloud import and reset recovery are held off while unlinked templates are erased.
 async function eraseUnlinkedFingerprints() {
   if (!sensor || authenticationMethod !== "fingerprint") throw new Error("This kiosk is not using its fingerprint reader.");
@@ -393,9 +413,10 @@ async function eraseUnlinkedFingerprints() {
     let release; fingerprintPolling = new Promise(resolve => { release = resolve; });
     try {
       await assertFingerprintMutationAllowed();
-      const result = await useSensor(() => eraseUnlinkedTemplates({ sensor, mappings, journalRoots: [fingerprintVaultPath, fingerprintSyncPath], vaultRoot: fingerprintVaultPath, binding: config }));
+      const resetCompleted = await (await resetController()).resetCompleted();
+      const result = await useSensor(() => eraseUnlinkedTemplates({ sensor, mappings, journalRoots: [fingerprintVaultPath, fingerprintSyncPath], vaultRoot: fingerprintVaultPath, binding: config, resetCompleted }));
       readerCounts = { stored: result.stored, linked: result.linked };
-      return `Erased ${result.erased} unlinked ${result.erased === 1 ? "fingerprint" : "fingerprints"}. The reader now stores ${result.stored} of 200, ${result.linked} linked to members.`;
+      return `Erased ${result.erased} unlinked ${result.erased === 1 ? "fingerprint" : "fingerprints"}. The reader now stores ${result.stored} of ${result.capacity}, ${result.linked} linked to members.`;
     } finally { fingerprintPolling = undefined; release(); }
   } finally { enrollmentInProgress = false; await refreshCapturePermission(); }
 }
@@ -539,17 +560,23 @@ async function recordCodeAttendance(code, generation) {
   return { status: 200, body: { recorded: true } };
 }
 // R503 answers for a poor image: the reader works, so the member is asked to place the finger again instead of
-// seeing "Reader offline". Any other failure, including no answer at all, still means the reader is offline.
+// seeing "Reader offline". Any other answer from the reader (a request it received garbled, say) is tried again
+// quietly, and means offline only after three in a row. No answer at all still means the reader is offline.
 const poorReadDetails = new Map([
   [0x03, "Press the same finger flat on the reader, a little firmer, and hold it still."],
   [0x06, "Wipe the reader, then place your finger flat and hold it still."],
   [0x07, "Place your finger flat on the reader and hold it still."],
 ]);
+const readerHealth = createReaderHealth();
 async function captureIdentity() {
   if (authenticationMethod !== "fingerprint") return identityInput.next();
   let observation;
-  try { observation = sensor ? await useSensor(() => sensor.scan()) : await Promise.reject(new Error("Reader disabled")); }
-  catch (error) { if (poorReadDetails.has(error?.code)) return { status: "rescan", detail: poorReadDetails.get(error.code) }; throw error; }
+  try { observation = sensor ? await useSensor(() => sensor.scan()) : await Promise.reject(new Error("Reader disabled")); readerHealth.success(); }
+  catch (error) {
+    if (poorReadDetails.has(error?.code)) { readerHealth.success(); return { status: "rescan", detail: poorReadDetails.get(error.code) }; }
+    if (readerHealth.failure(error) === "retry") return { status: "idle" };
+    throw error;
+  }
   if (!observation || observation.status === "no_finger") return { status: "idle" };
   if (observation.status === "not_found") return { status: "unknown", ...identityUnknownState("fingerprint") };
   if (observation.status !== "match") return { status: "idle" };
@@ -613,7 +640,9 @@ async function checkFingerRemoval() {
   const epoch = removalGeneration;
   removalCheck = useSensor(async () => {
     if (!await sensor.fingerPresent() && epoch === removalGeneration) { fingerRemovalRequired = false; scanner.release("finger_removal"); }
-  }).catch(() => { state.readerOnline = false; }).finally(() => { removalCheck = undefined; });
+    readerHealth.success();
+    // One refusal from a reader that answered is not "Reader offline"; the check runs again.
+  }).catch((error) => { if (readerHealth.failure(error) === "offline") state.readerOnline = false; }).finally(() => { removalCheck = undefined; });
   await removalCheck;
 }
 async function body(request, limit = 65_536) { const chunks = []; let size = 0; for await (const chunk of request) { size += chunk.length; if (size > limit) throw new Error("Request body is too large"); chunks.push(chunk); } return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
@@ -711,7 +740,7 @@ async function handleRequest(request, response) {
     response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", paired, setupReady: !changing, setupCodeRequired: !paired })); return;
   }
   if (pathname === "/health" && request.method === "GET") { await loadPairing(); const attendance = changing ? undefined : await queue.diagnostics(); response.end(JSON.stringify({ ok: true, service: "lancerlogin-kiosk", ...state, ...(changing ? { paired: false, kioskName: undefined, cloudOnline: false } : {}), setupReady: !changing, authenticationMethod, memberLookup: memberSettings.memberLookup, requirePin: memberSettings.requirePin, discordCode: memberSettings.discordCode, discordCodeBackup: memberSettings.discordCodeBackup, pendingEvents: attendance?.pending, attendance, clock: await attendanceClock.status(), fingerprintSync: changing ? undefined : await fingerprintDiagnostics(), ...(!state.paired && !changing ? { setupCode: setupCode.current() } : {}) })); return; }
-  if (pathname === "/display-state" && request.method === "GET") { const attendance = changing ? undefined : await queue.diagnostics(); const clock = await attendanceClock.status(); response.end(JSON.stringify({ display: changing ? kioskState("unpaired", { message: "Finish unpairing", detail: "Open local maintenance to complete the installation switch." }) : currentDisplay(), branding, kioskName: changing ? undefined : state.kioskName, readerOnline: state.readerOnline, authenticationMethod, memberLookup: memberSettings.memberLookup, requirePin: memberSettings.requirePin, discordCode: memberSettings.discordCode, discordCodeBackup: memberSettings.discordCodeBackup, ...(codeMode() ? { discordCodeHeld: codesHeld, backupReady: identityReadyState(authenticationMethod, { memberLookup: memberSettings.memberLookup }) } : {}), memberIdKeypad: memberIdMode() && await rosterCache.numericIds().catch(() => false), cloudOnline: changing ? false : state.cloudOnline, networkType: state.networkType, pendingEvents: attendance?.pending, attendance, clock, uptimeSeconds: Math.floor(process.uptime()), releaseVersion, displayReloadToken, enrollment: dashboardEnrollment.active() ? { id: dashboardEnrollment.snapshot().id } : null })); return; }
+  if (pathname === "/display-state" && request.method === "GET") { const attendance = changing ? undefined : await queue.diagnostics(); const clock = await attendanceClock.status(); response.end(JSON.stringify({ display: changing ? kioskState("unpaired", { message: "Finish unpairing", detail: "Open local maintenance to complete the installation switch." }) : currentDisplay(), branding, kioskName: changing ? undefined : state.kioskName, readerOnline: state.readerOnline, authenticationMethod, memberLookup: memberSettings.memberLookup, requirePin: memberSettings.requirePin, discordCode: memberSettings.discordCode, discordCodeBackup: memberSettings.discordCodeBackup, ...(codeMode() ? { discordCodeHeld: codesHeld, backupReady: identityReadyState(authenticationMethod, { memberLookup: memberSettings.memberLookup }) } : {}), memberIdKeypad: memberIdMode() && await rosterCache.numericIds().catch(() => false), cloudOnline: changing ? false : state.cloudOnline, networkType: state.networkType, pendingEvents: attendance?.pending, attendance, ...(changing ? {} : { setAside: await setAsideEntries() }), clock, uptimeSeconds: Math.floor(process.uptime()), releaseVersion, displayReloadToken, enrollment: dashboardEnrollment.active() ? { id: dashboardEnrollment.snapshot().id } : null })); return; }
   if (pathname === "/maintenance/pairing" && request.method === "GET") {
     try { await requireNetworkSession(); } catch { response.statusCode = 403; response.end(JSON.stringify({ error: "Unlock local settings before unpairing" })); return; }
     const config = await loadPairing();
@@ -878,15 +907,15 @@ async function handleRequest(request, response) {
   }
   if (pathname === "/mappings" && request.method === "GET") { try { await requireNetworkSession(); response.end(JSON.stringify({ mappings: await mappings.read() })); } catch (error) { response.statusCode = 403; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Mappings unavailable" })); } return; }
   if (pathname === "/mappings" && request.method === "PUT") { try { await requireNetworkSession(); const input = await body(request); const vault = (await loadPairing())?.pairingId ? await vaultController() : undefined; response.end(JSON.stringify({ mappings: await useSensor(async () => { await assertFingerprintMutationAllowed(); return mappings.replaceFromMaintenance(input.mappings ?? {}, { beforeRemove: (slot, mapping) => vault?.suppressLocal(slot, mapping) }); }) })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Invalid mappings" })); } return; }
-  if (/^\/mappings\/\d{1,3}$/.test(pathname) && request.method === "DELETE") { try { await requireNetworkSession(); const slot = pathname.split("/")[2]; const vault = (await loadPairing())?.pairingId ? await vaultController() : undefined; const updated = await useSensor(async () => { await assertFingerprintMutationAllowed(); const current = await mappings.read(); if (current[slot] && vault) await vault.suppressLocal(Number(slot), current[slot]); delete current[slot]; return mappings.replace(current); }); response.end(JSON.stringify({ mappings: updated, sensorTemplateRetained: true })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Could not remove mapping" })); } return; }
+  if (/^\/mappings\/\d{1,4}$/.test(pathname) && Number(pathname.split("/")[2]) < r503MaximumCapacity && request.method === "DELETE") { try { await requireNetworkSession(); const slot = pathname.split("/")[2]; const vault = (await loadPairing())?.pairingId ? await vaultController() : undefined; const updated = await useSensor(async () => { await assertFingerprintMutationAllowed(); const current = await mappings.read(); if (current[slot] && vault) await vault.suppressLocal(Number(slot), current[slot]); delete current[slot]; return mappings.replace(current); }); response.end(JSON.stringify({ mappings: updated, sensorTemplateRetained: true })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Could not remove mapping" })); } return; }
   if (pathname === "/sensor/test" && request.method === "POST") { try { await requireNetworkSession(); if (enrollmentInProgress) { response.statusCode = 409; response.end(JSON.stringify({ error: "Enrollment is using the reader. Wait for it to finish." })); return; } response.end(JSON.stringify(await testSensor())); } catch (error) { response.statusCode = 403; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Reader test unavailable" })); } return; }
   if (pathname === "/credential-mappings" && request.method === "GET") { try { await requireNetworkSession(); response.end(JSON.stringify({ mappings: await credentials.list() })); } catch (error) { response.statusCode = 403; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Credential mappings unavailable" })); } return; }
   if (pathname === "/credential-mappings" && request.method === "POST") { try { await requireNetworkSession(); const input = await body(request); if (!await rosterCache.has(input.memberId)) throw new Error("Choose an active roster member"); const mapping = await credentials.add({ method: authenticationMethod, credential: input.credential, memberId: input.memberId, label: input.label, replaceExisting: input.replaceExisting === true }); response.statusCode = 201; response.end(JSON.stringify({ mapping })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Credential mapping could not be saved" })); } return; }
   if (/^\/credential-mappings\/[^/]+$/.test(pathname) && request.method === "DELETE") { try { await requireNetworkSession(); const mappingId = decodeURIComponent(pathname.split("/")[2]); const removed = await credentials.remove(mappingId); response.statusCode = removed ? 200 : 404; response.end(JSON.stringify({ removed })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Credential mapping could not be removed" })); } return; }
   if (pathname === "/network/session" && request.method === "GET") { try { const [access, connection] = await Promise.all([networkPin.status(), network.status()]); response.end(JSON.stringify({ ...access, network: connection })); } catch (error) { response.statusCode = 503; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Network status unavailable" })); } return; }
   if (pathname === "/network/session" && request.method === "DELETE") { networkPin.close(); response.end(JSON.stringify({ closed: true })); return; }
-  if (pathname === "/network/pin" && request.method === "POST") { try { const access = await networkPin.status(); if (access.configured) throw new Error("The network PIN is already configured"); const input = await body(request); response.statusCode = 201; response.end(JSON.stringify(await networkPin.set(input.pin))); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Could not save network PIN" })); } return; }
-  if (pathname === "/network/unlock" && request.method === "POST") { try { const input = await body(request); const result = await networkPin.verify(input.pin); if (!result.authorized) { response.statusCode = result.lockedUntil ? 429 : 401; response.end(JSON.stringify({ error: result.lockedUntil ? `Too many attempts. Try again after ${new Date(result.lockedUntil).toLocaleTimeString()}.` : "Network settings PIN is incorrect", ...result })); return; } response.end(JSON.stringify(result)); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Could not unlock network settings" })); } return; }
+  if (pathname === "/network/pin" && request.method === "POST") { try { const access = await networkPin.status(); if (access.recovery?.state === "unreadable") throw new Error(networkPinUnreadableError); if (access.configured) throw new Error("The network PIN is already configured"); const input = await body(request); response.statusCode = 201; response.end(JSON.stringify(await networkPin.set(input.pin))); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Could not save network PIN" })); } return; }
+  if (pathname === "/network/unlock" && request.method === "POST") { try { const input = await body(request); const result = await networkPin.verify(input.pin); if (result.unreadable) { response.statusCode = 409; response.end(JSON.stringify({ error: networkPinUnreadableError, ...result })); return; } if (!result.authorized) { response.statusCode = result.lockedUntil ? 429 : 401; response.end(JSON.stringify({ error: result.lockedUntil ? `Too many attempts. Try again after ${new Date(result.lockedUntil).toLocaleTimeString()}.` : "Network settings PIN is incorrect", ...result })); return; } response.end(JSON.stringify(result)); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Could not unlock network settings" })); } return; }
   if (pathname === "/network/wifi" && request.method === "GET") { try { await requireNetworkSession(); const networks = await network.wifi(); state.lastWifiScanAt = new Date().toISOString(); response.end(JSON.stringify({ networks })); } catch (error) { response.statusCode = 403; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Network settings unavailable" })); } return; }
   if (pathname === "/network/connect" && request.method === "POST") { try { await requireNetworkSession(); const input = await body(request); response.end(JSON.stringify({ connected: true, network: await network.connect(input.ssid, input.password) })); } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Could not connect to Wi-Fi" })); } return; }
   if (pathname === "/maintenance/session" && request.method === "GET") { response.end(JSON.stringify(await networkPin.status())); return; }
@@ -916,7 +945,8 @@ async function handleRequest(request, response) {
     catch { response.statusCode = 403; response.end(JSON.stringify({ error: "Unlock network settings first" })); return; }
     try {
       if (!sensor) throw new Error("Fingerprint reader is disabled");
-      response.end(JSON.stringify({ occupiedSlots: await useSensor(() => sensor.occupiedSlots()) }));
+      // The page checks slot numbers against the capacity the reader reports (r503.mjs).
+      response.end(JSON.stringify(await useSensor(async () => ({ occupiedSlots: await sensor.occupiedSlots(), capacity: await sensor.capacity() }))));
     } catch { response.statusCode = 503; response.end(JSON.stringify({ error: "Cannot verify occupied sensor slots. Test the reader before enrolling." })); }
     return;
   }
@@ -932,7 +962,7 @@ async function handleRequest(request, response) {
       const input = await body(request);
       const memberId = typeof input.memberId === "string" ? input.memberId.trim() : "";
       const slot = Number(input.slot);
-      if (!memberId || memberId.length > 100 || /[\u0000-\u001f\u007f]/.test(memberId) || !Number.isInteger(slot) || slot < 0 || slot > 199) throw new Error("Choose a roster member and sensor slot from 0 to 199");
+      if (!memberId || memberId.length > 100 || /[\u0000-\u001f\u007f]/.test(memberId) || !Number.isInteger(slot) || slot < 0 || slot >= r503MaximumCapacity) throw new Error("Choose a roster member and a sensor slot the reader has");
       const config = await loadPairing();
       if (!config) throw new EnrollmentError("roster_unavailable", "Pair this kiosk before enrolling.", 503);
       const rosterId = await verifyEnrollmentMember(memberId, () => fetchKioskRoster(config, { fetchImpl: (url, options) => fetch(url, { ...options, redirect: "error", signal: AbortSignal.timeout(8000) }) }));

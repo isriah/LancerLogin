@@ -22,7 +22,7 @@ import { credentialRejected, credentialStatus, credentialUsable, observeCredenti
 import { missingUpgradeMigrations, moduleMigrationLedgerTable, upgradePathMessage } from "./module-migrations.ts";
 import { readModuleUpdateFailures, type ModuleUpdateFailure } from "./module-catalog.ts";
 
-export interface PluginSelectionEnv extends WebUpdateEnv { MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string }
+export interface PluginSelectionEnv extends WebUpdateEnv { SESSION_KEY?: string; MODULE_SELECTION_TOKEN?: string; MODULE_SELECTION_TOKEN_EXPIRES_AT?: string }
 export type InstalledPlugins = Readonly<Record<string, { readonly source: string; readonly commit: string; readonly official?: boolean; readonly selected?: boolean }>>;
 type Principal = { userId: string; expiresAt: number; authenticatedAt?: number };
 
@@ -381,8 +381,44 @@ async function refuseSkippedUpgrade(db: Db, moduleId: string, metadata: PluginMe
   if (missing.length) fail(409, "upgrade_path_required", upgradePathMessage({ label: bundledModuleRegistry.get(moduleId)?.label ?? moduleId, version: metadata?.version, missing, lastApplied: applied.at(-1)?.name }));
 }
 
-/** Confirmation details for a proposed change. Nothing is committed. */
-export async function reviewPluginChange(env: PluginSelectionEnv, input: Record<string, unknown>, installed: InstalledPlugins = externalModuleSources) {
+/** How long a review stays confirmable: long enough to read it and confirm identity, short enough to still be the review. */
+export const reviewValidityMs = 30 * 60_000;
+const reviewTokenPattern = /^(\d{13})\.([A-Za-z0-9_-]{43})$/;
+
+/**
+ * The value that ties a commit to its review. It is an HMAC, keyed by the Worker's session secret, over the reviewing
+ * Admin, the exact change (action, module, source, commit and release track as the review read them), the selection blob
+ * it was reviewed against and an expiry. Review returns it and commit recomputes it from its own request, so nothing is
+ * stored: a commit whose values differ from a review this Worker answered for this Admin within the last half hour has
+ * no valid token. The value proves only that; it grants nothing by itself, and every other commit check still runs.
+ */
+export async function pluginReviewToken(env: PluginSelectionEnv, userId: string, change: Record<string, unknown>, selectionSha: string, expiresAt = Date.now() + reviewValidityMs): Promise<string> {
+  if (!env.SESSION_KEY) fail(503, "not_configured", "Authentication is not configured.");
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", encoder.encode(env.SESSION_KEY), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const reviewed = JSON.stringify(["lancerlogin:plugin-review:v1", userId, change.action, change.id, change.source ?? null, change.commit ?? null, change.track ?? null, selectionSha, expiresAt]);
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(reviewed)));
+  return `${expiresAt}.${btoa(String.fromCharCode(...signature)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+}
+
+/** Refuse a commit that is not for the change this Admin just reviewed. Compared without leaking where two values differ. */
+async function requireReviewed(env: PluginSelectionEnv, userId: string, change: ChangeInput, selectionSha: string, token: unknown): Promise<void> {
+  // A dashboard tab opened before reviews carried this value sends none.
+  if (token === undefined) fail(409, "reload_required", "This page is out of date. Reload the page and try again.");
+  const refused = "Review the change again before confirming it. This confirmation is not for the change you reviewed, or the review is more than 30 minutes old.";
+  const parsed = typeof token === "string" ? reviewTokenPattern.exec(token) : null;
+  if (!parsed || Number(parsed[1]) <= Date.now()) fail(409, "review_required", refused);
+  const expected = await pluginReviewToken(env, userId, change, selectionSha, Number(parsed![1]));
+  let difference = 0;
+  for (let index = 0; index < expected.length; index++) difference |= expected.charCodeAt(index) ^ (token as string).charCodeAt(index);
+  if (expected.length !== (token as string).length || difference) fail(409, "review_required", refused);
+}
+
+/**
+ * Confirmation details for a proposed change. Nothing is committed. For the reviewing Admin (`reviewer`), the details carry
+ * the `reviewToken` that commit requires for this exact change.
+ */
+export async function reviewPluginChange(env: PluginSelectionEnv, input: Record<string, unknown>, installed: InstalledPlugins = externalModuleSources, reviewer?: { readonly userId: string }) {
   const change = readChangeInput(input, []);
   const db = env.DB ?? fail(503, "not_configured", "D1 is not linked.");
   const [selection, phases] = [await readSelection(env), await modulePhases(db)];
@@ -396,18 +432,22 @@ export async function reviewPluginChange(env: PluginSelectionEnv, input: Record<
     action: change.action, id: change.id, source: change.source ?? previous?.source ?? installed[change.id]?.source ?? null, commit: change.commit ?? null,
     previousCommit: previous?.commit ?? installed[change.id]?.commit ?? null, official: installed[change.id]?.official === true,
     track: change.action === "remove" ? null : change.track ?? (change.action === "upgrade" ? entryTrack(previous) : "stable"), previousTrack: previous || installed[change.id] ? entryTrack(previous) : null,
-    selectionSha: selection.sha, metadata: metadata ?? null, declaredNote: undeclaredNote, trustStatement,
+    selectionSha: selection.sha, ...(reviewer ? { reviewToken: await pluginReviewToken(env, reviewer.userId, change, selection.sha) } : {}), metadata: metadata ?? null, declaredNote: undeclaredNote, trustStatement,
     allowlist: allowlist.state === "configured" ? "allowed" : allowlist.state,
   };
 }
 
-/** Commit one change to lancerlogin.modules.json, optimistically on the blob the Admin reviewed. */
+/**
+ * Commit one change to lancerlogin.modules.json, optimistically on the blob the Admin reviewed. The request must carry the
+ * `reviewToken` its review returned, so only the change that was reviewed can be committed (see pluginReviewToken).
+ */
 export async function commitPluginChange(env: PluginSelectionEnv, principal: Principal, input: Record<string, unknown>, installed: InstalledPlugins = externalModuleSources) {
-  const change = readChangeInput(input, ["selectionSha", "trustConfirmed"]);
+  const change = readChangeInput(input, ["selectionSha", "trustConfirmed", "reviewToken"]);
   if (typeof input.selectionSha !== "string" || !commitPattern.test(input.selectionSha)) fail(400, "invalid_request", "Review the change before confirming it.");
   if (change.action !== "remove" && input.trustConfirmed !== true) fail(400, "trust_confirmation_required", "Confirm that you trust this module's source and reviewed the pinned commit.");
   if (change.action === "remove" && input.trustConfirmed !== undefined && input.trustConfirmed !== true) fail(400, "invalid_request", "Removal needs no trust confirmation.");
   if (!freshUntil(principal)) fail(401, "reauthentication_required", "Confirm your identity again before adding, updating or removing modules.");
+  await requireReviewed(env, principal.userId, change, input.selectionSha as string, input.reviewToken);
   const db = env.DB ?? fail(503, "not_configured", "D1 is not linked.");
   if (await startedUpdate(env)) fail(409, "update_active", "A web update is in progress. Change modules after it finishes.");
   const selection = await readSelection(env);

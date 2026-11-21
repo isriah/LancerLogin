@@ -76,11 +76,20 @@ test("a boot without network time waits until an operator confirms the date and 
 test("the kiosk joins Wi-Fi from its settings, refuses a wrong password, and loses the Worker without a network", async ({ request }) => {
   expect((await kioskPost(request, "/network/unlock", { pin: settingsPin })).ok()).toBe(true);
   const networks = await (await request.get(`${(await kiosk(request)).url}network/wifi`)).json();
-  expect(networks.networks.map((network: { ssid: string }) => network.ssid)).toEqual(["Virtual Lab", "Virtual Shop", "Virtual Guest"]);
+  expect(networks.networks.map((network: { ssid: string }) => network.ssid)).toEqual(["Virtual Lab", "Virtual Shop", "Virtual Guest", "Virtual Campus"]);
 
   const wrong = await kioskPost(request, "/network/connect", { ssid: "Virtual Lab", password: "not-the-password" });
   expect(wrong.status()).toBe(400);
   expect((await wrong.json()).error).toMatch(/Secrets were required/);
+  // A WPA password of fewer than 8 characters can never be right, and is refused without trying.
+  const short = await kioskPost(request, "/network/connect", { ssid: "Virtual Lab", password: "lab-1" });
+  expect((await short.json()).error).toMatch(/at least 8 characters/);
+  // A network that signs in with a username is listed as one and refused at once, with the reason.
+  expect(networks.networks.find((network: { ssid: string }) => network.ssid === "Virtual Campus").enterprise).toBe(true);
+  const campus = await kioskPost(request, "/network/connect", { ssid: "Virtual Campus", password: "any-password" });
+  expect(campus.status()).toBe(400);
+  expect((await campus.json()).error).toMatch(/signs in with a username/);
+  expect((await kiosk(request)).network).toEqual({ connection: "ethernet", ssid: null });
 
   expect((await kioskPost(request, "/network/connect", { ssid: "Virtual Lab", password: "virtual-lab-1" })).ok()).toBe(true);
   await expect.poll(async () => (await kiosk(request)).network, { timeout: 10_000 }).toEqual({ connection: "wifi", ssid: "Virtual Lab" });

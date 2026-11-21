@@ -8,7 +8,7 @@ test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: "wait" })
 // Waiting PIN requests away from Manage kiosk: the count on a kiosk's row of the Kiosks list, and the top bar's count
 // with its dialog, against the dashboard preview API's per-scenario PIN state. The preview sends the counts with the
 // module refresh, as the Worker does. Every name and value is synthetic.
-const mockApi = `http://127.0.0.1:${Number(process.env.LANCERLOGIN_BROWSER_PORT_BASE ?? 43_173) + 1}`;
+const mockApi = `http://127.0.0.1:${Number(process.env.LANCERLOGIN_BROWSER_PORT_BASE ?? 23_173) + 1}`;
 // Test Student C is not on the preview roster, so the request names them itself.
 const students = { A: { memberId: "member-1" }, B: { memberId: "member-2" }, C: { memberId: "member-1", rosterId: "member-3", externalId: "A-103" } } as const;
 const bundledVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version as string;
@@ -312,4 +312,42 @@ test("at 375 px the Update, Reviews and PIN request buttons together take their 
   // With a line to itself the count has its label again, in the Reviews style.
   expect(await countShape(page)).toMatchObject({ labelled: true });
   expect((await countShape(page)).badgeColor).not.toBe(await warningColor(page));
+});
+
+test("a failed module refresh or PIN request read keeps the count and the open dialog, and the next read recovers", async ({ page }, testInfo) => {
+  const { askForPin } = await useScenario(page, `${testInfo.testId}-${testInfo.retry}`);
+  let failModules = false, failList = false;
+  await page.route("**/platform/modules", (route) => { if (!failModules) return route.fallback(); failModules = false; return route.fulfill({ status: 503, json: { error: "Temporarily unavailable." } }); });
+  await page.route("**/admin/kiosks/pin-requests", (route) => { if (!failList) return route.fallback(); failList = false; return route.fulfill({ status: 503, json: { error: "PIN requests could not be read just now." } }); });
+  await askForPin("web-kiosk-a", "A");
+  await page.goto("/kiosks");
+  await kiosksReady(page);
+  const count = topCount(page);
+  await count.click();
+  const dialog = page.getByRole("dialog", { name: "PIN requests" });
+  await expect(dialog.locator(".kiosk-pin-request")).toHaveCount(1);
+  // The visible tab's next read of the list, without waiting ten seconds for it.
+  const readList = async (status: number) => { const response = page.waitForResponse((item) => new URL(item.url()).pathname === "/admin/kiosks/pin-requests" && item.status() === status); await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange"))); await response; };
+
+  // The shell's module refresh fails: the count it carries stays, and so does the dialog.
+  failModules = true;
+  const failed = page.waitForResponse((item) => new URL(item.url()).pathname === "/platform/modules" && item.status() === 503);
+  await refreshShell(page); await failed;
+  await expect(dialog.locator(".kiosk-pin-request")).toHaveCount(1);
+  await expect(count).toHaveText("1 PIN request");
+
+  // The dialog's own read fails: the last list stays with the error.
+  failList = true; await readList(503);
+  await expect(dialog.getByRole("alert")).toHaveText("PIN requests could not be read just now.");
+  await expect(dialog.locator(".kiosk-pin-request")).toHaveCount(1);
+  await expect(count).toHaveText("1 PIN request");
+
+  // The next read recovers: the error goes and a new request appears.
+  await askForPin("web-kiosk-b", "C");
+  await readList(200);
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await expect(dialog.getByRole("heading", { level: 3 })).toHaveText(["Test web kiosk A", "Test web kiosk B"]);
+  await expect(count).toHaveText("2 PIN requests");
+  await dialog.getByRole("button", { name: "Close PIN requests dialog" }).click();
+  await expect(count).toHaveText("2 PIN requests");
 });

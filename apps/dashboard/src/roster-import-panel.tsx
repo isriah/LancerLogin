@@ -2,7 +2,7 @@ import { type ChangeEvent, useMemo, useRef, useState } from "react";
 import { api } from "./dashboard-api";
 import { downloadCsvTemplate } from "./csv-import.ts";
 import { useFocusAfterRender, useModalFocus } from "./modal-focus";
-import { parseRosterText, rosterFieldHelp, rosterFieldLabels, rosterTemplateCsv, type RosterField, type RosterRecord } from "./roster-csv";
+import { importedRosterMember, parseRosterText, rosterFieldHelp, rosterFieldLabels, rosterImportPreviewRow, rosterTemplateCsv, validDiscordUserId, type RosterField, type RosterRecord } from "./roster-csv";
 import type { RosterMember } from "./user-settings";
 
 type IncomingMember = RosterRecord;
@@ -42,14 +42,15 @@ export function RosterImportPanel({ members, onImported, open, onClose, embedded
       if (!member.memberId || !member.firstName || !member.lastName) nextErrors.push(`Row ${rowNumber} is missing a required value.`);
       if (seen.has(member.memberId)) nextErrors.push(`Row ${rowNumber} repeats member ID ${member.memberId}.`); seen.add(member.memberId);
       if (member.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(member.email)) nextErrors.push(`Row ${rowNumber} has an invalid email address.`);
-      if (member.discordUserId && !/^\d{10,24}$/.test(member.discordUserId)) nextWarnings.push(`Row ${rowNumber} has an invalid Discord ID. It will be left unlinked.`);
+      if (member.discordUserId && !validDiscordUserId(member.discordUserId)) nextWarnings.push(`Row ${rowNumber} has an invalid Discord ID. It will be ignored.`);
       return Boolean(member.memberId || member.firstName || member.lastName);
-    }).map(({ member }) => ({ ...member, discordUserId: /^\d{10,24}$/.test(member.discordUserId ?? "") ? member.discordUserId : undefined }));
+    }).map(({ member }) => importedRosterMember(member));
     if (!values.length && !(parsed.hasHeader && parsed.errors.length)) nextErrors.push("Add at least one roster row.");
     if (values.length > 500) nextErrors.push("Import no more than 500 roster members at a time.");
     setErrors(nextErrors); setWarnings(nextWarnings); setRecognised(parsed.recognised);
     if (nextErrors.length) { focusAfterRender("roster-import-errors"); return; }
-    const rows: PreviewRow[] = values.map((member) => { const current = existing.get(member.memberId); const unchanged = current && current.firstName === member.firstName && current.lastName === member.lastName && (current.email ?? "") === (member.email ?? "") && (current.discordUserId ?? "") === (member.discordUserId ?? "") && Boolean(current.active); return { ...member, status: !current ? "Add" : unchanged ? "Unchanged" : "Update" }; });
+    // Each row shows what the import will store: Email and Discord user ID missing or blank in the file keep their current values.
+    const rows: PreviewRow[] = values.map((member) => rosterImportPreviewRow(existing.get(member.memberId), member));
     if (mode === "replace") for (const member of members.filter((item) => item.active && !seen.has(item.memberId))) rows.push({ memberId: member.memberId, firstName: member.firstName, lastName: member.lastName, email: member.email, discordUserId: member.discordUserId, status: "Deactivate", accountLinked: Boolean(member.hasDashboardAccess) });
     setIncoming(values); setPreview(rows); window.requestAnimationFrame(() => dialog.current?.focus());
   }

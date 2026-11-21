@@ -13,6 +13,18 @@ const kioskAuthority = `EXISTS(SELECT 1 FROM kiosks WHERE installation_id='prima
 // including the atomic mutation predicate, not only at route entry.
 export const fingerprintResetGuard = `NOT EXISTS(SELECT 1 FROM kiosk_fingerprint_reset_commands r WHERE r.installation_id='primary' AND r.kiosk_id=? AND r.pairing_id=? AND r.acknowledged_at IS NULL)`;
 
+/** A finished reset stays this long, so an exact retry of it remains idempotent. */
+export const FINGERPRINT_RESET_RETENTION_MS = 86_400_000;
+/** At most this many reset batches are kept at once; a reset beyond it is refused with 409. */
+export const FINGERPRINT_RESET_BATCH_LIMIT = 64;
+// A batch nothing reads any more: older than the retention, not the latest one (the Admin overview lists it), and with no
+// command a kiosk can still acknowledge, meaning an unacknowledged command for an active kiosk's current pairing, which
+// still blocks that pairing's sharing. Commands for a re-paired, retired or deleted kiosk can never be acknowledged.
+const prunableBatch = `b.installation_id='primary' AND b.created_at<?
+  AND b.id<>(SELECT id FROM kiosk_fingerprint_reset_batches WHERE installation_id='primary' ORDER BY created_at DESC,id DESC LIMIT 1)
+  AND NOT EXISTS(SELECT 1 FROM kiosk_fingerprint_reset_commands r JOIN kiosks k ON k.id=r.kiosk_id AND k.installation_id=r.installation_id
+    WHERE r.batch_id=b.id AND r.acknowledged_at IS NULL AND k.active=1 AND k.pairing_bound=1 AND k.pairing_code_id=r.pairing_id)`;
+
 /** A mappings-only command never erases reader bytes, attendance or pairing.
  * Offline pairings remain blocked from sharing until durable acknowledgement.
  * No fingerprint identity review or legacy association authority is exposed.
@@ -36,9 +48,13 @@ export async function fingerprintResetRoute(request: Request, context: Context):
     const input = await readJson(request, 1024);
     if (!exact(input, ["resetId", "confirmation"]) || !identifier(input.resetId) || input.confirmation !== "RESET ALL FINGERPRINT MAPPINGS") throw new HttpError(400, "Type RESET ALL FINGERPRINT MAPPINGS to confirm. Reader templates will not be erased.");
     const pendingBatch = `EXISTS(SELECT 1 FROM kiosk_fingerprint_reset_batches b WHERE b.id=? AND b.installation_id='primary' AND b.actor_user_id=? AND b.processed_at IS NULL) AND ${adminAuthority} AND ${attendanceAuthority}`;
-    const bindings = [input.resetId, actor.userId, actor.userId];
+    const bindings = [input.resetId, actor.userId, actor.userId], retainedAfter = Date.now() - FINGERPRINT_RESET_RETENTION_MS;
+    // The batch limit bounds the reset rows kept and the commands a kiosk may have waiting. Finished batches are pruned first,
+    // in the same transaction, so it counts only recent and still-pending resets rather than every reset ever made.
     await db.batch([
-      db.prepare(`INSERT INTO kiosk_fingerprint_reset_batches(id,installation_id,actor_user_id,created_at) SELECT ?,'primary',?,? WHERE ${adminAuthority} AND ${attendanceAuthority} AND (SELECT count(*) FROM kiosks WHERE installation_id='primary' AND active=1 AND pairing_bound=1)<=32 AND (SELECT count(*) FROM kiosk_fingerprint_reset_batches WHERE installation_id='primary')<64 ON CONFLICT(id) DO NOTHING`).bind(input.resetId, actor.userId, Date.now(), actor.userId),
+      db.prepare(`DELETE FROM kiosk_fingerprint_reset_commands WHERE installation_id='primary' AND batch_id IN (SELECT b.id FROM kiosk_fingerprint_reset_batches b WHERE ${prunableBatch}) AND ${adminAuthority} AND ${attendanceAuthority}`).bind(retainedAfter, actor.userId),
+      db.prepare(`DELETE FROM kiosk_fingerprint_reset_batches WHERE installation_id='primary' AND id IN (SELECT b.id FROM kiosk_fingerprint_reset_batches b WHERE ${prunableBatch}) AND ${adminAuthority} AND ${attendanceAuthority}`).bind(retainedAfter, actor.userId),
+      db.prepare(`INSERT INTO kiosk_fingerprint_reset_batches(id,installation_id,actor_user_id,created_at) SELECT ?,'primary',?,? WHERE ${adminAuthority} AND ${attendanceAuthority} AND (SELECT count(*) FROM kiosks WHERE installation_id='primary' AND active=1 AND pairing_bound=1)<=32 AND (SELECT count(*) FROM kiosk_fingerprint_reset_batches WHERE installation_id='primary')<${FINGERPRINT_RESET_BATCH_LIMIT} ON CONFLICT(id) DO NOTHING`).bind(input.resetId, actor.userId, Date.now(), actor.userId),
       db.prepare(`INSERT INTO kiosk_fingerprint_reset_commands(id,batch_id,installation_id,kiosk_id,pairing_id,created_at) SELECT lower(hex(randomblob(16))),?,'primary',k.id,k.pairing_code_id,? FROM kiosks k WHERE k.installation_id='primary' AND k.active=1 AND k.pairing_bound=1 AND ${pendingBatch}`).bind(input.resetId, Date.now(), ...bindings),
       db.prepare(`DELETE FROM kiosk_fingerprint_vault_settings WHERE installation_id='primary' AND ${pendingBatch}`).bind(...bindings),
       db.prepare(`UPDATE kiosk_fingerprint_sync SET enabled=0,sync_id=lower(hex(randomblob(32))) WHERE installation_id='primary' AND ${pendingBatch}`).bind(...bindings),

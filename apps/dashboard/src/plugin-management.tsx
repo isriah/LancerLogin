@@ -5,6 +5,7 @@ import { useModalFocus } from "./modal-focus";
 import { WebUpdateCard } from "./web-update-card";
 import { diagnosticUrl, type WebUpdateResponse } from "./web-update";
 import { passwordProof, type PasswordParams } from "./password-hashing";
+import { incompatibleCommitRefused } from "./plugin-commit-rule";
 
 type Phase = "disabled" | "enabled" | "retained" | "deleting" | "deleted" | null;
 type Track = "stable" | "nightly";
@@ -27,7 +28,7 @@ export type ModuleUpdateFailure = { moduleId: string; code: string; message: str
 type Action = "add" | "upgrade" | "remove";
 type Draft = { action: Action; id: string; source: string; commit: string; track?: Track };
 type Review = {
-  action: Action; id: string; source: string | null; commit: string | null; previousCommit: string | null; official: boolean; selectionSha: string; track?: Track | null; previousTrack?: Track | null;
+  action: Action; id: string; source: string | null; commit: string | null; previousCommit: string | null; official: boolean; selectionSha: string; reviewToken?: string; track?: Track | null; previousTrack?: Track | null;
   metadata: { state: "compatible" | "incompatible" | "unknown"; reason?: string; version?: string; contract?: number; core?: string; tablePrefix?: string; migrations?: string[]; adoptedCoreMigrations?: number; upgradeRequiresMigrations?: string[] } | null;
   declaredNote: string; trustStatement: string; allowlist: string;
 };
@@ -129,7 +130,7 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
     const change = reviewedChange;
     if (!review || !change) return;
     await run(async () => {
-      await request("/admin/plugins/change", { ...change, selectionSha: review.selectionSha, ...(change.action === "remove" ? {} : { trustConfirmed: true }) });
+      await request("/admin/plugins/change", { ...change, selectionSha: review.selectionSha, reviewToken: review.reviewToken, ...(change.action === "remove" ? {} : { trustConfirmed: true }) });
       onCommitted(`${change.action === "add" ? "Added" : change.action === "upgrade" ? "Pinned" : "Removed"} ${change.id}${change.action !== "remove" && change.track === "nightly" ? " on the Nightly track (testing only)" : ""} in the private deployment repository. Select Apply changes to deploy it.`);
     });
   }
@@ -172,7 +173,7 @@ function ChangeDialog({ draft, state, onClose, onCommitted }: { draft: Draft; st
           <label className="module-choice"><input type="checkbox" className="ui-checkbox" checked={trusted} disabled={busy} onChange={(event) => setTrusted(event.target.checked)} /><span>I trust this source and reviewed this exact commit.</span></label></>}
       <IdentityConfirmation options={state.reauthentication} freshUntil={freshUntil} busy={busy} action="add, update or remove modules" onConfirm={reauthenticate} />
       <div className="module-actions">
-        <button className={`ui-button ui-button--primary primary-button${review.action === "remove" ? " ui-button--danger" : ""}`} type="button" disabled={busy || !fresh || review.action !== "remove" && (!trusted || review.metadata?.state === "incompatible")} onClick={() => void commit()}>{busy ? "Committing…" : review.action === "remove" ? "Commit removal" : "Commit change"}</button>
+        <button className={`ui-button ui-button--primary primary-button${review.action === "remove" ? " ui-button--danger" : ""}`} type="button" disabled={busy || !fresh || review.action !== "remove" && (!trusted || incompatibleCommitRefused(review, state))} onClick={() => void commit()}>{busy ? "Committing…" : review.action === "remove" ? "Commit removal" : "Commit change"}</button>
         {draft.action !== "remove" && <button className="ui-button" type="button" disabled={busy} onClick={() => setReview(undefined)}>Edit</button>}
         <button className="ui-button" type="button" disabled={busy} onClick={onClose}>Cancel</button>
       </div>

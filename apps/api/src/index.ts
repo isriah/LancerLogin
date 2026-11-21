@@ -1,6 +1,7 @@
 import { inactiveAt, inactivePeriodsUpdateSql, validateInactivePeriods } from "./member-participation.ts";
 import { meetingDeletion, restoreMeetingDeletion } from "./meeting-deletion.ts";
 import { runMeetingImport } from "./meeting-import.ts";
+import { DISCORD_CALENDAR_HORIZON_DAYS, calendarLifecycleQueue, calendarRemovalStatements, calendarTargets, completeCalendarRemoval, discordCalendarSyncStatements, dueCalendarWork, failCalendarRemoval, CALENDAR_DUE_NOW, calendarCatchUp, calendarFailedRetry, calendarRemovalDisconnectStatements, calendarRemovalRetry, calendarRemovalStatusSql, calendarWaitingCount, dropCalendarRemoval, type CalendarProvider, type CalendarQueueSummary, type CalendarRemoval } from "./calendar-queue.ts";
 import { initialWalkthroughProgress, removedWalkthroughPages, validWalkthroughProgress, walkthroughs, type WalkthroughPage, type WalkthroughProgress } from "../../../packages/shared/src/walkthrough.ts";
 import { createSessionCodec, createSignedStateCodec, fakePasswordSalt, parsePasswordKey, parsePasswordSalt, passwordFormat, passwordHashFromCredential, passwordSaltBytes, passwordScrypt, storedPasswordSalt, verifyLegacyPassword, verifyPasswordKey } from "./runtime-security.ts";
 import { encodeBase64Url as encodeBytes } from "../../../packages/shared/src/password-hash.mjs";
@@ -8,13 +9,14 @@ import { authRateLimits, bootstrapClaimKey, clearFailedLogins, consumeAuthRateLi
 import { decryptIntegration, encryptIntegration, moduleCredentials } from "./integration-crypto.ts";
 import { moduleEmailIdempotencyKey, moduleEmailMessage, resendModuleEmailPayload } from "./module-email.ts";
 import { clearFirstCache, firstDataService, firstIntegrationStatus, firstVisitorKey, removeFirstCredential, saveFirstCredential, type FirstDataDeps } from "./first-data.ts";
-import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, webUpdateMaintenance, webUpdateMaintenanceStatement, updateRepositoryFiles, recheckUpdateSetup } from "./web-updates.ts";
+import { WebUpdateError, prepareWebUpdate, startWebUpdate, webUpdateStatus, recordUpdateBackup, requirePreparedUpdate, webUpdateMaintenance, webUpdateMaintenanceStatement, updateRepositoryFiles, recheckUpdateSetup } from "./web-updates.ts";
 import { commitPluginChange, currentSelectionSha, freshUntil, lookupPluginRelease, pluginManagementState, requiredModuleMigrations, requireNoModuleMigration, reviewPluginChange, selectionCredentialState } from "./plugin-selection.ts";
 import { discoveryForChannel, kioskReleaseLookup } from "./release-discovery.ts";
 import { readUpdateChannel, changeUpdateChannel } from "./update-channel.ts";
 import { checkScanPin, dashboardKioskPinRequests, dashboardMemberPin, dashboardPinRequests, decidePinRequest, kioskPinRoute, pinLockoutSettings, pinRequestCounts, readPinLockout, rosterPins, type PinRequestCounts } from "./member-pins.ts";
-import { pruneStaleRows } from "./stale-row-pruning.ts";
-import { discordCodeBackups, issueDiscordKioskCode, normalizeDiscordCodeBackup, pruneDiscordKioskCodes, discordCodeAcceptance, findDiscordKioskCode, type DiscordCodeBackup } from "./discord-kiosk-codes.ts";
+import { pruneStaleRows, pruneStaleRowsWith, STALE_EMAIL_DELIVERY_MINUTES } from "./stale-row-pruning.ts";
+import { memberDateText } from "./member-date-text.ts";
+import { discordCodeBackups, issueDiscordKioskCode, normalizeDiscordCodeBackup, pruneDiscordKioskCodes, discordCodeAcceptance, findDiscordKioskCode, type DiscordCodeBackup, type DiscordCodeLookup } from "./discord-kiosk-codes.ts";
 import { kioskHonoursRequirePin, kioskReleaseTransition, requirePinFirstKioskRelease } from "../../../packages/shared/src/release-policy.mjs";
 import { formatPairingCode, generateWebPairingCode, normalizePairingCode, validWebPairingCode } from "../../../packages/shared/src/pairing-code.mjs";
 import { resolveDefaultTheme } from "../../../packages/shared/src/product.ts";
@@ -22,21 +24,25 @@ import { attendanceStatusText, withRecentWindow } from "../../../packages/shared
 import { type LabelPolicySummary } from "../../../packages/shared/src/attendance-label-sets.ts";
 import { attendanceAnomalyMinutes, attendanceClosesAt, attendanceDisposition, attendanceWindow, DEFAULT_ANOMALY_THRESHOLD_MINUTES, DEFAULT_EARLY_SCAN_MINUTES, MAX_ANOMALY_THRESHOLD_MINUTES, meanAnomalousMinutes, nextAttendanceAction, overlappingMeetingWindows, scanMeetingFor, scanWindowState, type AttendanceAction, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 import { assertAllowanceChangeKeepsMeetingsApart, attendanceAllowances, meetingWindowLabel, validEarlyScanMinutes, validLateScanMinutes, type AttendanceAllowances } from "./attendance-allowances.ts";
+import { guardedMeetingBatch, meetingOverlapGuard } from "./meeting-overlap-guard.ts";
 import { alreadyDoneRefusal, notStartedYetRefusal, scanWindowRefusal } from "./scan-refusal.ts";
-import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, ruleOn as policyRuleOn, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
+import { evaluateAttendance, meetingEligibility, localDate as policyLocalDate, participationStartDate, ruleOn as policyRuleOn, validDate, type AttendanceRule, type LabelChange, type Observation, type PolicyLabel, type PolicyMeeting, type PolicyMember, type PolicyMemberResult } from "./attendance-policy.ts";
 import { labelSetResult, reportColumnCsvLabel, reportHasLabelSets, buildReportRows, combinedMemberDataset, defaultReportDefinition, displayedReportRows, reportComputationDefinition, reportBaselineFor, reportBaselineModuleIds, reportBaselineModuleLabel, reportBaselineStarted, type ReportBaselines, filterAndSortReportRows, reportColumnCatalog, reportColumnId, reportColumnLabel, reportDatasetCatalog, reportDatasetDefinition, reportFieldSourceDataset, reportFilterSourceDataset, reportLabelsMatch, reportModuleFilters, resolveReportPeriod, validateReportDefinition, type NormalizedReportDefinition, type ReportResultRow, type ReportScope } from "./report-builder.ts";
 import { createModuleReportDispatcher, projectCoreMembers, type ReportProjectionContext } from "./module-reporting.ts";
 
-import { databaseIdentity, measureD1, usageCategory, type D1Database, type D1Statement } from "./d1-usage.ts";
-import { SchedulerBudget, passSlot, rotateJobs, scheduledJobStartCost, scheduledPassLimits, scheduledSliceLimits, type PassCost, type PassLimits } from "./scheduler-budget.ts";
+import { databaseIdentity, measureD1, usageCategory, type D1Database, type D1Result, type D1Statement } from "./d1-usage.ts";
+import { correctParticipationStarts, startCorrectionReset, startCorrectionStateRead } from "./participation-start-correction.ts";
+import { SchedulerBudget, SchedulerBudgetError, passSlot, rotateJobs, scheduledJobStartCost, scheduledPassLimits, scheduledSliceLimits, type PassCost, type PassLimits } from "./scheduler-budget.ts";
 import { acceptContestBatch, rejectContestBatch, resolveContestBatch, submitContest } from "./contest-review.ts";
 import { ReportDataCache } from "./report-data-cache.ts";
+import { meetingChangeImpact, policyChangeImpact } from "./attendance-impact.ts";
 import { HttpError } from "./http-error.ts";
 import { DiscordRateLimitError, discordRateLimitFailsFast, discordRateLimitOperation } from "./discord-rate-limit.ts";
 import { fingerprintVaultRoute } from "./fingerprint-vault.ts";
 import { kioskPoll } from "./kiosk-poll.ts";
+import { storageDiagnosticsColumn, storedStorageDiagnostics } from "./kiosk-storage-diagnostics.ts";
 import { syncKioskScanReviews, listKioskScanReviews, markKioskScanReviewed, markKioskScansReviewed } from "./kiosk-scan-reviews.ts";
-import { fingerprintMinimumScore, readFingerprintMatch, recordScanMatch, saveFingerprintMinimumScore, validateMinimumScore } from "./fingerprint-match.ts";
+import { fingerprintMinimumScore, readFingerprintMatch, recordScanMatch, saveFingerprintMinimumScoreStatement, validateMinimumScore } from "./fingerprint-match.ts";
 import { acceptedScanStatements, dismissReenrollSuggestion, findImpossibleScan, listPossibleWrongMatches, readReenrollSuggestions, recordFingerprintReenrolled, recordLocalFingerprintEnrollment, recordPossibleWrongMatch, reenrollThreshold } from "./scan-integrity.ts";
 import { readKioskEnrollment, startKioskEnrollment, selectEnrollmentMember, cancelKioskEnrollment, progressKioskEnrollment } from "./kiosk-enrollment.ts";
 import { fingerprintResetRoute } from "./fingerprint-reset.ts";
@@ -57,8 +63,10 @@ import { attendanceMemberSettings } from "./attendance-member-settings.ts";
 import { runModuleCleanup } from "./module-cleanup.ts";
 import { extractedModuleOwnership, extractedModuleTables, extractedModules, liftExtractedModules, unavailableExtractedWalkthroughPages } from "./extracted-modules.ts";
 import type { ModuleDefinition, ModulePlatformSnapshot } from "../../../packages/shared/src/module-platform.ts";
+import { RESTORE_PART_MAX_BYTES, backupPartPayload, createBackupSession, createRestoreSession, deleteTransferSession, finishBackupSession, loadStagedRestore, parseRestoreParts, restorePartMeta, restoreSessionResult, restoreSessionStatus, sessionGone, sha256Hex as transferDigest, stagedColumnValues, stagedCommitCleanup, stagedCommitGuards, stagedPayload, stagedRowsInsert, storeRestorePart, validTransferSessionId, type BackupSource } from "./data-transfer.ts";
+import { estimateRestoreWrites } from "../../../packages/shared/src/restore-writes.ts";
 import { clearExternalModuleStatements, externalModuleExport, externalBackupModules, externalModuleBackupSchema, firstPartyBackupRegistry, freshExternalModuleStatements, insertExternalModuleStatements, insertRowsStatements, moduleKeyedTables, ModuleRestoreRefusal, parseExternalModuleSection, planExternalModuleRestore, prepareIncludedModule, removeExcludedModuleRows, requireConfirmedExclusions, type ExcludedModuleSummary, type PreparedExternalModule } from "./module-backup.ts";
-import { SCHEDULER_STOP_MS, SLICE_CONTINUE_MS, SLICE_IDLE_MAX_MS, SLICE_RETRY_MS, dueJobs, moduleSchedulerJobs, nextWake, parseJobStates, runCursor, schedulerClass, schedulerRequest, type JobRunResult, type JobStates, type Pokes, type SchedulerJob, type SchedulerNamespace, type SliceHooks, type SliceResult } from "./platform-scheduler.ts";
+import { SCHEDULER_STOP_MS, SLICE_CONTINUE_MS, SLICE_CRASH_LIMIT, SLICE_IDLE_MAX_MS, SLICE_RETRY_MS, cronSchedulerForced, dueJobs, moduleSchedulerJobs, nextWake, parseJobStates, runCursor, schedulerClass, schedulerRequest, schedulerRunner, type JobRunResult, type JobStates, type Pokes, type SchedulerJob, type SchedulerNamespace, type SliceHooks, type SliceResult } from "./platform-scheduler.ts";
 type ModuleProviderAuthority = () => Promise<void>;
 const moduleProviderAuthority = Symbol("module-provider-authority");
 type ProviderConfiguration = Record<string, string> & { [moduleProviderAuthority]?: ModuleProviderAuthority };
@@ -71,6 +79,11 @@ type SchedulerPass = { readonly budget: SchedulerBudget; readonly moduleGenerati
   cursor?: string };
 /** Whether a scheduled pass can afford one more item of a job's batch. Outside a pass there is no shared budget. */
 const passAllows = (env: Env, cost: PassCost) => env.schedulerPass?.budget.allows(cost) ?? true;
+/**
+ * The same check for work that must not bring the job back early: a retry of something that already failed. When it
+ * does not fit it simply waits for the job's next regular run.
+ */
+const passFits = (env: Env, cost: PassCost) => env.schedulerPass?.budget.fits(cost) ?? true;
 /** A scheduler job stopped at its own per-slice cap with new work left, so the scheduler runs it again within seconds. */
 const passMore = (env: Env) => env.schedulerPass?.budget.more();
 type WorkerContext = { waitUntil(promise: Promise<unknown>): void };
@@ -245,9 +258,13 @@ function constantTimeEqual(left: string, right: string): boolean {
   return difference === 0;
 }
 function randomToken(bytes = 32): string { return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(bytes)))).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); }
+/** The audit row writeAudit inserts, as a statement to put in the same batch as the change it records. */
+function auditStatement(db: D1Database, principal: Principal, action: string, targetType: string, targetId: string | null, metadata: unknown = {}): D1Statement {
+  return db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)")
+    .bind(crypto.randomUUID(), principal.userId, action, targetType, targetId, JSON.stringify(metadata), new Date().toISOString());
+}
 async function writeAudit(db: D1Database, principal: Principal, action: string, targetType: string, targetId: string | null, metadata: unknown = {}): Promise<void> {
-  await db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)")
-    .bind(crypto.randomUUID(), principal.userId, action, targetType, targetId, JSON.stringify(metadata), new Date().toISOString()).run();
+  await auditStatement(db, principal, action, targetType, targetId, metadata).run();
 }
 
 async function setupStatus(env: Env): Promise<Response> {
@@ -366,7 +383,9 @@ async function modulePlatform(request: Request, env: Env): Promise<Response> {
   const input = await parseJson(request);
   // Record installed definitions before any module can be enabled, so retained data stays deletable without its code.
   await reconcileInstalledModules(db);
-  return response(await configureModulePlatform(db, principal.userId, input));
+  // Disabling Attendance records the events of its pending deletes for removal; they are bound to the calendar and server in use now.
+  const disablesAttendance = Array.isArray((input as { enabled?: unknown } | null)?.enabled) && !((input as { enabled: unknown[] }).enabled).includes("attendance");
+  return response(await configureModulePlatform(db, principal.userId, input, disablesAttendance ? await calendarRemovalTargets(env) : {}));
 }
 
 async function moduleAssignments(request: Request, env: Env, userId: string): Promise<Response> {
@@ -465,7 +484,7 @@ async function pluginManagement(request: Request, env: Env, action: "state" | "r
   if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Plugin changes require the dashboard origin");
   const input = await parseJson<Record<string, unknown>>(request, 4_096);
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "Invalid plugin request");
-  if (action === "review") return response(await reviewPluginChange(env, input));
+  if (action === "review") return response(await reviewPluginChange(env, input, undefined, principal));
   if (action === "release") return response(await lookupPluginRelease(input, env));
   if (action === "reauthenticate/params") return response(await reauthenticationParams(env, principal.userId, input));
   if (action === "change") return response(await commitPluginChange(env, principal, input), 201);
@@ -654,9 +673,11 @@ async function branding(request: Request, env: Env): Promise<Response> {
   // Only a longer early arrival or late scan allowance can make meetings overlap, so other branding saves skip reading meetings.
   const current = attendanceAllowances(await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<Partial<AttendanceAllowances>>());
   await assertAllowanceChangeKeepsMeetingsApart(db, current, { lateScanMinutes: input.lateScanMinutes!, earlyScanMinutes: input.earlyScanMinutes ?? current.earlyScanMinutes });
-  await db.prepare("UPDATE organization_settings SET organization_name = ?, subtitle = ?, logo_data = ?, primary_color = ?, secondary_color = ?, appearance = ?, logo_backdrop = ?, late_scan_minutes = ?, early_scan_minutes = COALESCE(?, early_scan_minutes), discord_contest_window_hours = ?, attendance_reporting_starts_on = ?, anomaly_late_threshold_minutes = COALESCE(?, anomaly_late_threshold_minutes), anomaly_early_threshold_minutes = COALESCE(?, anomaly_early_threshold_minutes) WHERE installation_id = 'primary'")
-    .bind(input.organizationName!.trim(), input.subtitle?.trim() || null, input.logoData || null, input.primaryColor!.toLowerCase(), input.secondaryColor!.toLowerCase(), input.appearance === "themed" ? "system" : input.appearance, input.logoBackdrop, input.lateScanMinutes, input.earlyScanMinutes ?? null, input.discordContestWindowHours, input.attendanceReportingStartsOn || null, input.anomalyLateThresholdMinutes ?? null, input.anomalyEarlyThresholdMinutes ?? null).run();
-  await writeAudit(db, principal, "branding.updated", "organization_settings", "primary", { lateScanMinutes: input.lateScanMinutes, earlyScanMinutes: input.earlyScanMinutes ?? current.earlyScanMinutes, attendanceReportingStartsOn: input.attendanceReportingStartsOn || null, anomalyLateThresholdMinutes: input.anomalyLateThresholdMinutes, anomalyEarlyThresholdMinutes: input.anomalyEarlyThresholdMinutes }); return response({ ok: true });
+  await db.batch([
+    db.prepare("UPDATE organization_settings SET organization_name = ?, subtitle = ?, logo_data = ?, primary_color = ?, secondary_color = ?, appearance = ?, logo_backdrop = ?, late_scan_minutes = ?, early_scan_minutes = COALESCE(?, early_scan_minutes), discord_contest_window_hours = ?, attendance_reporting_starts_on = ?, anomaly_late_threshold_minutes = COALESCE(?, anomaly_late_threshold_minutes), anomaly_early_threshold_minutes = COALESCE(?, anomaly_early_threshold_minutes) WHERE installation_id = 'primary'")
+      .bind(input.organizationName!.trim(), input.subtitle?.trim() || null, input.logoData || null, input.primaryColor!.toLowerCase(), input.secondaryColor!.toLowerCase(), input.appearance === "themed" ? "system" : input.appearance, input.logoBackdrop, input.lateScanMinutes, input.earlyScanMinutes ?? null, input.discordContestWindowHours, input.attendanceReportingStartsOn || null, input.anomalyLateThresholdMinutes ?? null, input.anomalyEarlyThresholdMinutes ?? null),
+    auditStatement(db, principal, "branding.updated", "organization_settings", "primary", { lateScanMinutes: input.lateScanMinutes, earlyScanMinutes: input.earlyScanMinutes ?? current.earlyScanMinutes, attendanceReportingStartsOn: input.attendanceReportingStartsOn || null, anomalyLateThresholdMinutes: input.anomalyLateThresholdMinutes, anomalyEarlyThresholdMinutes: input.anomalyEarlyThresholdMinutes }),
+  ]); return response({ ok: true });
 }
 function validateMeetingWeightCategory(input: MeetingWeightCategoryInput, partial = false): string[] {
   const errors: string[] = [];
@@ -695,8 +716,10 @@ async function updateMeetingWeightCategory(request: Request, env: Env, categoryI
   if (duplicate) throw new HttpError(409, "A meeting weight category with that name already exists");
   const now = new Date().toISOString(); let position = current.position;
   if (active && !current.active) { const last = await db.prepare("SELECT COALESCE(MAX(position), -1) AS position FROM meeting_weight_categories WHERE installation_id = 'primary' AND active = 1").first<{ position?: number }>(); position = Number(last?.position ?? -1) + 1; }
-  await db.prepare("UPDATE meeting_weight_categories SET name = ?, weight = ?, minimum_duration_minutes = ?, position = ?, active = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ?").bind(name, weight, minimumDurationMinutes, position, active ? 1 : 0, now, categoryId).run();
-  await writeAudit(db, principal, active ? "meeting_weight_category.updated" : "meeting_weight_category.retired", "meeting_weight_category", categoryId, { name, weight, minimumDurationMinutes, active });
+  await db.batch([
+    db.prepare("UPDATE meeting_weight_categories SET name = ?, weight = ?, minimum_duration_minutes = ?, position = ?, active = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ?").bind(name, weight, minimumDurationMinutes, position, active ? 1 : 0, now, categoryId),
+    auditStatement(db, principal, active ? "meeting_weight_category.updated" : "meeting_weight_category.retired", "meeting_weight_category", categoryId, { name, weight, minimumDurationMinutes, active }),
+  ]);
   return response({ category: { id: categoryId, name, weight, minimumDurationMinutes, position, active } });
 }
 async function reorderMeetingWeightCategories(request: Request, env: Env): Promise<Response> {
@@ -754,8 +777,10 @@ async function updateLabel(request: Request, env: Env, labelId: string): Promise
   if (!name || name.length > 80 || typeof active !== "boolean") throw new HttpError(400, "Invalid label update");
   const duplicate = await db.prepare("SELECT id FROM member_labels WHERE installation_id = 'primary' AND name = ? COLLATE NOCASE AND id != ?").bind(name, labelId).first();
   if (duplicate) throw new HttpError(409, "A label with that name already exists");
-  await db.prepare("UPDATE member_labels SET name = ?, active = ? WHERE installation_id = 'primary' AND id = ?").bind(name, active ? 1 : 0, labelId).run();
-  await writeAudit(db, principal, "label.updated", "member_label", labelId, { before: current, after: { name, active } });
+  await db.batch([
+    db.prepare("UPDATE member_labels SET name = ?, active = ? WHERE installation_id = 'primary' AND id = ?").bind(name, active ? 1 : 0, labelId),
+    auditStatement(db, principal, "label.updated", "member_label", labelId, { before: current, after: { name, active } }),
+  ]);
   return response({ label: { ...current, name, active } });
 }
 async function labelTarget(request: Request, env: Env, targetId?: string): Promise<Response> {
@@ -773,8 +798,20 @@ async function labelTarget(request: Request, env: Env, targetId?: string): Promi
   if (overlap) throw new HttpError(409, "Weekly target periods cannot overlap");
   await previewPolicyMutation(db, { rule: { id: "", labelId: input.labelId, startsOn: input.startsOn, endsOn: input.endsOn, ruleType: "weekly_count", meetingsPerWeek: input.meetingsPerWeek } });
   const id = crypto.randomUUID(); const now = new Date().toISOString();
-  await db.batch([db.prepare("INSERT INTO label_attendance_rules (id, installation_id, label_id, starts_on, ends_on, rule_type, meetings_per_week, created_by, created_at, updated_at) VALUES (?, 'primary', ?, ?, ?, 'weekly_count', ?, ?, ?, ?)").bind(id, input.labelId, input.startsOn, input.endsOn, input.meetingsPerWeek, principal.userId, now, now), db.prepare("INSERT INTO label_weekly_targets (id, installation_id, label_id, starts_on, ends_on, meetings_per_week, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, input.labelId, input.startsOn, input.endsOn, input.meetingsPerWeek, principal.userId, now), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'label.target_added', 'weekly_target', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify(input), now)]);
+  await refuseRuleOverlap(db.batch([db.prepare("INSERT INTO label_attendance_rules (id, installation_id, label_id, starts_on, ends_on, rule_type, meetings_per_week, created_by, created_at, updated_at) VALUES (?, 'primary', ?, ?, ?, 'weekly_count', ?, ?, ?, ?)").bind(id, input.labelId, input.startsOn, input.endsOn, input.meetingsPerWeek, principal.userId, now, now), db.prepare("INSERT INTO label_weekly_targets (id, installation_id, label_id, starts_on, ends_on, meetings_per_week, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?)").bind(id, input.labelId, input.startsOn, input.endsOn, input.meetingsPerWeek, principal.userId, now), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'label.target_added', 'weekly_target', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, id, JSON.stringify(input), now)]), "Weekly target periods cannot overlap");
   return response({ target: { id, ...input } }, 201);
+}
+/**
+ * Migration 0031's triggers (dated periods) and unique indexes (one default rule per label) refuse an overlapping rule
+ * inside the write, so two requests at once can never both save one. The request that loses gets the 409 its route's own
+ * check gives a sequential request, not a 500.
+ */
+async function refuseRuleOverlap<T>(write: Promise<T>, message: string): Promise<T> {
+  try { return await write; }
+  catch (error) {
+    if (error instanceof Error && /Attendance rule periods cannot overlap|UNIQUE constraint failed: label_attendance_rules\./.test(error.message)) throw new HttpError(409, message);
+    throw error;
+  }
 }
 async function previewLabelChanges(db: D1Database, raw: LabelMutation[]) {
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > 500) throw new HttpError(400, "Provide 1 to 500 label changes");
@@ -797,7 +834,7 @@ async function previewLabelChanges(db: D1Database, raw: LabelMutation[]) {
   const affected = data.members.filter((member) => newChanges.some((change) => change.memberId === member.id));
   const before = evaluateAttendance({ ...data, members: affected }); const after = evaluateAttendance({ ...data, members: affected, changes: combined });
   const impact = before.map((item, index) => ({ memberId: item.member.memberId, beforeRate: item.rate, afterRate: after[index].rate, beforePolicy: item.policy, afterPolicy: after[index].policy, beforePolicies: item.currentCompliances, afterPolicies: after[index].currentCompliances, affectedCompletedMeetings: after[index].rows.filter((row, rowIndex) => row.eligibility !== item.rows[rowIndex]?.eligibility).length }));
-  const token = await sha256Hex(JSON.stringify({ raw: newChanges, state: data }));
+  const token = await sha256Hex(JSON.stringify({ raw: newChanges, state: await policyStateDigest(data) }));
   return { normalized, changes: newChanges, impact, token };
 }
 async function labelMembership(request: Request, env: Env, apply: boolean): Promise<Response> {
@@ -843,14 +880,8 @@ async function previewPolicyMutation(db: D1Database, input: PolicyMutation) {
     rules.push(change);
   }
   const recentDays = input.recentDays ?? data.recentDays;
-  const before = evaluateAttendance(data);
-  const after = evaluateAttendance({ ...data, rules, recentDays });
-  const impact = before.flatMap((item, index) => {
-    const next = after[index];
-    if (JSON.stringify(item.currentCompliances) === JSON.stringify(next.currentCompliances) && JSON.stringify(item.historySummaries) === JSON.stringify(next.historySummaries) && item.rate === next.rate && item.policy === next.policy && item.rows.every((row, rowIndex) => row.eligibility === next.rows[rowIndex]?.eligibility && row.ruleId === next.rows[rowIndex]?.ruleId)) return [];
-    return [{ memberId: item.member.memberId, before: item.currentCompliance, after: next.currentCompliance, beforePolicies: item.currentCompliances, afterPolicies: next.currentCompliances, beforeHistory: item.historySummaries, afterHistory: next.historySummaries, beforeHistoricalRate: item.rate, afterHistoricalRate: next.rate }];
-  });
-  const token = await sha256Hex(JSON.stringify({ input: { rule: input.rule, removeRuleId: input.removeRuleId, recentDays: input.recentDays }, data }));
+  const impact = policyChangeImpact(data, rules, recentDays);
+  const token = await sha256Hex(JSON.stringify({ input: { rule: input.rule, removeRuleId: input.removeRuleId, recentDays: input.recentDays }, state: await policyStateDigest(data) }));
   return { data, change, rules, recentDays, impact, previewToken: token };
 }
 async function attendancePolicies(request: Request, env: Env, apply?: boolean): Promise<Response> {
@@ -874,7 +905,7 @@ async function attendancePolicies(request: Request, env: Env, apply?: boolean): 
   }
   if (input.recentDays !== undefined) statements.push(db.prepare("UPDATE organization_settings SET attendance_recent_days = ? WHERE installation_id = 'primary'").bind(preview.recentDays));
   statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'attendance_policy.changed', 'member_label', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, preview.change?.labelId ?? input.removeRuleId ?? "settings", JSON.stringify({ rule: preview.change, removeRuleId: input.removeRuleId, recentDays: input.recentDays, impact: preview.impact }), now));
-  await db.batch(statements);
+  await refuseRuleOverlap(db.batch(statements), "Attendance rule periods cannot overlap");
   return response({ applied: true, impact: preview.impact });
 }
 async function members(request: Request, env: Env): Promise<Response> {
@@ -897,7 +928,9 @@ async function members(request: Request, env: Env): Promise<Response> {
   const existing = await db.prepare("SELECT external_id AS memberId, active FROM members WHERE installation_id = 'primary'").all<{ memberId: string; active: number }>();
   const incoming = new Set(importedIds); const deactivated = mode === "replace" ? (existing.results ?? []).filter((member) => member.active && !incoming.has(member.memberId)).length : 0;
   const statements: D1Statement[] = mode === "replace" ? [db.prepare(`UPDATE members SET inactive_periods_json = ${inactivePeriodsUpdateSql("0")}, active = 0 WHERE installation_id = 'primary' AND external_id NOT IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(importedIds))] : [];
-  statements.push(...input.members.map((member) => db.prepare(`INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, active, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, 1, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, inactive_periods_json = ${inactivePeriodsUpdateSql("1")}, active = 1`).bind(crypto.randomUUID(), member.memberId!.trim(), member.firstName!.trim(), member.lastName!.trim(), member.email?.trim().toLowerCase() || null, member.discordUserId && /^\d{10,24}$/.test(member.discordUserId) ? member.discordUserId.trim() : null, now)));
+  // Email and Discord user ID change only to a value the file gives: a missing column, a blank cell or an ignored Discord ID
+  // keeps the stored value (the dashboard preview's rosterImportPreviewRow applies the same rule), so a file without them never unlinks anyone.
+  statements.push(...input.members.map((member) => db.prepare(`INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, active, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?, 1, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = COALESCE(excluded.email, members.email), discord_user_id = COALESCE(excluded.discord_user_id, members.discord_user_id), inactive_periods_json = ${inactivePeriodsUpdateSql("1")}, active = 1`).bind(crypto.randomUUID(), member.memberId!.trim(), member.firstName!.trim(), member.lastName!.trim(), member.email?.trim().toLowerCase() || null, member.discordUserId && /^\d{10,24}$/.test(member.discordUserId) ? member.discordUserId.trim() : null, now)));
   statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, metadata_json, created_at) VALUES (?, 'primary', ?, 'roster.imported', 'member', ?, ?)").bind(crypto.randomUUID(), principal.userId, JSON.stringify({ count: input.members.length, mode, deactivated }), now));
   await db.batch(statements); return response({ imported: input.members.length, deactivated, mode, warnings }, 201);
 }
@@ -911,8 +944,8 @@ async function manageMember(request: Request, env: Env, memberId: string): Promi
     const modules = moduleRosterReferences();
     const references = await db.prepare(`SELECT (SELECT COUNT(*) FROM attendance_events WHERE member_id = ?) + (SELECT COUNT(*) FROM attendance_corrections WHERE member_id = ?)${modules.columns.map(({ table, column }) => ` + (SELECT COUNT(*) FROM ${table} WHERE installation_id='primary' AND ${column} = ?)`).join("")} AS count`).bind(member.id, member.id, ...modules.columns.map(() => member.id)).first<{ count: number }>();
     if (references?.count) throw new HttpError(409, `This member has ${["Attendance", ...modules.labels].join(" or ")} history. Deactivate them instead to preserve the record.`);
-    await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id = ?").bind(member.id), db.prepare("DELETE FROM members WHERE installation_id = 'primary' AND id = ?").bind(member.id)]);
-    await writeAudit(db, principal, "roster.member_deleted", "member", member.id, { memberId: member.memberId }); return response({ deleted: true, memberId: member.id });
+    await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id = ?").bind(member.id), db.prepare("DELETE FROM members WHERE installation_id = 'primary' AND id = ?").bind(member.id), auditStatement(db, principal, "roster.member_deleted", "member", member.id, { memberId: member.memberId })]);
+    return response({ deleted: true, memberId: member.id });
   }
   const input = await parseJson<{ firstName?: string; lastName?: string; email?: string | null; active?: boolean }>(request);
   if (input.active !== undefined && typeof input.active !== "boolean") throw new HttpError(400, "Active must be a boolean");
@@ -920,8 +953,10 @@ async function manageMember(request: Request, env: Env, memberId: string): Promi
   if (input.lastName !== undefined && (!input.lastName.trim() || input.lastName.length > 100)) throw new HttpError(400, "Last name must be 1 to 100 characters");
   if (input.email !== undefined && input.email !== null && !validEmail(input.email.trim())) throw new HttpError(400, "Email must be valid");
   const next = { firstName: input.firstName?.trim() ?? member.firstName, lastName: input.lastName?.trim() ?? member.lastName, email: input.email === undefined ? member.email ?? null : input.email?.trim().toLowerCase() || null, active: input.active === undefined ? member.active : input.active ? 1 : 0 };
-  await db.prepare(`UPDATE members SET first_name = ?, last_name = ?, email = ?, inactive_periods_json = ${inactivePeriodsUpdateSql("COALESCE(?, active)")}, active = COALESCE(?, active) WHERE installation_id = 'primary' AND id = ?`).bind(next.firstName, next.lastName, next.email, input.active === undefined ? null : Number(input.active), input.active === undefined ? null : Number(input.active), input.active === undefined ? null : Number(input.active), member.id).run();
-  await writeAudit(db, principal, "roster.member_updated", "member", member.id, { active: Boolean(next.active) }); return response({ member: { ...member, ...next, active: Boolean(next.active) } });
+  await db.batch([
+    db.prepare(`UPDATE members SET first_name = ?, last_name = ?, email = ?, inactive_periods_json = ${inactivePeriodsUpdateSql("COALESCE(?, active)")}, active = COALESCE(?, active) WHERE installation_id = 'primary' AND id = ?`).bind(next.firstName, next.lastName, next.email, input.active === undefined ? null : Number(input.active), input.active === undefined ? null : Number(input.active), input.active === undefined ? null : Number(input.active), member.id),
+    auditStatement(db, principal, "roster.member_updated", "member", member.id, { active: Boolean(next.active) }),
+  ]); return response({ member: { ...member, ...next, active: Boolean(next.active) } });
 }
 async function bulkMemberStatus(request: Request, env: Env, apply: boolean): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -944,12 +979,14 @@ async function memberHistory(request: Request, env: Env, externalId: string): Pr
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
   const [member, settings] = await Promise.all([
     db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, discord_user_id AS discordUserId, active, inactive_periods_json AS inactivePeriodsJson, created_at AS rosterAddedAt, attendance_required_from AS attendanceRequiredFrom FROM members WHERE installation_id = 'primary' AND external_id = ?").bind(externalId).first<{ id: string; memberId: string; firstName: string; lastName: string; email?: string; discordUserId?: string; active: number; inactivePeriodsJson?: string; rosterAddedAt?: string; attendanceRequiredFrom?: string }>(),
-    db.prepare("SELECT anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes, anomaly_early_threshold_minutes AS anomalyEarlyThresholdMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number }>(),
+    db.prepare("SELECT anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes, anomaly_early_threshold_minutes AS anomalyEarlyThresholdMinutes, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number; timeZone?: string | null }>(),
   ]);
   if (!member) throw new HttpError(404, "Member not found");
-  const rows = await db.prepare("SELECT meeting.id AS meetingId, meeting.title, meeting.starts_at AS startsAt, meeting.ends_at AS endsAt, (SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = ? AND c.meeting_id = meeting.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS correction, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = ? AND c.meeting_id = meeting.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = ? AND e.meeting_id = meeting.id AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = ? AND e.meeting_id = meeting.id AND e.action = 'check_out') AS checkedOutAt FROM meetings meeting WHERE meeting.installation_id = 'primary' AND meeting.deleted_at IS NULL AND meeting.ends_at <= ? ORDER BY meeting.starts_at DESC").bind(member.id, member.id, member.id, member.id, new Date().toISOString()).all<{ meetingId: string; title: string; startsAt: string; endsAt: string; correction?: "present" | "absent" | "excused"; reason?: string; checkedInAt?: string; checkedOutAt?: string }>();
-  const participationStartsOn = member.attendanceRequiredFrom ?? member.rosterAddedAt?.slice(0, 10) ?? "";
-  const history = (rows.results ?? []).filter((row) => row.startsAt.slice(0, 10) >= participationStartsOn).map((row) => {
+  // Meetings saved before times were stored canonically may hold an offset or no milliseconds; julianday compares them by time.
+  const rows = await db.prepare("SELECT meeting.id AS meetingId, meeting.title, meeting.starts_at AS startsAt, meeting.ends_at AS endsAt, (SELECT c.disposition FROM attendance_corrections c WHERE c.member_id = ? AND c.meeting_id = meeting.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS correction, (SELECT c.reason FROM attendance_corrections c WHERE c.member_id = ? AND c.meeting_id = meeting.id ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS reason, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = ? AND e.meeting_id = meeting.id AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.member_id = ? AND e.meeting_id = meeting.id AND e.action = 'check_out') AS checkedOutAt FROM meetings meeting WHERE meeting.installation_id = 'primary' AND meeting.deleted_at IS NULL AND julianday(meeting.ends_at) <= julianday(?) ORDER BY meeting.starts_at DESC").bind(member.id, member.id, member.id, member.id, new Date().toISOString()).all<{ meetingId: string; title: string; startsAt: string; endsAt: string; correction?: "present" | "absent" | "excused"; reason?: string; checkedInAt?: string; checkedOutAt?: string }>();
+  // Organization-local dates on both sides, as the attendance policy compares them.
+  const timeZone = settings?.timeZone || "UTC"; const participationStartsOn = participationStartDate(member, timeZone);
+  const history = (rows.results ?? []).filter((row) => policyLocalDate(row.startsAt, timeZone) >= participationStartsOn).map((row) => {
     const events = [{ action: "check_in" as const, occurredAt: row.checkedInAt }, ...(row.checkedOutAt ? [{ action: "check_out" as const, occurredAt: row.checkedOutAt }] : [])].filter((event) => event.occurredAt);
     const derived = attendanceDisposition(events, row.correction);
     return { ...row, disposition: inactiveAt(member.inactivePeriodsJson, row.startsAt) ? "not_required" : derived === "active" ? "absent" : derived };
@@ -1028,11 +1065,13 @@ function retireKioskStatements(db: D1Database, principal: Principal, kiosk: { id
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', ?, ?, 'kiosk', ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM kiosks WHERE installation_id = 'primary' AND id = ? AND active = 1)").bind(crypto.randomUUID(), principal.userId, action, kiosk.id, JSON.stringify({ name: kiosk.name, ...options.metadata }), new Date().toISOString(), kiosk.id),
   ];
 }
-type PairedKiosk = { id: string; name: string; pairingId: string; pairingBound: boolean; configuredAuthenticationMethod: KioskAuthenticationMethod; kioskKind: KioskKind; memberLookup: KioskMemberLookup; requirePin: boolean; discordCode: boolean; discordCodeBackup: DiscordCodeBackup; discordCodeFailures: number; discordCodeThrottleUntil: string | null; rosterRevision?: number };
+type PairedKiosk = { id: string; name: string; pairingId: string; pairingBound: boolean; configuredAuthenticationMethod: KioskAuthenticationMethod; kioskKind: KioskKind; memberLookup: KioskMemberLookup; requirePin: boolean; discordCode: boolean; discordCodeBackup: DiscordCodeBackup; discordCodeFailures: number; discordCodeThrottleUntil: string | null; rosterRevision?: number;
+  /** What the kiosk's row said before this request: the inputs of its line in the Discord kiosk status message. */
+  lastSeenAt?: string | null; readerOnline?: number | null; releaseVersion?: string | null };
 async function kioskFor(request: Request, env: Env, includeRosterRevision = false): Promise<PairedKiosk> {
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) throw new HttpError(401, "Kiosk authentication required");
-  const kiosk = await requireDatabase(env).prepare(`SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound, configured_authentication_method AS configuredAuthenticationMethod, kind AS kioskKind, member_lookup AS memberLookup, require_pin AS requirePin, discord_code AS discordCode, discord_code_backup AS discordCodeBackup, discord_code_failures AS discordCodeFailures, discord_code_throttle_until AS discordCodeThrottleUntil${includeRosterRevision ? ", (SELECT revision FROM kiosk_roster_revision WHERE installation_id = 'primary') AS rosterRevision" : ""} FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1`).bind(await sha256(authorization.slice(7))).first<Omit<PairedKiosk, "pairingBound" | "kioskKind" | "memberLookup" | "requirePin" | "discordCode" | "discordCodeBackup" | "discordCodeFailures" | "discordCodeThrottleUntil"> & { pairingBound: number; kioskKind?: KioskKind; memberLookup?: KioskMemberLookup; requirePin?: number; discordCode?: number; discordCodeBackup?: string; discordCodeFailures?: number; discordCodeThrottleUntil?: string | null }>();
+  const kiosk = await requireDatabase(env).prepare(`SELECT id, name, pairing_code_id AS pairingId, pairing_bound AS pairingBound, configured_authentication_method AS configuredAuthenticationMethod, kind AS kioskKind, member_lookup AS memberLookup, require_pin AS requirePin, discord_code AS discordCode, discord_code_backup AS discordCodeBackup, discord_code_failures AS discordCodeFailures, discord_code_throttle_until AS discordCodeThrottleUntil, last_seen_at AS lastSeenAt, reader_online AS readerOnline, release_version AS releaseVersion${includeRosterRevision ? ", (SELECT revision FROM kiosk_roster_revision WHERE installation_id = 'primary') AS rosterRevision" : ""} FROM kiosks WHERE installation_id = 'primary' AND token_hash = ? AND active = 1`).bind(await sha256(authorization.slice(7))).first<Omit<PairedKiosk, "pairingBound" | "kioskKind" | "memberLookup" | "requirePin" | "discordCode" | "discordCodeBackup" | "discordCodeFailures" | "discordCodeThrottleUntil"> & { pairingBound: number; kioskKind?: KioskKind; memberLookup?: KioskMemberLookup; requirePin?: number; discordCode?: number; discordCodeBackup?: string; discordCodeFailures?: number; discordCodeThrottleUntil?: string | null }>();
   if (!kiosk) throw new HttpError(401, "Kiosk credential is invalid");
   // Require PIN and Discord codes apply only with the member ID method; the method PATCH keeps them together, and this
   // guards older rows.
@@ -1062,7 +1101,7 @@ function kioskErrorCategory(reported: "cloud_sync" | "reader" | "offline_queue" 
   return !attention.clockConfirmed || attention.clockPendingScans ? "offline_queue" : pendingEvents ? "cloud_sync" : null;
 }
 async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
-  const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; authenticationMethod?: KioskAuthenticationMethod; releaseVersion?: string; updatePolicyVersion?: number; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string | null; pendingEvents?: number; lastSyncAt?: string | null; errorCategory?: "cloud_sync" | "reader" | "offline_queue" | null; attention?: unknown }>(request);
+  const kiosk = await kioskFor(request, env); const input = await parseJson<{ readerOnline?: boolean; authenticationMethod?: KioskAuthenticationMethod; releaseVersion?: string; updatePolicyVersion?: number; uptimeSeconds?: number; networkType?: "wifi" | "ethernet" | "offline"; networkSignal?: number | null; lastWifiScanAt?: string | null; pendingEvents?: number; lastSyncAt?: string | null; errorCategory?: "cloud_sync" | "reader" | "offline_queue" | null; attention?: unknown; storage?: unknown }>(request);
   const attention = kioskAttention(input.attention);
   if (input.updatePolicyVersion !== undefined && ![1, 2].includes(input.updatePolicyVersion)) throw new HttpError(400, "Unsupported kiosk update policy");
   const pendingEvents = input.pendingEvents ?? 0;
@@ -1071,7 +1110,7 @@ async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContex
   const db = requireDatabase(env); const reportedRelease = input.releaseVersion.trim();
   const errorCategory = kioskErrorCategory(input.errorCategory, attention, pendingEvents);
   await db.prepare("UPDATE kiosks SET update_policy_version = ? WHERE installation_id = 'primary' AND id = ?").bind(input.updatePolicyVersion ?? 1, kiosk.id).run();
-  await db.prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, authentication_method = COALESCE(?, authentication_method), release_version = ?, uptime_seconds = ?, network_type = ?, network_signal = ?, last_wifi_scan_at = COALESCE(?, last_wifi_scan_at), pending_events = ?, last_sync_at = ?, error_category = ?, scans_need_review = ?, clock_confirmed = ?, clock_pending_scans = ?, review_sync_failing = ?, weak_matches = ?, reader_templates = ?, linked_templates = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, input.authenticationMethod ?? null, reportedRelease, input.uptimeSeconds ?? null, input.networkType ?? null, input.networkSignal ?? null, input.lastWifiScanAt || null, pendingEvents, input.lastSyncAt || null, errorCategory, attention?.scansNeedReview ?? null, attention ? Number(attention.clockConfirmed) : null, attention?.clockPendingScans ?? null, attention ? Number(attention.reviewSyncFailing) : null, attention?.weakMatches ?? null, attention?.readerTemplates ?? null, attention?.linkedTemplates ?? null, kiosk.id).run();
+  await db.prepare("UPDATE kiosks SET last_seen_at = ?, reader_online = ?, authentication_method = COALESCE(?, authentication_method), release_version = ?, uptime_seconds = ?, network_type = ?, network_signal = ?, last_wifi_scan_at = COALESCE(?, last_wifi_scan_at), pending_events = ?, last_sync_at = ?, error_category = ?, scans_need_review = ?, clock_confirmed = ?, clock_pending_scans = ?, review_sync_failing = ?, weak_matches = ?, reader_templates = ?, linked_templates = ?, storage_diagnostics = ? WHERE installation_id = 'primary' AND id = ?").bind(now, input.readerOnline ? 1 : 0, input.authenticationMethod ?? null, reportedRelease, input.uptimeSeconds ?? null, input.networkType ?? null, input.networkSignal ?? null, input.lastWifiScanAt || null, pendingEvents, input.lastSyncAt || null, errorCategory, attention?.scansNeedReview ?? null, attention ? Number(attention.clockConfirmed) : null, attention?.clockPendingScans ?? null, attention ? Number(attention.reviewSyncFailing) : null, attention?.weakMatches ?? null, attention?.readerTemplates ?? null, attention?.linkedTemplates ?? null, storageDiagnosticsColumn(input.storage), kiosk.id).run();
   // A kiosk holding unreviewed rejected scans learns how many are still open in the cloud, so a dashboard review
   // reaches it on its next heartbeat instead of its hourly refresh. Kiosks with nothing to review cost no read.
   const openScanReviews = attention?.scansNeedReview ? (await db.prepare("SELECT COUNT(*) AS count FROM kiosk_scan_reviews WHERE installation_id = 'primary' AND review_status = 'open' AND kiosk_id = ?").bind(kiosk.id).first<{ count: number }>())?.count ?? 0 : undefined;
@@ -1084,15 +1123,18 @@ async function kioskHeartbeat(request: Request, env: Env, context?: WorkerContex
     else if (elapsed >= 5 * 60_000) resolution = normalizedBefore === normalizedReported ? "unchanged" : "mismatch";
     if (resolution) await db.prepare("UPDATE kiosk_commands SET resolution_status = ?, resolved_release_version = ?, resolved_at = ? WHERE installation_id = 'primary' AND kiosk_id = ? AND id = ? AND resolution_status IS NULL").bind(resolution, reportedRelease, now, kiosk.id, update.id).run();
   }
-  const statusUpdate = syncDiscordKioskStatus(env).catch(() => undefined);
-  if (context) context.waitUntil(statusUpdate); else await statusUpdate;
+  // The Discord kiosk status message is the channel job's work, not the heartbeat's: a heartbeat reads and writes nothing
+  // for it. When this heartbeat changes what the message shows for this kiosk (it came back online, or its reader or
+  // release changed), the job is poked so the message follows within seconds; otherwise the job's own five-minute run
+  // keeps it current, which is also what notices a kiosk going silent.
+  if (kioskStatusLineChanged(kiosk, { readerOnline: input.readerOnline, releaseVersion: reportedRelease }, Date.parse(now))) pokeScheduler(env, context, schedulerJobsFor.channel);
   return response({ ok: true, kioskId: kiosk.id, receivedAt: now, ...(openScanReviews === undefined ? {} : { openScanReviews }) });
 }
 async function kioskStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]);
   const db = requireDatabase(env);
-  const result = await db.prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, authentication_method AS authenticationMethod, configured_authentication_method AS configuredAuthenticationMethod, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, scans_need_review AS scansNeedReview, clock_confirmed AS clockConfirmed, clock_pending_scans AS clockPendingScans, review_sync_failing AS reviewSyncFailing, weak_matches AS weakMatches, reader_templates AS readerTemplates, linked_templates AS linkedTemplates, kind, member_lookup AS memberLookup, require_pin AS requirePin, discord_code AS discordCode, discord_code_backup AS discordCodeBackup, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all<Record<string, unknown>>();
-  return response({ kiosks: (result.results ?? []).map((kiosk) => ({ ...kiosk, requirePin: Number(kiosk.requirePin) === 1, discordCode: Number(kiosk.discordCode) === 1 && kiosk.configuredAuthenticationMethod === "member_id", discordCodeBackup: normalizeDiscordCodeBackup(kiosk.discordCodeBackup) })) });
+  const result = await db.prepare("SELECT id, name, active, last_seen_at AS lastSeenAt, reader_online AS readerOnline, authentication_method AS authenticationMethod, configured_authentication_method AS configuredAuthenticationMethod, release_version AS releaseVersion, update_policy_version AS updatePolicyVersion, uptime_seconds AS uptimeSeconds, network_type AS networkType, network_signal AS networkSignal, last_wifi_scan_at AS lastWifiScanAt, pending_events AS pendingEvents, last_sync_at AS lastSyncAt, error_category AS errorCategory, scans_need_review AS scansNeedReview, clock_confirmed AS clockConfirmed, clock_pending_scans AS clockPendingScans, review_sync_failing AS reviewSyncFailing, weak_matches AS weakMatches, reader_templates AS readerTemplates, linked_templates AS linkedTemplates, storage_diagnostics AS storageDiagnostics, kind, member_lookup AS memberLookup, require_pin AS requirePin, discord_code AS discordCode, discord_code_backup AS discordCodeBackup, created_at AS pairedAt FROM kiosks WHERE installation_id = 'primary' ORDER BY created_at DESC").all<Record<string, unknown>>();
+  return response({ kiosks: (result.results ?? []).map((kiosk) => ({ ...kiosk, storageDiagnostics: storedStorageDiagnostics(kiosk.storageDiagnostics), requirePin: Number(kiosk.requirePin) === 1, discordCode: Number(kiosk.discordCode) === 1 && kiosk.configuredAuthenticationMethod === "member_id", discordCodeBackup: normalizeDiscordCodeBackup(kiosk.discordCodeBackup) })) });
 }
 async function kioskConfiguration(request: Request, env: Env): Promise<Response> {
   const kiosk = await kioskFor(request, env); const db = requireDatabase(env); const [settings, pinLockout] = await Promise.all([db.prepare("SELECT organization_name AS organizationName, subtitle, logo_data AS logoData, primary_color AS primaryColor, secondary_color AS secondaryColor, logo_backdrop AS logoBackdrop FROM organization_settings WHERE installation_id = 'primary'").first(), readPinLockout(db)]);
@@ -1262,6 +1304,9 @@ async function completeKioskCommand(request: Request, env: Env, commandId: strin
 function validTimestamp(value: string | undefined): value is string { return Boolean(value && Number.isFinite(Date.parse(value))); }
 function validateMeetingInput(input: MeetingInput): asserts input is MeetingInput & { title: string; startsAt: string; endsAt: string } {
   if (!input.title?.trim() || input.title.length > 120 || (input.notes?.length ?? 0) > 2_000 || !validTimestamp(input.startsAt) || !validTimestamp(input.endsAt ?? undefined) || Date.parse(input.endsAt!) <= Date.parse(input.startsAt!)) throw new HttpError(400, "Meeting needs a title, valid start and end times, an end after its start, and optional notes under 2,000 characters");
+  // Any time Date.parse accepts is stored in one canonical form (UTC with milliseconds, as toISOString writes it), so SQL
+  // text comparisons and ORDER BY on starts_at and ends_at follow time. An offset or a missing ".000" would not.
+  input.startsAt = new Date(input.startsAt!).toISOString(); input.endsAt = new Date(input.endsAt!).toISOString();
 }
 type DateParts = { year: number; month: number; day: number; hour: number; minute: number; second: number; millisecond: number };
 function localParts(date: Date, timeZone: string): DateParts {
@@ -1294,8 +1339,9 @@ function meetingOccurrences(input: MeetingInput & { startsAt: string; endsAt: st
   if (start.getTime() <= limit) throw new HttpError(400, "Recurring series is too large; shorten the date range to 500 meetings or fewer");
   return occurrences;
 }
-// Stored timestamps are ISO 8601 text, possibly with an offset or without milliseconds, so the SQL bound compares text with a
-// day of margin on each side and the exact window comparison stays in overlappingMeetingWindows.
+// Meeting times are saved canonically (validateMeetingInput), but meetings saved earlier may hold an offset or no milliseconds,
+// so the SQL bound compares text with a day of margin on each side (keeping the starts_at index) and the exact window
+// comparison stays in overlappingMeetingWindows.
 const meetingOverlapMarginMs = 24 * 60 * 60_000;
 async function assertNoMeetingOverlap(db: D1Database, proposed: MeetingWindowLike[], allowances: AttendanceAllowances, excludedIds: string[] = []): Promise<void> {
   // Only existing meetings whose attendance window (early arrival through late scans) can reach the proposed range are read.
@@ -1312,6 +1358,8 @@ async function assertNoMeetingOverlap(db: D1Database, proposed: MeetingWindowLik
   if (!conflict) return;
   throw new HttpError(409, `Meeting attendance windows cannot overlap. ${meetingWindowLabel(conflict[0])} conflicts with ${meetingWindowLabel(conflict[1])}.`);
 }
+/** A write's overlap guard aborted it, yet the route's check found no conflict again: the meeting it met was moved or deleted since. */
+const meetingOverlapRaced = () => new HttpError(409, "Meeting attendance windows cannot overlap. Another change to the meetings was saved at the same time; reload and try again.");
 // `catalog`, when given, is every label already read (CSV import reads them once for all rows) instead of a read per call.
 async function resolveAudience(db: D1Database, input: MeetingInput, currentIds: string[] = [], catalog?: { id: string; active: number }[]): Promise<{ mode: "all" | "labels"; labelIds: string[] }> {
   const mode = input.audienceMode ?? (input.audienceLabelIds?.length ? "labels" : "all");
@@ -1343,9 +1391,13 @@ async function meetings(request: Request, env: Env): Promise<Response> {
   const statements = occurrences.map((occurrence, index) => db.prepare("INSERT INTO meetings (id, installation_id, title, starts_at, ends_at, required, notes, created_by, created_at, is_test, series_id, recurrence_frequency, recurrence_until, recurrence_sequence, weight_category_id, weight_category_name, attendance_weight, audience_mode) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)").bind(ids[index], input.title.trim(), occurrence.startsAt, occurrence.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, principal.userId, now, seriesId, input.recurrence?.frequency ?? null, input.recurrence?.until ?? null, occurrence.sequence, assignment?.id ?? null, assignment?.name ?? null, assignment?.weight ?? 1, audience.mode));
   for (const id of ids) for (const labelId of audience.labelIds) statements.push(db.prepare("INSERT INTO meeting_audience_labels (installation_id, meeting_id, label_id) VALUES ('primary', ?, ?)").bind(id, labelId));
   statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.created', 'meeting', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, ids[0], JSON.stringify({ seriesId, occurrences: occurrences.length, frequency: input.recurrence?.frequency ?? null, weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1, audience }), now));
-  await db.batch(statements);
+  // Calendar work is queued in the same batch as the meetings, for the scheduled calendar jobs to deliver.
+  const calendar = calendarLifecycleQueue(db, "sync", calendarTargets.ids(ids), principal.userId, now);
+  // The overlap check is repeated in the batch, so a meeting another request saved since the check refuses this one.
+  const proposed = occurrences.map((occurrence) => ({ ...occurrence, title: input.title })); const guard = meetingOverlapGuard(db, proposed, attendanceAllowances(settings));
+  const batch = [...guard ? [guard] : [], ...statements, ...calendar.statements]; const calendarOffset = batch.length - calendar.statements.length;
+  const calendarDelivery = calendar.summary(await guardedMeetingBatch(() => db.batch(batch), () => assertNoMeetingOverlap(db, proposed, attendanceAllowances(settings)), meetingOverlapRaced), calendarOffset);
   const created = occurrences.map((occurrence, index) => ({ id: ids[index], title: input.title!.trim(), ...occurrence, required: input.required !== false, notes: input.notes?.trim() || null, seriesId, recurrenceFrequency: input.recurrence?.frequency ?? null, recurrenceUntil: input.recurrence?.until ?? null, recurrenceSequence: occurrence.sequence, weightCategoryId: assignment?.id ?? null, weightCategoryName: assignment?.name ?? null, attendanceWeight: assignment?.weight ?? 1, audienceMode: audience.mode, audienceLabelIds: audience.labelIds }));
-  const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "sync", ids);
   return response({ meeting: created[0], meetings: created, seriesId, calendarSync: calendarDelivery.google_calendar, calendarDelivery }, 201);
 }
 async function meetingDetail(request: Request, env: Env, meetingId: string): Promise<Response> {
@@ -1368,11 +1420,8 @@ async function meetingImpactPreview(db: D1Database, meetingId: string, required:
   if (!original) throw new HttpError(404, "Meeting not found");
   const changed = Boolean(original.required) !== required || original.audienceMode !== audience.mode || [...original.audienceLabelIds].sort().join(",") !== [...audience.labelIds].sort().join(",");
   const completed = Date.parse(original.attendanceClosesAt) <= Date.now();
-  const before = changed && completed ? evaluateAttendance(data) : [];
-  const afterMeeting = { ...original, required, audienceMode: audience.mode, audienceLabelIds: audience.labelIds };
-  const after = changed && completed ? evaluateAttendance({ ...data, meetings: data.meetings.map((meeting) => meeting.id === meetingId ? afterMeeting : meeting) }) : [];
-  const impact = before.map((item, index) => ({ memberId: item.member.memberId, beforeRate: item.rate, afterRate: after[index].rate, affectedCompletedMeetings: item.rows.filter((row, rowIndex) => row.eligibility !== after[index].rows[rowIndex]?.eligibility).length })).filter((item) => item.beforeRate !== item.afterRate || item.affectedCompletedMeetings > 0);
-  return { changed, completed, impact, previewToken: await sha256Hex(JSON.stringify({ state: data, meetingId, required, audience })) };
+  const impact = changed && completed ? meetingChangeImpact(data, { ...original, required, audienceMode: audience.mode, audienceLabelIds: audience.labelIds }) : [];
+  return { changed, completed, impact, previewToken: await sha256Hex(JSON.stringify({ state: await policyStateDigest(data), meetingId, required, audience })) };
 }
 async function meetingImpact(request: Request, env: Env, meetingId: string): Promise<Response> {
   await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
@@ -1391,7 +1440,10 @@ function meetingUpdateStatements(db: D1Database, actorUserId: string, meetingId:
   const update = assignment === undefined
     ? db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, audience_mode = ?, is_test = 0 WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, audience.mode, meetingId)
     : db.prepare("UPDATE meetings SET title = ?, starts_at = ?, ends_at = ?, required = ?, notes = ?, audience_mode = ?, is_test = 0, weight_category_id = ?, weight_category_name = ?, attendance_weight = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.title.trim(), input.startsAt, input.endsAt, input.required === false ? 0 : 1, input.notes?.trim() || null, audience.mode, assignment?.id ?? null, assignment?.name ?? null, assignment?.weight ?? 1, meetingId);
-  return [update, db.prepare("DELETE FROM meeting_audience_labels WHERE installation_id = 'primary' AND meeting_id = ?").bind(meetingId), ...audience.labelIds.map((labelId) => db.prepare("INSERT INTO meeting_audience_labels (installation_id, meeting_id, label_id) VALUES ('primary', ?, ?)").bind(meetingId, labelId)), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.updated', 'meeting', ?, ?, ?)").bind(crypto.randomUUID(), actorUserId, meetingId, JSON.stringify({ audience, ...audit, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1 }) }), new Date().toISOString())];
+  // The audience and audit writes apply only while the meeting is still live in this batch: a delete that lands between the
+  // caller's read and this batch leaves the deleted meeting's audience (which a restore brings back) and the audit log alone.
+  const live = "EXISTS (SELECT 1 FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL)";
+  return [update, db.prepare(`DELETE FROM meeting_audience_labels WHERE installation_id = 'primary' AND meeting_id = ? AND ${live}`).bind(meetingId, meetingId), ...audience.labelIds.map((labelId) => db.prepare(`INSERT INTO meeting_audience_labels (installation_id, meeting_id, label_id) SELECT 'primary', ?, ? WHERE ${live}`).bind(meetingId, labelId, meetingId)), db.prepare(`INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) SELECT ?, 'primary', ?, 'meeting.updated', 'meeting', ?, ?, ? WHERE ${live}`).bind(crypto.randomUUID(), actorUserId, meetingId, JSON.stringify({ audience, ...audit, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1 }) }), new Date().toISOString(), meetingId)];
 }
 async function updateMeeting(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env);
@@ -1406,14 +1458,18 @@ async function updateMeeting(request: Request, env: Env, meetingId: string): Pro
   // Only a meeting whose times change is checked for overlap. Meetings saved before the early arrival allowance existed may
   // already overlap a neighbour, and editing their title, notes, requirement or audience must still save.
   const rescheduled = Date.parse(current.startsAt) !== Date.parse(input.startsAt) || Date.parse(current.endsAt) !== Date.parse(input.endsAt);
+  const moved = [{ id: meetingId, title: input.title, startsAt: input.startsAt, endsAt: input.endsAt }]; let allowances: AttendanceAllowances | undefined;
   if (rescheduled) {
-    const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<Partial<AttendanceAllowances>>();
-    await assertNoMeetingOverlap(db, [{ id: meetingId, title: input.title, startsAt: input.startsAt, endsAt: input.endsAt }], attendanceAllowances(settings), [meetingId]);
+    allowances = attendanceAllowances(await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<Partial<AttendanceAllowances>>());
+    await assertNoMeetingOverlap(db, moved, allowances, [meetingId]);
   }
   const assignment = input.weightCategoryId === undefined ? undefined : await resolveMeetingWeightAssignment(db, input.weightCategoryId, input.startsAt, input.endsAt);
-  await db.batch(meetingUpdateStatements(db, principal.userId, meetingId, input, audience, assignment, { historicalImpact: impact.completed && impact.changed ? impact.impact : [] }));
-  const discordNotices = historicalChange || rescheduled ? await retractDiscordAttendanceNotices(env, principal, [meetingId]) : [];
-  const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "sync", [meetingId]);
+  // The calendar update is queued in the same batch as the edit, so it cannot be lost to whatever the request does next.
+  // A reschedule repeats its overlap check in the batch, so a meeting another request moved there since refuses this one.
+  const guard = allowances && meetingOverlapGuard(db, moved, allowances, [meetingId]);
+  const statements = [...guard ? [guard] : [], ...meetingUpdateStatements(db, principal.userId, meetingId, input, audience, assignment, { historicalImpact: impact.completed && impact.changed ? impact.impact : [] })]; const calendar = calendarLifecycleQueue(db, "sync", calendarTargets.ids([meetingId]), principal.userId);
+  const calendarDelivery = calendar.summary(await guardedMeetingBatch(() => db.batch([...statements, ...calendar.statements]), () => assertNoMeetingOverlap(db, moved, allowances!, [meetingId]), meetingOverlapRaced), statements.length);
+  const discordNotices = historicalChange || rescheduled ? await retractDiscordAttendanceNotices(env, principal, [meetingId], 1) : [];
   return response({ discordNotices, meeting: { id: meetingId, title: input.title.trim(), startsAt: input.startsAt, endsAt: input.endsAt, required: input.required !== false, notes: input.notes?.trim() || null, audienceMode: audience.mode, audienceLabelIds: audience.labelIds, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, weightCategoryName: assignment?.name ?? null, attendanceWeight: assignment?.weight ?? 1 }) }, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 // CSV import (meeting-import.ts) with the editor's validation, audience, weight and update helpers.
@@ -1440,9 +1496,10 @@ async function updateMeetingSeries(request: Request, env: Env, seriesId: string)
   const duration = Date.parse(input.endsAt) - Date.parse(input.startsAt); const shift = Date.parse(input.startsAt) - Date.parse(anchor.startsAt); const proposed = (future.results ?? []).map((meeting) => { const start = new Date(Date.parse(meeting.startsAt) + shift); return { id: meeting.id, title: input.title, startsAt: start.toISOString(), endsAt: new Date(start.getTime() + duration).toISOString() }; });
   // Only occurrences whose times change are checked for overlap, as in updateMeeting; the others stay where they already were.
   const rescheduled = proposed.filter((meeting, index) => { const current = future.results![index]; return Date.parse(current.startsAt) !== Date.parse(meeting.startsAt) || Date.parse(current.endsAt) !== Date.parse(meeting.endsAt); });
+  let allowances: AttendanceAllowances | undefined;
   if (rescheduled.length) {
-    const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<Partial<AttendanceAllowances>>();
-    await assertNoMeetingOverlap(db, rescheduled, attendanceAllowances(settings), rescheduled.map((meeting) => meeting.id));
+    allowances = attendanceAllowances(await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<Partial<AttendanceAllowances>>());
+    await assertNoMeetingOverlap(db, rescheduled, allowances, rescheduled.map((meeting) => meeting.id));
   }
   const assignment = input.weightCategoryId === undefined ? undefined : await resolveMeetingWeightAssignment(db, input.weightCategoryId, input.startsAt, input.endsAt);
   const statements = proposed.map((meeting) => assignment === undefined
@@ -1452,8 +1509,13 @@ async function updateMeetingSeries(request: Request, env: Env, seriesId: string)
   const updatedCount = statements.length;
   for (const meeting of proposed) { statements.push(db.prepare("DELETE FROM meeting_audience_labels WHERE installation_id = 'primary' AND meeting_id = ?").bind(meeting.id)); for (const labelId of audience.labelIds) statements.push(db.prepare("INSERT INTO meeting_audience_labels (installation_id, meeting_id, label_id) VALUES ('primary', ?, ?)").bind(meeting.id, labelId)); }
   statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meeting.series_updated', 'meeting_series', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, seriesId, JSON.stringify({ fromMeetingId: input.meetingId, updated: updatedCount, audience, ...(assignment === undefined ? {} : { weightCategoryId: assignment?.id ?? null, attendanceWeight: assignment?.weight ?? 1 }) }), new Date().toISOString()));
-  await db.batch(statements); const discordNotices = await retractDiscordAttendanceNotices(env, principal, proposed.map((meeting) => meeting.id));
-  const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "sync", proposed.map((meeting) => meeting.id)); return response({ seriesId, updated: updatedCount, discordNotices, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
+  const calendar = calendarLifecycleQueue(db, "sync", calendarTargets.ids(proposed.map((meeting) => meeting.id)), principal.userId);
+  // Rescheduled occurrences repeat their overlap check in the batch, as a single meeting's reschedule does.
+  const guard = allowances && meetingOverlapGuard(db, rescheduled, allowances, rescheduled.map((meeting) => meeting.id));
+  const batch = [...guard ? [guard] : [], ...statements, ...calendar.statements]; const calendarOffset = batch.length - calendar.statements.length;
+  const calendarDelivery = calendar.summary(await guardedMeetingBatch(() => db.batch(batch), () => assertNoMeetingOverlap(db, rescheduled, allowances!, rescheduled.map((meeting) => meeting.id)), meetingOverlapRaced), calendarOffset);
+  const discordNotices = await retractDiscordAttendanceNotices(env, principal, proposed.map((meeting) => meeting.id), 1);
+  return response({ seriesId, updated: updatedCount, discordNotices, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function deleteMeetings(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: "occurrence" | "future" }>(request);
@@ -1461,17 +1523,20 @@ async function deleteMeetings(request: Request, env: Env, meetingId: string): Pr
   if (!meeting) throw new HttpError(404, "Meeting not found");
   const now = new Date().toISOString();
   if (input.scope === "future" && meeting.seriesId) {
-    const updated = await db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL RETURNING id").bind(now, meeting.seriesId, meeting.startsAt).all<{ id: string }>();
+    // The occurrences this statement deletes are the ones carrying this deletion time, which is how the calendar statements find them.
+    const calendar = calendarLifecycleQueue(db, "delete", calendarTargets.seriesDeletedAt(meeting.seriesId, now), principal.userId, now);
+    const results = await db.batch([db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND series_id = ? AND starts_at >= ? AND deleted_at IS NULL RETURNING id").bind(now, meeting.seriesId, meeting.startsAt), ...calendar.statements]);
+    const updated = results[0] as D1Result<{ id: string }>; const calendarDelivery = calendar.summary(results, 1);
     const count = updated.results?.length ?? 0; if (count < 1) throw new HttpError(404, "No future series occurrences were found");
     await writeAudit(db, principal, "meeting.series_deleted", "meeting_series", meeting.seriesId, { fromMeetingId: meeting.id, deleted: count });
     const meetingIds = (updated.results ?? []).map((item) => item.id);
-    const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "delete", meetingIds);
     return response({ deleted: count, scope: "future", deletion: { meetingIds, deletedAt: now }, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
   }
-  const updated = await db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(now, meeting.id).run();
-  if ((updated.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting not found");
+  const calendar = calendarLifecycleQueue(db, "delete", calendarTargets.deletedAt([meeting.id], now), principal.userId, now);
+  const results = await db.batch([db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(now, meeting.id), ...calendar.statements]);
+  if ((results[0]?.meta?.changes ?? 1) < 1) throw new HttpError(404, "Meeting not found");
+  const calendarDelivery = calendar.summary(results, 1);
   await writeAudit(db, principal, "meeting.deleted", "meeting", meeting.id);
-  const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "delete", [meeting.id]);
   return response({ deleted: 1, scope: "occurrence", deletion: { meetingIds: [meeting.id], deletedAt: now }, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function bulkDeleteMeetings(request: Request, env: Env): Promise<Response> {
@@ -1479,8 +1544,11 @@ async function bulkDeleteMeetings(request: Request, env: Env): Promise<Response>
   const ids = [...new Set((input.meetingIds ?? []).filter((id): id is string => typeof id === "string" && id.length > 0))];
   if (!ids.length || ids.length > 100) throw new HttpError(400, "Select between 1 and 100 meetings");
   if (input.confirmation !== "DELETE SELECTED MEETINGS") throw new HttpError(400, "Type DELETE SELECTED MEETINGS exactly to continue");
-  const now = new Date().toISOString(); const statements = ids.map((id) => db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(now, id)); const results = await db.batch(statements); const deletedIds = ids.filter((_id, index) => (results[index]?.meta?.changes ?? 0) > 0); const deleted = deletedIds.length;
-  await writeAudit(db, principal, "meetings.bulk_deleted", "meeting", null, { selected: ids.length, deleted }); const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "delete", deletedIds); return response({ deleted, deletion: deleted ? { meetingIds: deletedIds, deletedAt: now } : undefined, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
+  // One set-based delete with its calendar work, whatever the number of meetings selected.
+  const now = new Date().toISOString(); const calendar = calendarLifecycleQueue(db, "delete", calendarTargets.deletedAt(ids, now), principal.userId, now);
+  const results = await db.batch([db.prepare("UPDATE meetings SET deleted_at = ? WHERE installation_id = 'primary' AND deleted_at IS NULL AND id IN (SELECT value FROM json_each(?)) RETURNING id").bind(now, JSON.stringify(ids)), ...calendar.statements]);
+  const changed = new Set(((results[0] as D1Result<{ id: string }>).results ?? []).map((row) => row.id)); const deletedIds = ids.filter((id) => changed.has(id)); const deleted = deletedIds.length; const calendarDelivery = calendar.summary(results, 1);
+  await writeAudit(db, principal, "meetings.bulk_deleted", "meeting", null, { selected: ids.length, deleted }); return response({ deleted, deletion: deleted ? { meetingIds: deletedIds, deletedAt: now } : undefined, calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 async function rosterHistory(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]); const result = await requireDatabase(env).prepare("SELECT created_at AS createdAt, metadata_json AS metadata FROM audit_log WHERE installation_id = 'primary' AND action = 'roster.imported' ORDER BY created_at DESC LIMIT 20").all<{ createdAt: string; metadata: string }>();
@@ -1489,9 +1557,10 @@ async function rosterHistory(request: Request, env: Env): Promise<Response> {
 async function restoreMeetings(request: Request, env: Env, meetingId: string): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ deletion?: unknown; scope?: "occurrence" | "future" | "selection" }>(request);
   const deletion = meetingDeletion(input.deletion, meetingId);
-  await restoreMeetingDeletion(db, deletion);
+  // The restore and its calendar work are one batch: mappings are reactivated and upserts queued, or nothing is restored.
+  const calendar = calendarLifecycleQueue(db, "restore", calendarTargets.ids(deletion.meetingIds), principal.userId);
+  const calendarDelivery = calendar.summary(await restoreMeetingDeletion(db, deletion, calendar.statements), 0);
   await writeAudit(db, principal, input.scope === "future" ? "meeting.series_restored" : "meeting.restored", "meeting", meetingId, { restored: deletion.meetingIds.length, meetingIds: deletion.meetingIds });
-  const calendarDelivery = await deliverCalendarLifecycle(db, env, principal, "restore", deletion.meetingIds);
   return response({ restored: deletion.meetingIds.length, scope: input.scope ?? "occurrence", calendarSync: calendarDelivery.google_calendar, calendarDelivery });
 }
 // Kiosk scans keep working on a schema from before migration 0099 (an upgrade that has not applied it yet): the early
@@ -1507,8 +1576,8 @@ async function scanAllowances(db: D1Database): Promise<AttendanceAllowances & { 
     return settings(await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<Row>());
   }
 }
-// discordCodeHash: the scan named its member with a Discord code, which is used up only by the batch that records the scan.
-type KioskScanOrigin = { kioskId: string; refuseWrongMatches: boolean; matchScore?: unknown; discordCodeHash?: string };
+// discordCode: the scan named its member with a Discord code, which is used up only by the batch that records the scan.
+type KioskScanOrigin = { kioskId: string; refuseWrongMatches: boolean; matchScore?: unknown; discordCode?: Omit<DiscordCodeLookup, "memberId"> };
 async function recordAttendance(db: D1Database, input: { eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction }, source: "kiosk" | "manual", actorId?: string, origin?: KioskScanOrigin): Promise<Response> {
   if (!input.eventId?.trim() || input.eventId.length > 100 || !input.memberId || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, memberId, and a valid occurredAt timestamp are required", undefined, "invalid_scan");
   const existing = await db.prepare("SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?").bind(input.eventId.trim()).first<{ action: AttendanceAction }>();
@@ -1530,8 +1599,8 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
   const windowRefusal = () => candidates ? scanWindowRefusal(candidates, input.occurredAt!, settings.timeZone, allowances.lateScanMinutes, allowances.earlyScanMinutes) : undefined;
   if (!member) throw new HttpError(404, "This identity is not linked to an active roster member", undefined, "roster_inactive");
   if (!meeting) throw new HttpError(409, "No meeting is accepting attendance scans at this time", undefined, "no_eligible_meeting", windowRefusal());
-  const participationStartsOn = member.attendanceRequiredFrom ?? member.rosterAddedAt?.slice(0, 10) ?? "";
-  if (participationStartsOn && meeting.startsAt.slice(0, 10) < participationStartsOn) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${participationStartsOn}`, undefined, "participation_not_started", notStartedYetRefusal(participationStartsOn));
+  const participationStartsOn = participationStartDate(member, settings.timeZone);
+  if (participationStartsOn && policyLocalDate(meeting.startsAt, settings.timeZone) < participationStartsOn) throw new HttpError(409, `Attendance for ${member.firstName} begins on ${participationStartsOn}`, undefined, "participation_not_started", notStartedYetRefusal(participationStartsOn));
   const window = scanWindowState(meeting, input.occurredAt, allowances.lateScanMinutes, allowances.earlyScanMinutes);
   if (!window.accepted) throw new HttpError(409, input.meetingId ? window.reason : "No meeting is accepting attendance scans at this time", undefined, input.meetingId ? "scan_window_closed" : "no_eligible_meeting", windowRefusal());
   const occurredAt = new Date(input.occurredAt).toISOString();
@@ -1553,7 +1622,7 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
   const id = crypto.randomUUID();
   // A Discord code scan is recorded only while its code is still good, and uses the code up in the same batch: every
   // refusal above, and a failure here, leaves the code for another try. If another scan used it first, this one is refused.
-  const code = origin?.discordCodeHash ? discordCodeAcceptance(db, { kioskId: origin.kioskId, codeHash: origin.discordCodeHash, memberId: member.id, eventId: input.eventId.trim() }) : undefined;
+  const code = origin?.discordCode ? discordCodeAcceptance(db, { ...origin.discordCode, kioskId: origin.kioskId, memberId: member.id, eventId: input.eventId.trim() }) : undefined;
   const insert = db.prepare(`INSERT OR IGNORE INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by, action) ${code ? `SELECT ?, 'primary', ?, ?, ?, ?, ?, ?, ? WHERE ${code.live}` : "VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)"}`).bind(id, member.id, meeting.id, source, input.occurredAt, input.eventId.trim(), actorId ?? null, transition.action, ...(code?.liveValues ?? []));
   // Kiosk scans also remember their kiosk, in the same round trip, so a scan on another kiosk can be checked against them.
   // A schema before 0088 lacks the table; the scan is then recorded alone, as before. (Discord codes need a later schema.)
@@ -1569,7 +1638,7 @@ async function recordAttendance(db: D1Database, input: { eventId?: string; membe
 async function kioskAttendance(request: Request, env: Env): Promise<Response> {
   const kiosk = await kioskFor(request, env); const input = await parseJson<{ eventId?: string; memberId?: string; meetingId?: string; occurredAt?: string; desiredAction?: AttendanceAction; pairingId?: string; matchScore?: unknown; rescanSupported?: unknown; pin?: unknown; pinCheck?: unknown; discordCode?: unknown }>(request);
   if ((kiosk.pairingBound || input.pairingId !== undefined) && input.pairingId !== kiosk.pairingId) throw new HttpError(409, "This queued scan belongs to a different kiosk pairing and was not attached to the current kiosk", undefined, "pairing_mismatch");
-  const db = requireDatabase(env); let discordCodeHash: string | undefined;
+  const db = requireDatabase(env); let discordCode: Omit<DiscordCodeLookup, "memberId"> | undefined;
   // A kiosk with Require PIN checks the member's PIN before the scan is recorded; other kiosks ignore pin and pinCheck.
   // A malformed scan skips the check and fails below with its usual reason.
   // A scan with discordCode names no member: the code, from /code in Discord, does. It is looked up here, online, whatever
@@ -1581,14 +1650,14 @@ async function kioskAttendance(request: Request, env: Env): Promise<Response> {
     if (!input.eventId?.trim() || input.eventId.length > 100 || !validTimestamp(input.occurredAt)) throw new HttpError(400, "eventId, a Discord code, and a valid occurredAt timestamp are required", undefined, "invalid_scan");
     const found = await findDiscordKioskCode(db, kiosk, { discordCode: input.discordCode, eventId: input.eventId.trim() });
     if ("duplicate" in found) return response({ accepted: false, duplicate: true, eventId: input.eventId, action: found.duplicate }, 200);
-    input.memberId = found.memberId; discordCodeHash = found.codeHash;
+    const { memberId, ...lookup } = found; input.memberId = memberId; discordCode = lookup;
   }
   else if (kiosk.requirePin && input.eventId?.trim() && input.eventId.length <= 100 && input.memberId && validTimestamp(input.occurredAt)) await checkScanPin(db, kiosk, input);
   // Recorded whatever the outcome, so rejected scans show their match confidence too. Diagnostics never block attendance.
   if (input.matchScore !== undefined) await recordScanMatch(db, kiosk.id, input.eventId, input.matchScore).catch(() => undefined);
   // Only kiosks that can ask for a rescan are refused a possible wrong match. Older kiosks retry an unknown refusal
   // forever, holding up every scan queued behind it, so their scans are recorded as before.
-  return recordAttendance(db, input, "kiosk", undefined, { kioskId: kiosk.id, refuseWrongMatches: input.rescanSupported === true, matchScore: input.matchScore, ...(discordCodeHash ? { discordCodeHash } : {}) });
+  return recordAttendance(db, input, "kiosk", undefined, { kioskId: kiosk.id, refuseWrongMatches: input.rescanSupported === true, matchScore: input.matchScore, ...(discordCode ? { discordCode } : {}) });
 }
 async function attendance(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const url = new URL(request.url);
@@ -1614,7 +1683,7 @@ async function attendance(request: Request, env: Env): Promise<Response> {
       const selected = (targetResult.results ?? []).find((rule) => rule.labelId === policyLabel && rule.startsOn && rule.startsOn <= meetingDate && (!rule.endsOn || meetingDate <= rule.endsOn)) ?? (targetResult.results ?? []).find((rule) => rule.labelId === policyLabel && !rule.startsOn);
       const weekly = selected?.ruleType === "weekly_count";
       const legacy = Boolean(selected?.id.startsWith("legacy:") && settings?.policyActivatedOn && meetingDate < settings.policyActivatedOn);
-      const eligibility = meetingEligibility({ date: meetingDate, participationStart: row.attendanceRequiredFrom ?? row.rosterAddedAt?.slice(0, 10), activeLabels: legacy && policyLabel ? new Set([policyLabel]) : activeLabels, formulaLabel: weekly || !selected ? policyLabel : undefined, hasWeeklyTarget: weekly, meeting: { required: meeting.required, audienceMode: meeting.audienceMode ?? "all", audienceLabelIds: audienceIds } });
+      const eligibility = meetingEligibility({ date: meetingDate, participationStart: participationStartDate(row, settings?.timeZone ?? "UTC"), activeLabels: legacy && policyLabel ? new Set([policyLabel]) : activeLabels, formulaLabel: weekly || !selected ? policyLabel : undefined, hasWeeklyTarget: weekly, meeting: { required: meeting.required, audienceMode: meeting.audienceMode ?? "all", audienceLabelIds: audienceIds } });
       const { inactivePeriodsJson, ...visibleRow } = row;
       if (inactiveAt(inactivePeriodsJson, meeting.startsAt)) return { ...visibleRow, disposition: "not_required", eligibility: "inactive", rateEligible: false, policy: weekly ? "weekly" : "standard", audience };
       return { ...visibleRow, disposition: Date.now() < Date.parse(meeting.startsAt) && derived === "absent" ? "upcoming" : finalized && derived === "active" ? "absent" : derived, eligibility, rateEligible: eligibility === "required" || eligibility === "weekly", policy: weekly ? "weekly" : "standard", audience };
@@ -1685,6 +1754,17 @@ async function loadPolicyData(db: D1Database, memberId?: string, meetingId?: str
 }
 type PolicyData = Awaited<ReturnType<typeof loadPolicyData>>;
 const reportDataCache = new ReportDataCache<PolicyData>();
+/**
+ * A digest of everything attendance is calculated from, for preview tokens: a token made with it stops matching as soon as
+ * any of that data changes. Writing out a whole team's attendance to hash it costs more CPU than Workers Free allows a
+ * request, so it is done once for each loaded copy of the data, not once for each preview and again when it is applied.
+ */
+const policyStateDigests = new WeakMap<PolicyData, Promise<string>>();
+function policyStateDigest(data: PolicyData): Promise<string> {
+  let digest = policyStateDigests.get(data);
+  if (!digest) { digest = sha256Hex(JSON.stringify(data)); policyStateDigests.set(data, digest); }
+  return digest;
+}
 async function policyData(db: D1Database, scope: { memberId?: string; meetingId?: string } = {}): Promise<PolicyData> {
   return reportDataCache.read(databaseIdentity(db), JSON.stringify(scope), async () => {
     const row = await db.prepare("SELECT revision FROM report_data_revision WHERE installation_id = 'primary'").first<{ revision: number }>();
@@ -2189,18 +2269,26 @@ async function googleCalendarAuthorizationRecord(env: Env): Promise<GoogleCalend
 async function googleCalendarIntegrationStatus(env: Env) {
   const db = requireDatabase(env); const [record, queue] = await Promise.all([
     googleCalendarAuthorizationRecord(env),
-    db.prepare("SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, MAX(CASE WHEN status = 'failed' THEN last_error ELSE NULL END) AS lastError FROM google_calendar_operations WHERE installation_id = 'primary'").first<{ pending?: number; failed?: number; lastError?: string | null }>(),
+    calendarQueueCounts(db, "google_calendar"),
   ]);
   let calendarName: string | undefined; let reauthorizationRequired = false;
   // A refresh token Google refused clears authorized_at but stays stored, which marks the saved setup as needing re-authorization.
   if (record?.ciphertext && record.iv && env.INTEGRATION_KEY) try { const stored = await decryptIntegration(record.ciphertext, record.iv, env.INTEGRATION_KEY) as GoogleCalendarSecret; calendarName = stored.calendarLabel; reauthorizationRequired = !record.authorizedAt && Boolean(stored.refreshToken); } catch { /* Status must not expose or depend on secret values. */ }
   const enabled = Boolean(record?.enabled); const saved = Boolean(record?.ciphertext); const configured = enabled && Boolean(record?.verifiedAt);
-  return { provider: "google_calendar" as const, enabled, saved, authorized: Boolean(record?.authorizedAt), reauthorizationRequired, configured, state: !enabled ? "disabled" as const : !saved ? "not_configured" as const : configured ? "configured" as const : "verification_required" as const, updatedAt: record?.updatedAt ?? undefined, verifiedAt: record?.verifiedAt ?? undefined, calendarName, pendingOperations: Number(queue?.pending ?? 0), failedOperations: Number(queue?.failed ?? 0), lastError: queue?.lastError ?? undefined };
+  return { provider: "google_calendar" as const, enabled, saved, authorized: Boolean(record?.authorizedAt), reauthorizationRequired, configured, state: !enabled ? "disabled" as const : !saved ? "not_configured" as const : configured ? "configured" as const : "verification_required" as const, updatedAt: record?.updatedAt ?? undefined, verifiedAt: record?.verifiedAt ?? undefined, calendarName, ...queue };
 }
-async function discordCalendarQueueStatus(env: Env) {
-  const queue = await requireDatabase(env).prepare("SELECT SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, MAX(CASE WHEN status = 'failed' THEN last_error ELSE NULL END) AS lastError FROM discord_calendar_operations WHERE installation_id = 'primary'").first<{ pending?: number; failed?: number; lastError?: string | null }>();
-  return { pendingOperations: Number(queue?.pending ?? 0), failedOperations: Number(queue?.failed ?? 0), lastError: queue?.lastError ?? undefined };
+/**
+ * What an integration card shows of a provider's queue: operations waiting and failed, together with the event removals
+ * left by deleted data (waiting, and set aside after their last attempt), and one error to explain a failure.
+ */
+async function calendarQueueCounts(db: D1Database, provider: CalendarProvider) {
+  type Counts = { pending?: number; failed?: number; lastError?: string | null; pendingRemovals?: number; failedRemovals?: number; removalError?: string | null };
+  const operations = `SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed, MAX(CASE WHEN status = 'failed' THEN last_error ELSE NULL END) AS lastError`; const table = `${provider === "discord" ? "discord" : "google"}_calendar_operations WHERE installation_id = 'primary'`;
+  const queue = await db.prepare(`SELECT ${operations}, ${calendarRemovalStatusSql(provider)} FROM ${table}`).first<Counts>();
+  const removalNote = queue?.failedRemovals ? `${queue.failedRemovals} calendar event${queue.failedRemovals === 1 ? "" : "s"} of deleted meetings could not be removed: ${queue.removalError ?? "the provider refused"}` : undefined;
+  return { pendingOperations: Number(queue?.pending ?? 0) + Number(queue?.pendingRemovals ?? 0), failedOperations: Number(queue?.failed ?? 0) + Number(queue?.failedRemovals ?? 0), lastError: queue?.lastError ?? removalNote ?? undefined };
 }
+const discordCalendarQueueStatus = (env: Env) => calendarQueueCounts(requireDatabase(env), "discord");
 async function integrationsStatus(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);
   const [result, flags, calendar, discordCalendar, discordCommands] = await Promise.all([requireDatabase(env).prepare("SELECT i.provider, i.updated_at AS updatedAt, i.verified_at AS verifiedAt, EXISTS(SELECT 1 FROM integration_verification_challenges c WHERE c.installation_id = i.installation_id AND c.provider = i.provider AND c.expires_at > ?) AS verificationPending FROM encrypted_integrations i WHERE i.installation_id = 'primary' ORDER BY i.provider").bind(new Date().toISOString()).all<{ provider: IntegrationProvider; updatedAt: string; verifiedAt?: string | null; verificationPending: number }>(), integrationFlags(env), googleCalendarIntegrationStatus(env), discordCalendarQueueStatus(env), discordCommandStatus(env)]);
@@ -2280,12 +2368,14 @@ async function integrationConfiguration(request: Request, env: Env, provider: In
     if (!input.enabled) statements.push(db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider));
     if (provider === "discord" && !input.enabled) statements.push(db.prepare("UPDATE organization_settings SET discord_anomaly_reports_enabled = 0, discord_anomaly_reports_enabled_at = NULL WHERE installation_id = 'primary'"));
     if (provider === "google") statements.push(db.prepare(`UPDATE installations SET auth_mode = CASE WHEN ? = 1 AND auth_mode = 'local' THEN 'both' WHEN ? = 0 AND auth_mode = 'both' THEN 'local' ELSE auth_mode END WHERE id = 'primary'`).bind(input.enabled ? 1 : 0, input.enabled ? 1 : 0));
+    // Turning Discord back on queues what Sync all would, in this batch: nothing was queued for it while it was off.
+    if (provider === "discord" && input.enabled) statements.push(...calendarCatchUp(db, "discord", new Date().toISOString(), principal.userId).statements);
     await db.batch(statements); await writeAudit(db, principal, input.enabled ? "integration.enabled" : "integration.disabled", "integration", provider);
     return response({ provider, enabled: input.enabled });
   }
   if (request.method === "DELETE") {
     if (provider === "google") await requireLocalAdminSignIn(db);
-    await db.batch([db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare("DELETE FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare(`UPDATE installations SET ${integrationFlagSqlColumns[provider]} = 0 WHERE id = 'primary'`), ...(provider === "google" ? [db.prepare("UPDATE installations SET auth_mode = 'local' WHERE id = 'primary'")] : []), ...(provider === "discord" ? [db.prepare("UPDATE organization_settings SET discord_anomaly_reports_enabled = 0, discord_anomaly_reports_enabled_at = NULL WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_calendar_operations WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_calendar_event_mappings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key LIKE 'calendar:%'")] : [])]);
+    await db.batch([db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare("DELETE FROM encrypted_integrations WHERE installation_id = 'primary' AND provider = ?").bind(provider), db.prepare(`UPDATE installations SET ${integrationFlagSqlColumns[provider]} = 0 WHERE id = 'primary'`), ...(provider === "google" ? [db.prepare("UPDATE installations SET auth_mode = 'local' WHERE id = 'primary'")] : []), ...(provider === "discord" ? [db.prepare("UPDATE organization_settings SET discord_anomaly_reports_enabled = 0, discord_anomaly_reports_enabled_at = NULL WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_calendar_operations WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_calendar_event_mappings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key LIKE 'calendar:%'"), ...calendarRemovalDisconnectStatements(db, "discord", new Date().toISOString())] : [])]);
     await writeAudit(db, principal, "integration.removed", "integration", provider); return response({ configured: false, provider });
   }
   if (!env.INTEGRATION_KEY) throw new HttpError(503, "Integration encryption is not configured");
@@ -2302,7 +2392,9 @@ async function markIntegrationVerified(db: D1Database, provider: IntegrationProv
   const now = new Date().toISOString(); await db.batch([
     db.prepare("UPDATE encrypted_integrations SET verified_at = ? WHERE installation_id = 'primary' AND provider = ?").bind(now, provider),
     db.prepare("DELETE FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = ?").bind(provider),
-    ...(provider === "discord" ? [db.prepare("UPDATE discord_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now)] : []),
+    // Verified: failed operations are due again (a Discord upsert beyond the 60-day horizon when its meeting comes within
+    // range), and what Sync all would queue is queued here, for edits and deletes made while Discord could not take them.
+    ...(provider === "discord" ? [calendarFailedRetry(db, "discord", now), ...calendarCatchUp(db, "discord", now, actorUserId).statements] : []),
     db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'integration.verified', 'integration', ?, ?, ?)").bind(crypto.randomUUID(), actorUserId, provider, JSON.stringify(metadata), now),
   ]); return now;
 }
@@ -2465,7 +2557,8 @@ async function googleCalendarConfiguration(request: Request, env: Env): Promise<
   if (request.method === "PATCH") {
     const input = await parseJson<{ enabled?: boolean }>(request);
     if (typeof input.enabled !== "boolean") throw new HttpError(400, "enabled must be true or false");
-    await db.prepare("UPDATE installations SET google_calendar_enabled = ? WHERE id = 'primary'").bind(input.enabled ? 1 : 0).run();
+    // Turning Google Calendar back on queues what Sync all would, in the same batch: nothing was queued while it was off.
+    await db.batch([db.prepare("UPDATE installations SET google_calendar_enabled = ? WHERE id = 'primary'").bind(input.enabled ? 1 : 0), ...(input.enabled ? calendarCatchUp(db, "google_calendar", new Date().toISOString(), principal.userId).statements : [])]);
     await writeAudit(db, principal, input.enabled ? "google_calendar.enabled" : "google_calendar.disabled", "integration", "google_calendar");
     return response({ provider: "google_calendar", enabled: input.enabled });
   }
@@ -2474,6 +2567,7 @@ async function googleCalendarConfiguration(request: Request, env: Env): Promise<
       db.prepare("DELETE FROM google_calendar_operations WHERE installation_id = 'primary'"),
       db.prepare("DELETE FROM google_calendar_event_mappings WHERE installation_id = 'primary'"),
       db.prepare("DELETE FROM google_calendar_authorizations WHERE installation_id = 'primary'"),
+      ...calendarRemovalDisconnectStatements(db, "google_calendar", new Date().toISOString()),
       db.prepare("UPDATE installations SET google_calendar_enabled = 0 WHERE id = 'primary'"),
     ]);
     await writeAudit(db, principal, "google_calendar.removed", "integration", "google_calendar");
@@ -2522,7 +2616,7 @@ async function completeGoogleCalendarAuthorization(request: Request, env: Env): 
   const encrypted = await encryptIntegration(next, env.INTEGRATION_KEY); const now = new Date().toISOString(); const db = requireDatabase(env);
   await db.batch([
     db.prepare("UPDATE google_calendar_authorizations SET ciphertext = ?, iv = ?, authorized_at = ?, verified_at = ?, updated_at = ? WHERE installation_id = 'primary'").bind(encrypted.ciphertext, encrypted.iv, now, verifiedAt, now),
-    ...(verifiedAt ? [db.prepare("UPDATE google_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now)] : []),
+    ...(verifiedAt ? [calendarFailedRetry(db, "google_calendar", now), ...calendarCatchUp(db, "google_calendar", now, principal.userId).statements] : []),
   ]);
   await writeAudit(db, { userId: principal.userId, role: "admin", expiresAt: signed.expiresAt }, "google_calendar.authorized", "integration", "google_calendar", { calendarReverified: Boolean(verifiedAt), reauthorized: reauthorizing });
   const headers = new Headers({ location: `${env.ALLOWED_ORIGIN}/settings/integrations?${verifiedAt ? "verified" : "authorized"}=google-calendar`, "cache-control": "no-store" }); headers.append("set-cookie", "lancerlogin_calendar_oauth_state=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0");
@@ -2542,106 +2636,91 @@ async function selectGoogleCalendar(request: Request, env: Env): Promise<Respons
   await db.batch([
     ...(changed ? [db.prepare("DELETE FROM google_calendar_operations WHERE installation_id = 'primary'"), db.prepare("DELETE FROM google_calendar_event_mappings WHERE installation_id = 'primary'")] : []),
     db.prepare("UPDATE google_calendar_authorizations SET ciphertext = ?, iv = ?, verified_at = ?, updated_at = ? WHERE installation_id = 'primary'").bind(encrypted.ciphertext, encrypted.iv, now, now),
-    db.prepare("UPDATE google_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now),
+    calendarFailedRetry(db, "google_calendar", now), ...calendarCatchUp(db, "google_calendar", now, principal.userId).statements,
   ]);
   await writeAudit(db, principal, "google_calendar.selected", "integration", "google_calendar", { calendarChanged: changed });
   return response({ provider: "google_calendar", configured: true, calendarName: next.calendarLabel, verifiedAt: now });
 }
-type GoogleCalendarSyncSummary = { synced: number; queued: number; failed: number };
-type GoogleCalendarOperation = { meetingId: string; eventId: string; action: "upsert" | "delete"; startsAt?: string | null; endsAt?: string | null; status: "pending" | "delivered" | "failed"; attempts: number; syncedAt?: string | null; generation?: number | null };
+type GoogleCalendarSyncSummary = CalendarQueueSummary["google_calendar"];
+type GoogleCalendarOperation = { meetingId: string; eventId: string; action: "upsert" | "delete"; startsAt?: string | null; endsAt?: string | null; status: "pending" | "delivered" | "failed"; attempts: number; updatedAt: string; syncedAt?: string | null; generation?: number | null };
 async function googleCalendarEventId(meetingId: string, generation: number): Promise<string> { return `ll${(await sha256Hex(`google-calendar:primary:${meetingId}:${generation}`)).slice(0, 48)}`; }
 async function googleCalendarIsReady(env: Env): Promise<boolean> { const record = await googleCalendarAuthorizationRecord(env); return Boolean(record?.enabled && record.verifiedAt); }
 const googleCalendarEmptySummary = (): GoogleCalendarSyncSummary => ({ synced: 0, queued: 0, failed: 0 });
-async function bestEffortGoogleCalendar(action: () => Promise<GoogleCalendarSyncSummary>): Promise<GoogleCalendarSyncSummary> {
-  try { return await action(); } catch { return { synced: 0, queued: 0, failed: 1 }; }
-}
-async function enqueueGoogleCalendarCreate(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
-  if (!meetingIds.length || !await googleCalendarIsReady(env)) return googleCalendarEmptySummary();
-  const now = new Date().toISOString(); const eventIds: string[] = [];
-  for (const meetingId of meetingIds) {
-    const meeting = await db.prepare("SELECT id, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(meetingId).first<{ id: string; startsAt: string; endsAt: string }>();
-    if (!meeting) continue;
-    const eventId = await googleCalendarEventId(meeting.id, 1); eventIds.push(eventId);
-    await db.batch([
-      db.prepare("INSERT OR IGNORE INTO google_calendar_event_mappings (installation_id, meeting_id, event_id, generation, active, updated_at) VALUES ('primary', ?, ?, 1, 1, ?)").bind(meeting.id, eventId, now),
-      db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'upsert', ?, ?, 'pending', 0, ?, ?) ON CONFLICT(installation_id, event_id) DO UPDATE SET action = 'upsert', starts_at = excluded.starts_at, ends_at = excluded.ends_at, status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, updated_at = excluded.updated_at").bind(meeting.id, eventId, meeting.startsAt, meeting.endsAt, now, now),
-    ]);
-  }
-  return eventIds.length ? processGoogleCalendarOperations(env, eventIds) : googleCalendarEmptySummary();
-}
-async function enqueueGoogleCalendarUpdate(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
-  const now = new Date().toISOString(); const eventIds: string[] = [];
-  for (const meetingId of meetingIds) {
-    const mapped = await db.prepare("SELECT m.event_id AS eventId, mt.starts_at AS startsAt, mt.ends_at AS endsAt FROM google_calendar_event_mappings m JOIN meetings mt ON mt.installation_id = m.installation_id AND mt.id = m.meeting_id WHERE m.installation_id = 'primary' AND m.meeting_id = ? AND m.active = 1 AND mt.deleted_at IS NULL").bind(meetingId).first<{ eventId: string; startsAt: string; endsAt: string }>();
-    if (!mapped) continue; eventIds.push(mapped.eventId);
-    await db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'upsert', ?, ?, 'pending', 0, ?, ?) ON CONFLICT(installation_id, event_id) DO UPDATE SET action = 'upsert', starts_at = excluded.starts_at, ends_at = excluded.ends_at, status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, updated_at = excluded.updated_at").bind(meetingId, mapped.eventId, mapped.startsAt, mapped.endsAt, now, now).run();
-  }
-  return eventIds.length && await googleCalendarIsReady(env) ? processGoogleCalendarOperations(env, eventIds) : { synced: 0, queued: eventIds.length, failed: 0 };
-}
-async function enqueueGoogleCalendarDelete(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
-  const now = new Date().toISOString(); const eventIds: string[] = [];
-  for (const meetingId of meetingIds) {
-    const mapped = await db.prepare("SELECT event_id AS eventId FROM google_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ?").bind(meetingId).first<{ eventId: string }>();
-    if (!mapped) continue; eventIds.push(mapped.eventId);
-    await db.batch([
-      db.prepare("UPDATE google_calendar_event_mappings SET active = 0, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, meetingId),
-      db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'delete', NULL, NULL, 'pending', 0, ?, ?) ON CONFLICT(installation_id, event_id) DO UPDATE SET action = 'delete', starts_at = NULL, ends_at = NULL, status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, updated_at = excluded.updated_at").bind(meetingId, mapped.eventId, now, now),
-    ]);
-  }
-  return eventIds.length && await googleCalendarIsReady(env) ? processGoogleCalendarOperations(env, eventIds) : { synced: 0, queued: eventIds.length, failed: 0 };
-}
-async function enqueueGoogleCalendarRestore(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
-  const now = new Date().toISOString(); const eventIds: string[] = [];
-  for (const meetingId of meetingIds) {
-    const mapped = await db.prepare("SELECT m.generation, mt.starts_at AS startsAt, mt.ends_at AS endsAt FROM google_calendar_event_mappings m JOIN meetings mt ON mt.installation_id = m.installation_id AND mt.id = m.meeting_id WHERE m.installation_id = 'primary' AND m.meeting_id = ? AND mt.deleted_at IS NULL").bind(meetingId).first<{ generation: number; startsAt: string; endsAt: string }>();
-    if (!mapped) continue; const generation = Number(mapped.generation) + 1; const eventId = await googleCalendarEventId(meetingId, generation); eventIds.push(eventId);
-    await db.batch([
-      db.prepare("UPDATE google_calendar_event_mappings SET event_id = ?, generation = ?, active = 1, synced_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(eventId, generation, now, meetingId),
-      db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'upsert', ?, ?, 'pending', 0, ?, ?)").bind(meetingId, eventId, mapped.startsAt, mapped.endsAt, now, now),
-    ]);
-  }
-  return eventIds.length && await googleCalendarIsReady(env) ? processGoogleCalendarOperations(env, eventIds) : { synced: 0, queued: eventIds.length, failed: 0 };
-}
 function googleCalendarOperationPath(calendarId: string, eventId?: string): string { return `/calendars/${encodeURIComponent(calendarId)}/events${eventId ? `/${encodeURIComponent(eventId)}` : ""}`; }
 function googleCalendarRetryAt(attempts: number, error: GoogleCalendarProviderError): string | null {
   if (!error.retryable) return null;
   const backoff = Math.min(3_600_000, Math.max(60_000, 2 ** Math.min(attempts, 12) * 1_000, error.retryAfterMs ?? 0));
   return new Date(Date.now() + backoff).toISOString();
 }
+const googleCalendarFailure = (error: unknown) => error instanceof GoogleCalendarProviderError ? error : new GoogleCalendarProviderError(503, "Google Calendar is temporarily unavailable. LancerLogin will retry automatically.", true);
+// Operations are queued by meeting routes (calendar-queue.ts) while a delivery may be in flight. Every write that settles
+// an operation names the updated_at the delivery read: a meeting change queued since then keeps its pending operation.
 async function markGoogleCalendarOperationFailure(db: D1Database, operation: GoogleCalendarOperation, error: unknown): Promise<void> {
-  const providerError = error instanceof GoogleCalendarProviderError ? error : new GoogleCalendarProviderError(503, "Google Calendar is temporarily unavailable. LancerLogin will retry automatically.", true); const now = new Date().toISOString(); const attempts = Number(operation.attempts ?? 0) + 1; const nextAttemptAt = googleCalendarRetryAt(attempts, providerError);
+  const providerError = googleCalendarFailure(error); const now = new Date().toISOString(); const attempts = Number(operation.attempts ?? 0) + 1; const nextAttemptAt = googleCalendarRetryAt(attempts, providerError);
   await db.batch([
-    db.prepare("UPDATE google_calendar_operations SET status = 'failed', attempts = ?, next_attempt_at = ?, last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND event_id = ?").bind(attempts, nextAttemptAt, providerError.message.slice(0, 300), now, operation.eventId),
+    db.prepare("UPDATE google_calendar_operations SET status = 'failed', attempts = ?, next_attempt_at = ?, last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND event_id = ? AND updated_at = ?").bind(attempts, nextAttemptAt, providerError.message.slice(0, 300), now, operation.eventId, operation.updatedAt),
     db.prepare("UPDATE google_calendar_event_mappings SET last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND event_id = ?").bind(providerError.message.slice(0, 300), now, operation.meetingId, operation.eventId),
   ]);
 }
+// Google no longer has the event, so whatever operation is stored for that event id is finished, including one a meeting
+// change queued while this delivery was in flight: that is why this one write does not name the updated_at it read.
 async function replaceMissingGoogleCalendarEvent(db: D1Database, operation: GoogleCalendarOperation): Promise<string> {
   const generation = Number(operation.generation ?? 1) + 1; const eventId = await googleCalendarEventId(operation.meetingId, generation); const now = new Date().toISOString();
   await db.batch([
     db.prepare("UPDATE google_calendar_operations SET status = 'delivered', next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND event_id = ?").bind(now, operation.eventId),
-    db.prepare("UPDATE google_calendar_event_mappings SET event_id = ?, generation = ?, synced_at = NULL, last_error = NULL, active = 1, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND event_id = ?").bind(eventId, generation, now, operation.meetingId, operation.eventId),
-    db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'upsert', ?, ?, 'pending', 0, ?, ?)").bind(operation.meetingId, eventId, operation.startsAt, operation.endsAt, now, now),
+    // The mapping keeps the state a meeting change may have given it meanwhile (a deleted meeting's stays inactive), and
+    // the new event's operation is written from the meeting and mapping as they are now, not from what this delivery read.
+    db.prepare("UPDATE google_calendar_event_mappings SET event_id = ?, generation = ?, synced_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND event_id = ?").bind(eventId, generation, now, operation.meetingId, operation.eventId),
+    db.prepare(`INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) SELECT 'primary', g.meeting_id, g.event_id, 'upsert', m.starts_at, m.ends_at, 'pending', 0, '${CALENDAR_DUE_NOW}', ? FROM google_calendar_event_mappings g JOIN meetings m ON m.installation_id = g.installation_id AND m.id = g.meeting_id WHERE g.installation_id = 'primary' AND g.meeting_id = ? AND g.event_id = ? AND g.active = 1 AND m.deleted_at IS NULL AND m.ends_at IS NOT NULL`).bind(now, operation.meetingId, eventId),
   ]);
   return eventId;
 }
-// Per pass: about 2 Google requests and 5 D1 queries per operation, plus the token refresh.
+// Per pass: about 2 Google requests and 5 D1 queries per operation, plus the token refresh. An event removal left by
+// Delete attendance data (calendar_event_removals) is one Google request and one D1 query, and takes an operation's place.
 const GOOGLE_CALENDAR_OPERATION_BATCH_LIMIT = 5;
 const GOOGLE_CALENDAR_OPERATION_COST: PassCost = { d1: 6, external: 2 };
-async function processGoogleCalendarOperations(env: Env, eventIds?: string[]): Promise<GoogleCalendarSyncSummary> {
+const CALENDAR_REMOVAL_COST: PassCost = { d1: 2, external: 1 };
+/** How a removal names the Google calendar its event is on, without storing the calendar's id in the clear. */
+const googleCalendarRemovalTarget = async (calendarId: string) => (await sha256Hex(`google-calendar-removal-target:${calendarId}`)).slice(0, 32);
+/** The calendar and the server that events recorded for removal now are on; null where the integration cannot say. */
+async function calendarRemovalTargets(env: Env): Promise<{ google_calendar: string | null; discord: string | null }> {
+  const [google, discord] = await Promise.all([
+    googleCalendarSecret(env).then(({ secret }) => secret.calendarId ? googleCalendarRemovalTarget(secret.calendarId) : null).catch(() => null),
+    discordConfiguration(env, true).then((config) => config.guildId || null).catch(() => null),
+  ]);
+  return { google_calendar: google, discord };
+}
+/** Whether queued work goes out within seconds (the Durable Object alarm) or a few events every five minutes (the cron). */
+const calendarSchedulerMode = (env: Env) => durableScheduler(env) ? "alarm" as const : "cron" as const;
+const calendarPerPass = { google_calendar: 5, discord: 3 } as const;
+/**
+ * The scheduled Google Calendar delivery: the oldest due operations, then due event removals. Nothing else delivers to
+ * Google; meeting routes only queue. An operation is due once its next_attempt_at has passed, whether pending or failed
+ * (a failure Google will never accept has none), which is what the queue index of migration 0103 holds.
+ */
+async function processGoogleCalendarOperations(env: Env): Promise<GoogleCalendarSyncSummary> {
   if (!await googleCalendarIsReady(env)) return googleCalendarEmptySummary();
   // A Stop holds first attempts too: the operations stay pending and go out when delivery resumes.
-  if (await deliveryPausedUntil(env) !== null) return { synced: 0, queued: eventIds?.length ? new Set(eventIds).size : 0, failed: 0 };
-  const db = requireDatabase(env); const now = new Date().toISOString(); const filter = eventIds?.length ? `AND o.event_id IN (${eventIds.map(() => "?").join(",")})` : "AND (o.status = 'pending' OR (o.status = 'failed' AND o.next_attempt_at IS NOT NULL AND o.next_attempt_at <= ?))"; const values = eventIds?.length ? eventIds : [now];
-  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.event_id AS eventId, o.action, o.starts_at AS startsAt, o.ends_at AS endsAt, o.status, o.attempts, m.synced_at AS syncedAt, m.generation FROM google_calendar_operations o LEFT JOIN google_calendar_event_mappings m ON m.installation_id = o.installation_id AND m.meeting_id = o.meeting_id AND m.event_id = o.event_id WHERE o.installation_id = 'primary' ${filter} ORDER BY o.updated_at LIMIT ${GOOGLE_CALENDAR_OPERATION_BATCH_LIMIT}`).bind(...values).all<GoogleCalendarOperation>();
-  const operations = result.results ?? []; if (!operations.length) return googleCalendarEmptySummary();
-  if (operations.length === GOOGLE_CALENDAR_OPERATION_BATCH_LIMIT) passMore(env);
-  // Requested operations beyond this batch stay pending for the scheduled pass.
-  const leftover = eventIds?.length ? Math.max(0, new Set(eventIds).size - operations.length) : 0;
+  if (await deliveryPausedUntil(env) !== null) return googleCalendarEmptySummary();
+  const db = requireDatabase(env); const now = new Date().toISOString();
+  const { operations, removals } = await dueCalendarWork<GoogleCalendarOperation>(db, "google_calendar", `SELECT o.meeting_id AS meetingId, o.event_id AS eventId, o.action, o.starts_at AS startsAt, o.ends_at AS endsAt, o.status, o.attempts, o.updated_at AS updatedAt, m.synced_at AS syncedAt, m.generation, NULL AS removalAttempts, NULL AS removalTarget FROM google_calendar_operations o LEFT JOIN google_calendar_event_mappings m ON m.installation_id = o.installation_id AND m.meeting_id = o.meeting_id AND m.event_id = o.event_id WHERE o.installation_id = 'primary' AND o.status != 'delivered' AND o.next_attempt_at IS NOT NULL AND o.next_attempt_at <= ? ORDER BY o.next_attempt_at, o.starts_at LIMIT ${GOOGLE_CALENDAR_OPERATION_BATCH_LIMIT}`, [now], "NULL, r.event_id, 'delete', NULL, NULL, 'pending', 0, r.updated_at, NULL, NULL", GOOGLE_CALENDAR_OPERATION_BATCH_LIMIT, now);
+  if (!operations.length && !removals.length) return googleCalendarEmptySummary();
   let accessToken: string; let secret: GoogleCalendarSecret;
   try { ({ accessToken, secret } = await googleCalendarAccessToken(env, true)); }
-  catch (error) { for (const operation of operations) await markGoogleCalendarOperationFailure(db, operation, error); return { synced: 0, queued: leftover, failed: operations.length }; }
-  if (!secret.calendarId) return { synced: 0, queued: operations.length + leftover, failed: 0 };
-  let synced = 0; let queued = leftover; let failed = 0;
+  catch (error) {
+    // A refusal by the scheduler's budget is not a provider failure: nothing is marked, and the slice ends.
+    if (error instanceof SchedulerBudgetError) throw error; 
+    // Without a token nothing here can proceed: everything read backs off, and the job does not ask to run again at once.
+    const providerError = googleCalendarFailure(error);
+    for (const operation of operations) await markGoogleCalendarOperationFailure(db, operation, error);
+    for (const removal of removals) await failCalendarRemoval(db, "google_calendar", removal, providerError.message, providerError.retryAfterMs ?? 0);
+    return { synced: 0, queued: 0, failed: operations.length };
+  }
+  if (!secret.calendarId) return { synced: 0, queued: operations.length, failed: 0 };
+  // A full batch means there may be more: only now that the work can proceed is another slice asked for.
+  if (operations.length + removals.length === GOOGLE_CALENDAR_OPERATION_BATCH_LIMIT) passMore(env);
+  const removalTarget = removals.some((removal) => removal.target) ? await googleCalendarRemovalTarget(secret.calendarId) : null;
+  let synced = 0; let queued = 0; let failed = 0;
   for (const [index, operation] of operations.entries()) {
     if (!passAllows(env, GOOGLE_CALENDAR_OPERATION_COST)) { queued += operations.length - index; break; }
     try {
@@ -2660,42 +2739,54 @@ async function processGoogleCalendarOperations(env: Env, eventIds?: string[]): P
           catch (error) { if (error instanceof GoogleCalendarProviderError && error.providerStatus === 409) await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, operation.eventId), { method: "PATCH", body: JSON.stringify(timing) }, env.moduleProviderAuthority); else throw error; }
         }
       }
-      const completedAt = new Date().toISOString(); await db.batch([
-        db.prepare("UPDATE google_calendar_operations SET status = 'delivered', attempts = attempts + 1, next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND event_id = ?").bind(completedAt, operation.eventId),
+      // A meeting changed while this was being sent keeps its newer pending operation; only the one read above is settled.
+      const completedAt = new Date().toISOString(); const completion = await db.batch([
+        db.prepare("UPDATE google_calendar_operations SET status = 'delivered', attempts = attempts + 1, next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND event_id = ? AND updated_at = ?").bind(completedAt, operation.eventId, operation.updatedAt),
         db.prepare("UPDATE google_calendar_event_mappings SET synced_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND event_id = ?").bind(completedAt, completedAt, operation.meetingId, operation.eventId),
-      ]); synced += 1;
-    } catch (error) { await markGoogleCalendarOperationFailure(db, operation, error); failed += 1; }
+      ]);
+      if ((completion[0]?.meta?.changes ?? 1) > 0) synced += 1; else queued += 1;
+    } catch (error) { if (error instanceof SchedulerBudgetError) throw error; await markGoogleCalendarOperationFailure(db, operation, error); failed += 1; }
+  }
+  for (const removal of removals) {
+    if (!passAllows(env, CALENDAR_REMOVAL_COST)) break;
+    // An event recorded for another calendar than the one now selected is not on this one.
+    if (removal.target && removal.target !== removalTarget) { await dropCalendarRemoval(db, "google_calendar", removal); continue; }
+    try {
+      try { await googleCalendarProviderRequest(accessToken, googleCalendarOperationPath(secret.calendarId, removal.eventId), { method: "DELETE" }, env.moduleProviderAuthority); }
+      catch (error) { if (!(error instanceof GoogleCalendarProviderError) || ![404, 410].includes(error.providerStatus)) throw error; }
+      await completeCalendarRemoval(db, "google_calendar", removal);
+    } catch (error) { if (error instanceof SchedulerBudgetError) throw error; const providerError = googleCalendarFailure(error); await failCalendarRemoval(db, "google_calendar", removal, providerError.message, providerError.retryAfterMs ?? 0); }
   }
   return { synced, queued, failed };
 }
 async function retryGoogleCalendarOperations(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); await googleCalendarSecret(env, true); const db = requireDatabase(env); const now = new Date().toISOString();
-  await db.prepare("UPDATE google_calendar_operations SET status = 'pending', next_attempt_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND status = 'failed'").bind(now, now).run();
-  const result = await processGoogleCalendarOperations(env); await writeAudit(db, principal, "google_calendar.retry_requested", "integration", "google_calendar", result); return response(result);
+  // Retry makes failed operations and set-aside removals due again, in one batch, and the scheduler delivers them (the
+  // route pokes it). Delivering here cost 43 subrequests for five operations, 53 when each needed a second request. It
+  // also makes due any pending operation stored without a time, which the delivery job would otherwise never read.
+  const results = await db.batch([calendarFailedRetry(db, "google_calendar", now), calendarRemovalRetry(db, "google_calendar", now), calendarWaitingCount(db, "google_calendar", now)]);
+  const result = { synced: 0, queued: (results[0]?.meta?.changes ?? 0) + (results[1]?.meta?.changes ?? 0), failed: 0 };
+  await writeAudit(db, principal, "google_calendar.retry_requested", "integration", "google_calendar", result);
+  return response({ ...result, waiting: Number((results[2] as D1Result<{ waiting: number }>).results?.[0]?.waiting ?? 0), scheduler: calendarSchedulerMode(env), perPass: calendarPerPass.google_calendar });
 }
-const addCalendarSummaries = (...summaries: GoogleCalendarSyncSummary[]): GoogleCalendarSyncSummary => summaries.reduce((total, item) => ({ synced: total.synced + item.synced, queued: total.queued + item.queued, failed: total.failed + item.failed }), googleCalendarEmptySummary());
-async function syncGoogleCalendarMeetings(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
-  const updates: string[] = []; const creates: string[] = []; const ready = await googleCalendarIsReady(env);
-  for (const meetingId of meetingIds) {
-    const mapping = await db.prepare("SELECT active FROM google_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ?").bind(meetingId).first<{ active?: number }>();
-    if (mapping?.active) updates.push(meetingId); else if (!mapping && ready) creates.push(meetingId);
-  }
-  const updateSummary = await enqueueGoogleCalendarUpdate(db, env, updates);
-  const createSummary = await enqueueGoogleCalendarCreate(db, env, creates);
-  return addCalendarSummaries(updateSummary, createSummary);
-}
-async function restoreGoogleCalendarMeetings(db: D1Database, env: Env, meetingIds: string[]): Promise<GoogleCalendarSyncSummary> {
-  const restored = await enqueueGoogleCalendarRestore(db, env, meetingIds); if (!await googleCalendarIsReady(env)) return restored;
-  const unmapped: string[] = [];
-  for (const meetingId of meetingIds) if (!await db.prepare("SELECT generation FROM google_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ?").bind(meetingId).first()) unmapped.push(meetingId);
-  return addCalendarSummaries(restored, await enqueueGoogleCalendarCreate(db, env, unmapped));
-}
+/** What both Sync all routes select, stated in their responses. */
+const CALENDAR_SYNC_ALL_RULE = "Every meeting that is not deleted and has not ended is queued, current and upcoming alike, in one request with no limit. Meetings that have ended are left as they are. A deleted meeting whose event was never removed has that removal queued, and failed removals are tried again. Delivery is in the background: deletes first, then the soonest meeting first.";
+/**
+ * Sync all: queues an upsert for every current and upcoming meeting and creates missing mappings, set-based in one batch,
+ * so 300 meetings cost what one does. It also repairs what an interrupted request left behind: a deleted meeting whose
+ * event is still mapped as live gets its delete queued, and a mapping left inactive on a live meeting is reactivated. The
+ * scheduled job delivers the queue, earliest meeting first; nothing is sent to Google by this request.
+ */
 async function syncAllGoogleCalendarMeetings(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); await googleCalendarSecret(env, true); const db = requireDatabase(env);
-  const meetings = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at ASC LIMIT 100").all<{ id: string }>();
-  const result = await syncGoogleCalendarMeetings(db, env, (meetings.results ?? []).map((meeting) => meeting.id));
-  await writeAudit(db, principal, "google_calendar.sync_all_requested", "integration", "google_calendar", { selected: meetings.results?.length ?? 0, ...result });
-  return response({ ...result, selected: meetings.results?.length ?? 0, limit: 100 });
+  const principal = await requireRole(request, env, ["admin"]); await googleCalendarSecret(env, true); const db = requireDatabase(env); const now = new Date().toISOString();
+  const catchUp = calendarCatchUp(db, "google_calendar", now, principal.userId);
+  const upcoming = calendarTargets.upcoming(now);
+  // Event removals set aside after their last attempt get a fresh allowance too.
+  const results = await db.batch([...catchUp.statements, calendarRemovalRetry(db, "google_calendar", now), db.prepare(`SELECT COUNT(*) AS selected FROM (${upcoming.sql})`).bind(...upcoming.values), calendarWaitingCount(db, "google_calendar", now)]);
+  const selected = Number((results.at(-2) as D1Result<{ selected: number }>).results?.[0]?.selected ?? 0); const waiting = Number((results.at(-1) as D1Result<{ waiting: number }>).results?.[0]?.waiting ?? 0);
+  const result = { synced: 0, queued: catchUp.queued(results, 0), failed: 0, selected, deletesQueued: catchUp.deletesQueued(results, 0), remaining: 0 };
+  await writeAudit(db, principal, "google_calendar.sync_all_requested", "integration", "google_calendar", result);
+  return response({ ...result, waiting, scheduler: calendarSchedulerMode(env), perPass: calendarPerPass.google_calendar, rule: CALENDAR_SYNC_ALL_RULE });
 }
 async function users(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
@@ -2770,20 +2861,43 @@ async function sendAttendanceEmail(request: Request, env: Env): Promise<Response
     const data = await policyData(db); const target = data.meetings.find((item) => item.id === meeting.id);
     const result = target ? evaluateAttendance({ ...data, members: data.members.filter((item) => item.id === member.id), meetings: [target], now: new Date(Math.max(Date.now(), Date.parse(target.attendanceClosesAt) + 1)).toISOString() })[0] : undefined;
     if (!result?.rows.some((row) => row.meetingId === meeting.id && row.eligibility === "required" && row.disposition === "absent")) throw new HttpError(409, "This member is not currently marked absent from a required meeting in their audience");
-    subject = `Missed meeting: ${meeting.title}`; content = `<p>Hello ${html(member.firstName)},</p><p>Our records show you missed <strong>${html(meeting.title)}</strong> on ${html(new Date(meeting.startsAt).toISOString().slice(0, 10))}.</p><p>Please contact your organization if this should be corrected or excused.</p>`; deliveryKey = `missed:${meeting.id}:${member.id}`;
+    subject = `Missed meeting: ${meeting.title}`; content = `<p>Hello ${html(member.firstName)},</p><p>Our records show you missed <strong>${html(meeting.title)}</strong> on ${html(memberDateText(meeting.startsAt, data.timeZone))}.</p><p>Please contact your organization if this should be corrected or excused.</p>`; deliveryKey = `missed:${meeting.id}:${member.id}`;
   } else {
     const report = await policyReport(db, { meetingType: "all", roster: "all", membership: "current", memberId: member.id, useBaseline: true }); const summary = report.members[0]; const meetings = new Map(report.meetings.map((item) => [item.id, item]));
-    subject = "Your attendance report"; content = `<p>Hello ${html(member.firstName)},</p><p>Here is your current attendance report.</p><p>${html(policySummaryText(summary))}</p><table><thead><tr><th>Meeting</th><th>Date</th><th>Audience</th><th>Status</th><th>Eligibility</th></tr></thead><tbody>${(summary?.rows ?? []).slice(-100).map((row) => { const meeting = meetings.get(row.meetingId); return `<tr><td>${html(meeting?.title)}</td><td>${html(meeting?.startsAt.slice(0, 10))}</td><td>${html(row.audience)}</td><td>${html(row.disposition)}</td><td>${html(row.eligibility)}</td></tr>`; }).join("")}</tbody></table>`; deliveryKey = `report:${member.id}:${new Date().toISOString().slice(0, 10)}`;
+    subject = "Your attendance report"; content = `<p>Hello ${html(member.firstName)},</p><p>Here is your current attendance report.</p><p>${html(policySummaryText(summary))}</p><table><thead><tr><th>Meeting</th><th>Date</th><th>Audience</th><th>Status</th><th>Eligibility</th></tr></thead><tbody>${(summary?.rows ?? []).slice(-100).map((row) => { const meeting = meetings.get(row.meetingId); return `<tr><td>${html(meeting?.title)}</td><td>${html(meeting ? memberDateText(meeting.startsAt, report.timeZone) : "")}</td><td>${html(row.audience)}</td><td>${html(row.disposition)}</td><td>${html(row.eligibility)}</td></tr>`; }).join("")}</tbody></table>`; deliveryKey = `report:${member.id}:${new Date().toISOString().slice(0, 10)}`;
   }
-  if (await db.prepare("SELECT id FROM integration_deliveries WHERE installation_id = 'primary' AND provider = 'resend' AND delivery_key = ? AND status IN ('pending', 'delivered')").bind(deliveryKey).first()) throw new HttpError(409, "This email was already sent or is currently sending");
   const config = await resendConfiguration(env); const id = crypto.randomUUID(); const now = new Date().toISOString();
-  await db.prepare("INSERT INTO integration_deliveries (id, installation_id, provider, delivery_key, status, created_at, updated_at) VALUES (?, 'primary', 'resend', ?, 'pending', ?, ?)").bind(id, deliveryKey, now, now).run();
-  await requireProviderAuthority(env);
-  const delivery = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json", "idempotency-key": deliveryKey }, body: JSON.stringify({ from: config.fromEmail, to: [member.email], subject, html: content }) });
-  const deliveryBody = await delivery.clone().json().catch(() => ({})) as { id?: string };
-  await db.prepare("UPDATE integration_deliveries SET status = ?, external_id = ?, updated_at = ? WHERE id = ?").bind(delivery.ok ? "delivered" : "failed", deliveryBody.id ?? null, new Date().toISOString(), id).run();
-  await writeAudit(db, principal, "resend.email_sent", "member", member.id, { kind: input.kind, ok: delivery.ok, meetingId: input.meetingId });
-  if (!delivery.ok) throw new EmailProviderError(delivery.status, await resendErrorMessage(delivery));
+  // One statement claims the delivery key, so two sends of the same email never run at once. A new key is inserted; a key
+  // whose last send failed, or stayed pending past STALE_EMAIL_DELIVERY_MINUTES (the Worker stopped mid-send), is reset to
+  // pending under this attempt's id. A delivered key, or one another request is sending, changes nothing and is refused.
+  const staleBefore = new Date(Date.parse(now) - STALE_EMAIL_DELIVERY_MINUTES * 60_000).toISOString();
+  const claim = await db.prepare(`INSERT INTO integration_deliveries (id, installation_id, provider, delivery_key, status, created_at, updated_at) VALUES (?, 'primary', 'resend', ?, 'pending', ?, ?)
+    ON CONFLICT(installation_id, provider, delivery_key) DO UPDATE SET id = excluded.id, status = 'pending', external_id = NULL, updated_at = excluded.updated_at
+    WHERE integration_deliveries.status = 'failed' OR (integration_deliveries.status = 'pending' AND integration_deliveries.updated_at < ?)`).bind(id, deliveryKey, now, now, staleBefore).run();
+  if (!claim.meta?.changes) throw new HttpError(409, "This email was already sent or is currently sending");
+  // Records this attempt's outcome, with the reason in the audit entry; the id match leaves a newer attempt's row alone.
+  const finish = (ok: boolean, details: { externalId?: string | null; status?: number; reason?: string }) => db.batch([
+    db.prepare("UPDATE integration_deliveries SET status = ?, external_id = ?, updated_at = ? WHERE installation_id = 'primary' AND id = ?").bind(ok ? "delivered" : "failed", details.externalId ?? null, new Date().toISOString(), id),
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'resend.email_sent', 'member', ?, ?, ?)")
+      .bind(crypto.randomUUID(), principal.userId, member.id, JSON.stringify({ kind: input.kind, ok, meetingId: input.meetingId, ...(details.status === undefined ? {} : { status: details.status }), ...(details.reason ? { reason: details.reason } : {}) }), new Date().toISOString()),
+  ]);
+  // Anything that stops the send after the claim marks it failed, so it never stays pending; a failure to record that is
+  // left to housekeeping, which marks the row failed once it is stale.
+  try { await requireProviderAuthority(env); }
+  catch (error) { await finish(false, { reason: "Attendance module authority was revoked before sending" }).catch(() => undefined); throw error; }
+  let delivery: Response;
+  try { delivery = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${config.apiKey}`, "content-type": "application/json", "idempotency-key": deliveryKey }, body: JSON.stringify({ from: config.fromEmail, to: [member.email], subject, html: content }) }); }
+  catch (error) {
+    await finish(false, { reason: (error instanceof Error ? error.message : String(error)).replace(/\s+/g, " ").trim().slice(0, 180) || "Request to Resend failed" }).catch(() => undefined);
+    throw new HttpError(502, "LancerLogin could not reach Resend. Try sending the email again.");
+  }
+  if (!delivery.ok) {
+    const error = new EmailProviderError(delivery.status, await resendErrorMessage(delivery));
+    await finish(false, { status: delivery.status, reason: error.message });
+    throw error;
+  }
+  const deliveryBody = await delivery.json().catch(() => ({})) as { id?: string };
+  await finish(true, { externalId: typeof deliveryBody.id === "string" ? deliveryBody.id : null });
   return response({ sent: true, kind: input.kind, memberId: member.id }, 202);
 }
 async function discordConfiguration(env: Env, allowUnverified = false): Promise<ProviderConfiguration> {
@@ -2966,6 +3080,7 @@ async function saveDiscordCommandSuccess(db: D1Database, config: Record<string, 
   const now = new Date().toISOString();
   await db.batch([db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', 'managed-commands', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(config.guildId, await discordCommandFingerprint(config), now), db.prepare("DELETE FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'managed-commands-error'")]);
 }
+const DISCORD_COMMAND_RECONCILE_COST: PassCost = { d1: 4, external: 8 };
 async function autoReconcileDiscordCommands(env: Env): Promise<void> {
   if (await deliveryPausedUntil(env) !== null) return;
   const db = requireDatabase(env);
@@ -2975,6 +3090,10 @@ async function autoReconcileDiscordCommands(env: Env): Promise<void> {
   const fingerprint = await discordCommandFingerprint(config);
   const success = await db.prepare("SELECT content_hash AS fingerprint FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'managed-commands'").first<{ fingerprint?: string }>();
   if (success?.fingerprint === fingerprint) return;
+  // Reconciling costs up to 8 Discord requests (the application, the server, the channel, the command list and a write
+  // for each managed command that differs) and 4 D1 queries (the claim, the result, its audit entry). The attempt is
+  // claimed only when the pass can cover all of it; otherwise the failed check brings the job back in a fresh slice.
+  if (!passAllows(env, DISCORD_COMMAND_RECONCILE_COST)) return;
   const now = new Date(); const cutoff = new Date(now.getTime() - 15 * 60_000).toISOString();
   const claim = await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, updated_at) VALUES ('primary', 'discord', 'managed-commands-attempt', ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, updated_at = excluded.updated_at WHERE integration_state.external_id != excluded.external_id OR integration_state.updated_at < ?").bind(fingerprint, now.toISOString(), cutoff).run();
   if (!claim.meta?.changes) return;
@@ -2983,6 +3102,8 @@ async function autoReconcileDiscordCommands(env: Env): Promise<void> {
     await saveDiscordCommandSuccess(db, config);
     await db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', NULL, 'discord.commands_auto_reconciled', 'integration', 'discord', ?, ?)").bind(crypto.randomUUID(), JSON.stringify({ guildId: config.guildId, commands: discordManagedCommands.map((command) => command.name) }), new Date().toISOString()).run();
   } catch (error) {
+    // The budget's refusal is not Discord's answer: nothing is recorded as a command failure.
+    if (error instanceof SchedulerBudgetError) throw error;
     const detail = error instanceof HttpError ? error.message.slice(0, 180) : "Discord command setup could not complete. Retry in Settings or check the saved bot connection.";
     await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', 'managed-commands-error', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(fingerprint, detail, new Date().toISOString()).run();
   }
@@ -2991,15 +3112,31 @@ const discordMessageMissing = (error: unknown): error is DiscordResponseError =>
 const discordChannelMissing = (error: unknown): error is DiscordResponseError => error instanceof DiscordResponseError && error.discordStatus === 404 && error.discordCode === 10_003;
 type DiscordMessageComponents = { type: number; components: { type: number; style: number; label: string; custom_id: string }[] }[];
 const discordAttendanceReportComponents: DiscordMessageComponents = [{ type: 1, components: [{ type: 2, style: 1, label: "View my attendance report", custom_id: "lancerlogin-attendance-report" }] }];
-async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string, string>, stateKey: string, content: string, pin = false, components?: DiscordMessageComponents): Promise<{ changed: boolean; messageId: string }> {
+/**
+ * Keeps one Discord message per `stateKey` showing `content`: edits it when the content changed, posts it when there is
+ * none, and pins it when asked. Its id and content hash are tracked in integration_state.
+ *
+ * An unchanged message is checked against Discord (does it still exist, is it still pinned) only when its row was last
+ * written `refreshMs` or longer ago; in between it costs no request. The check records its time on the row.
+ *
+ * Posting is idempotent. A pass may post only after claiming the post in D1, and the claim succeeds only while the
+ * tracked row is still what this pass read and no other pass claimed within DISCORD_TRACKED_MESSAGE_CLAIM_MS; a pass
+ * that loses resolves unchanged, leaving the message to the winner. The post also carries a nonce derived from the key
+ * and content with enforce_nonce, so if a pass is stopped after Discord accepted its message but before the id was
+ * saved, a retry within Discord's nonce window gets the same message back instead of a second one.
+ */
+async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string, string>, stateKey: string, content: string, pin = false, components?: DiscordMessageComponents, refreshMs = 0): Promise<{ changed: boolean; messageId: string }> {
   const payload = { content, allowed_mentions: { parse: [] }, ...(components ? { components } : {}) };
   const contentHash = await sha256(components ? JSON.stringify({ content, components }) : content); const messagesPath = `/channels/${encodeURIComponent(config.channelId)}/messages`;
-  const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = ?").bind(stateKey).first<{ externalId?: string; contentHash?: string }>();
-  let messageId = existing?.externalId ?? ""; let changed = false; let pinned = false;
+  const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash, updated_at AS updatedAt FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = ?").bind(stateKey).first<{ externalId?: string; contentHash?: string; updatedAt?: string }>();
+  let messageId = existing?.externalId ?? ""; let changed = false; let pinned = false; let checked = false;
   if (messageId) {
+    const unchanged = existing?.contentHash === contentHash;
+    // Checked recently enough: nothing to ask Discord.
+    if (unchanged && refreshMs > 0 && Date.parse(existing?.updatedAt ?? "") + refreshMs > Date.now()) return { changed: false, messageId };
     try {
       // An unchanged message is only checked: it still exists, and whether it is still pinned.
-      if (existing?.contentHash === contentHash) pinned = (await discordRequest<{ pinned?: unknown }>(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "GET" })).body?.pinned === true;
+      if (unchanged) { pinned = (await discordRequest<{ pinned?: unknown }>(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "GET" })).body?.pinned === true; checked = true; }
       else {
         const { body } = await discordRequest(config, `${messagesPath}/${encodeURIComponent(messageId)}`, { method: "PATCH", body: JSON.stringify(payload) });
         messageId = String(body.id ?? messageId); changed = true;
@@ -3009,15 +3146,27 @@ async function upsertTrackedDiscordMessage(db: D1Database, config: Record<string
       messageId = "";
     }
   }
+  const claimKey = `${stateKey}:post-claim`; let claimed = false;
   if (!messageId) {
-    const { body } = await discordRequest(config, messagesPath, { method: "POST", body: JSON.stringify(payload) });
+    const now = new Date();
+    const claim = await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, updated_at) SELECT 'primary', 'discord', ?, ?, ? WHERE COALESCE((SELECT external_id FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = ?), '') = ? ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, updated_at = excluded.updated_at WHERE integration_state.updated_at < ?")
+      .bind(claimKey, contentHash, now.toISOString(), stateKey, existing?.externalId ?? "", new Date(now.getTime() - DISCORD_TRACKED_MESSAGE_CLAIM_MS).toISOString()).run();
+    // Another pass is posting this message, or already has.
+    if ((claim.meta?.changes ?? 1) !== 1) return { changed: false, messageId: "" };
+    claimed = true;
+    const nonce = (await sha256(`discord-tracked-message:primary:${stateKey}:${contentHash}`)).slice(0, 25);
+    const { body } = await discordRequest(config, messagesPath, { method: "POST", body: JSON.stringify({ ...payload, nonce, enforce_nonce: true }) });
     messageId = String(body.id ?? ""); changed = true;
     if (!messageId) throw new HttpError(502, "Discord did not return a managed message identifier");
   }
   // The recorded message and content only change when Discord's did, and a message Discord reports pinned stays pinned.
-  if (changed || messageId !== existing?.externalId || existing?.contentHash !== contentHash) {
+  // A check with nothing to change records only its time, so the next one waits for the refresh interval.
+  if (changed || checked || messageId !== existing?.externalId || existing?.contentHash !== contentHash) {
     const now = new Date().toISOString();
-    await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', ?, ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(stateKey, messageId, contentHash, now).run();
+    const write = db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', ?, ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(stateKey, messageId, contentHash, now);
+    // The claim is released with the write that makes it unnecessary: later passes read the new message id.
+    if (claimed) await db.batch([write, db.prepare("DELETE FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = ?").bind(claimKey)]);
+    else await write.run();
   }
   if (pin && !pinned) await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/pins/${encodeURIComponent(messageId)}`, { method: "PUT" });
   return { changed, messageId };
@@ -3057,7 +3206,9 @@ async function linkDiscordMember(request: Request, env: Env): Promise<Response> 
   return response({ linked: Boolean(input.discordUserId), memberId: input.memberId });
 }
 async function linkedAbsentMembers(db: D1Database, meetingId: string): Promise<{ id: string; discordUserId: string }[]> {
-  const data = await policyData(db, { meetingId }); const meeting = data.meetings.find((item) => item.id === meetingId);
+  // The evaluation's nine policy reads start together, so they go to D1 as one batch: one query against the
+  // invocation's limit instead of nine.
+  const data = await policyData(coalescingDatabase(db), { meetingId }); const meeting = data.meetings.find((item) => item.id === meetingId);
   if (!meeting || !meeting.required) return [];
   const expected = new Set(evaluateAttendance({ ...data, meetings: [meeting], now: new Date(Math.max(Date.now(), Date.parse(meeting.attendanceClosesAt) + 1)).toISOString() }).filter((item) => item.member.active && item.rows.some((row) => row.meetingId === meetingId && row.eligibility === "required" && (row.disposition === "absent" || Date.now() >= Date.parse(meeting.attendanceClosesAt) && row.disposition === "active"))).map((item) => item.member.id));
   // The evaluation above projects to the close, where an open check-in counts as absent. Until then that member is still attending.
@@ -3093,7 +3244,24 @@ function discordAttendanceChunks(meeting: { id: string; title: string }, members
   if (current.length) chunks.push(current);
   return chunks;
 }
-async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string; title: string }, options: { force?: boolean; actor?: Principal } = {}): Promise<{ posted: boolean; duplicate?: boolean; linkedMissingCount: number; messageId?: string }> {
+/**
+ * How long after its last attempt a failed Discord notice or anomaly report may be tried again: the calendar operations'
+ * backoff (one minute, doubling from 2^attempts seconds, at most an hour), and never again once it has been attempted
+ * DISCORD_DELIVERY_MAX_ATTEMPTS times. A row with no readable time is due.
+ */
+const DISCORD_DELIVERY_MAX_ATTEMPTS = 16;
+const discordDeliveryRetryDelay = (attempts: number) => Math.min(3_600_000, Math.max(60_000, 2 ** Math.min(Math.max(attempts, 0), 12) * 1_000));
+function discordDeliveryRetryDue(attempts: number | null | undefined, updatedAt: string | null | undefined, now: number): boolean {
+  const count = Number(attempts ?? 0); if (count >= DISCORD_DELIVERY_MAX_ATTEMPTS) return false;
+  const last = Date.parse(updatedAt ?? ""); return !Number.isFinite(last) || last + discordDeliveryRetryDelay(count) <= now;
+}
+/**
+ * A notice still `pending` this long after its last write is one whose delivery never reached its own ending: the
+ * invocation was stopped (a platform limit, a deploy) before it could record success or failure. The scheduler then
+ * takes it up again; the recipients already recorded for its delivery are not mentioned twice.
+ */
+const DISCORD_ATTENDANCE_PENDING_STALE_MS = 10 * 60_000;
+async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string; title: string }, options: { force?: boolean; actor?: Principal; contestWindowHours?: number } = {}): Promise<{ posted: boolean; duplicate?: boolean; linkedMissingCount: number; messageId?: string }> {
   const config = await discordConfiguration(env); const db = requireDatabase(env); const now = new Date().toISOString();
   const existing = await db.prepare("SELECT status, message_id AS messageId, attempts, delivery_id AS deliveryId FROM discord_attendance_notifications WHERE installation_id = 'primary' AND meeting_id = ?").bind(meeting.id).first<{ status: string; messageId?: string; attempts: number; deliveryId?: string }>();
   if (!options.force && ["delivered", "no_recipients"].includes(existing?.status ?? "")) return { posted: existing?.status === "delivered", duplicate: true, linkedMissingCount: 0, messageId: existing?.messageId };
@@ -3102,12 +3270,14 @@ async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string
   if (!existing) await db.prepare("INSERT INTO discord_attendance_notifications (installation_id, meeting_id, status, attempts, updated_at, channel_id, delivery_id) VALUES ('primary', ?, 'pending', 1, ?, ?, ?)").bind(meeting.id, now, config.channelId, deliveryId).run();
   else if (resume) await db.prepare("UPDATE discord_attendance_notifications SET status = 'pending', attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND delivery_id = ?").bind(now, meeting.id, deliveryId).run();
   else await db.prepare("UPDATE discord_attendance_notifications SET status = 'pending', message_id = NULL, attempts = attempts + 1, last_error = NULL, processed_at = NULL, updated_at = ?, channel_id = ?, expires_at = NULL, deleted_at = NULL, thread_created_at = NULL, delivery_id = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, config.channelId, deliveryId, meeting.id).run();
-  const members = await linkedAbsentMembers(db, meeting.id);
-  if (!members.length) {
-    await db.prepare("UPDATE discord_attendance_notifications SET status = 'no_recipients', processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND delivery_id = ?").bind(now, now, meeting.id, deliveryId).run();
-    return { posted: false, linkedMissingCount: 0 };
-  }
+  // Everything after the `pending` write is inside the try, so any failure (the absence evaluation included) is
+  // recorded as failed with its reason and retried with backoff instead of leaving the notice pending.
   try {
+    const members = await linkedAbsentMembers(db, meeting.id);
+    if (!members.length) {
+      await db.prepare("UPDATE discord_attendance_notifications SET status = 'no_recipients', processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND delivery_id = ?").bind(now, now, meeting.id, deliveryId).run();
+      return { posted: false, linkedMissingCount: 0 };
+    }
     const delivered = resume ? await db.prepare("SELECT member_id AS memberId, message_id AS messageId FROM discord_attendance_recipients WHERE installation_id = 'primary' AND meeting_id = ? AND delivery_id = ? ORDER BY delivered_at, message_id").bind(meeting.id, deliveryId).all<{ memberId: string; messageId: string }>() : { results: [] };
     const deliveredRows = delivered.results ?? [];
     const deliveredMemberIds = new Set(deliveredRows.map((row) => row.memberId));
@@ -3126,13 +3296,16 @@ async function sendDiscordAttendanceNotification(env: Env, meeting: { id: string
       messageId ??= chunkMessageId;
     }
     if (!messageId) throw new HttpError(502, "Discord attendance delivery has no tracked message identifier");
-    const contestWindow = await db.prepare("SELECT discord_contest_window_hours AS contestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ contestWindowHours?: number }>();
-    const expiresAt = new Date(Date.parse(now) + (contestWindow?.contestWindowHours ?? 24) * 3_600_000).toISOString();
+    // The scheduled job has already read the contest window with its other settings.
+    const contestWindowHours = options.contestWindowHours ?? (await db.prepare("SELECT discord_contest_window_hours AS contestWindowHours FROM organization_settings WHERE installation_id = 'primary'").first<{ contestWindowHours?: number }>())?.contestWindowHours ?? 24;
+    const expiresAt = new Date(Date.parse(now) + contestWindowHours * 3_600_000).toISOString();
     await db.prepare("UPDATE discord_attendance_notifications SET status = 'delivered', message_id = ?, channel_id = ?, expires_at = ?, deleted_at = NULL, thread_created_at = NULL, processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND delivery_id = ?").bind(messageId, config.channelId, expiresAt, now, now, meeting.id, deliveryId).run();
     try { await createDiscordAttendanceThread(db, config, { meetingId: meeting.id, messageId, channelId: config.channelId, title: meeting.title }); } catch { /* The delivered notice remains tracked for a scheduled thread retry. */ }
     if (options.actor) await writeAudit(db, options.actor, "discord.missing_notified", "meeting", meeting.id, { linkedMissingCount: members.length, messageId, manual: true });
     return { posted: true, linkedMissingCount: members.length, messageId };
   } catch (error) {
+    // If this write cannot run either (the invocation is out of subrequests), the notice stays pending and the
+    // scheduler takes it up again once it is DISCORD_ATTENDANCE_PENDING_STALE_MS old.
     await db.prepare("UPDATE discord_attendance_notifications SET status = 'failed', last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND delivery_id = ?").bind(error instanceof Error ? error.message.slice(0, 300) : "Discord delivery failed", new Date().toISOString(), meeting.id, deliveryId).run();
     throw error;
   }
@@ -3156,12 +3329,18 @@ async function createDiscordAttendanceThread(db: D1Database, config: Record<stri
   const createdAt = new Date().toISOString();
   await db.prepare("UPDATE discord_attendance_notifications SET thread_created_at = ?, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND message_id = ?").bind(createdAt, createdAt, notice.meetingId, notice.messageId).run();
 }
-// Per pass: a notice costs up to 3 Discord requests and about 10 D1 queries, an expiry 2 or more Discord deletions and
-// about 5 D1 queries, and a thread retry one Discord request. Notices left over are found again on the next pass.
+// Per pass: an expiry costs 2 or more Discord deletions and about 5 D1 queries, and a thread retry one Discord request.
+// A notice costs up to 13 D1 queries when it fits one message: its own row (2), the absence evaluation (the report
+// revision before and after, the policy reads as one batch, and the linked members), the recipients already delivered
+// when it resumes, one batch per message, the delivered update and the thread's update, and the module authority check
+// that precedes each Discord request; and up to 3 Discord requests (the message, its thread, and a check when the
+// thread request fails). Each further message of a long absence list adds two queries and a request. (Before the policy
+// reads were batched a notice took about 20 queries against a budget of 12.) Notices left over are found again on the
+// next pass.
 const DISCORD_ATTENDANCE_NOTICES_PER_PASS = 2;
 const DISCORD_ATTENDANCE_EXPIRIES_PER_PASS = 2;
 const DISCORD_ATTENDANCE_THREAD_RETRIES_PER_PASS = 2;
-const DISCORD_ATTENDANCE_NOTICE_COST: PassCost = { d1: 12, external: 3 };
+const DISCORD_ATTENDANCE_NOTICE_COST: PassCost = { d1: 13, external: 3 };
 const DISCORD_ATTENDANCE_EXPIRY_COST: PassCost = { d1: 6, external: 3 };
 const DISCORD_ATTENDANCE_THREAD_COST: PassCost = { d1: 3, external: 1 };
 async function retryDiscordAttendanceThreads(env: Env, config: Record<string, string>, now: number): Promise<void> {
@@ -3210,12 +3389,17 @@ type DiscordNoticeRetraction = { meetingId: string; outcome: "retracted" | "pend
 // A meeting edit can change who is absent, so a live notice evaluated against the old schedule is withdrawn. Removing its tracking
 // row lets the scheduler post a fresh notice once the edited meeting's attendance closes, or on its next pass when that has passed.
 // A deletion Discord refuses expires the notice instead, so the scheduled cleanup keeps retrying and no new notice is posted.
-async function retractDiscordAttendanceNotices(env: Env, principal: Principal, meetingIds: string[]): Promise<DiscordNoticeRetraction[]> {
+// At most `inlineLimit` notices are withdrawn by the request itself; the rest expire now in one statement, as a CSV import's do,
+// so a request's cost does not grow with the number of meetings it edits.
+async function retractDiscordAttendanceNotices(env: Env, principal: Principal, meetingIds: string[], inlineLimit = Number.POSITIVE_INFINITY): Promise<DiscordNoticeRetraction[]> {
   if (!meetingIds.length) return [];
   const db = requireDatabase(env); const now = new Date().toISOString();
   const notices = await db.prepare("SELECT meeting_id AS meetingId, message_id AS messageId, channel_id AS channelId, delivery_id AS deliveryId FROM discord_attendance_notifications WHERE installation_id = 'primary' AND meeting_id IN (SELECT value FROM json_each(?)) AND status = 'delivered' AND message_id IS NOT NULL AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at > ?)").bind(JSON.stringify(meetingIds), now).all<{ meetingId: string; messageId: string; channelId?: string; deliveryId?: string }>();
-  const outcomes: DiscordNoticeRetraction[] = [];
-  for (const notice of notices.results ?? []) {
+  const outcomes: DiscordNoticeRetraction[] = []; const live = notices.results ?? []; const later = live.slice(inlineLimit);
+  if (later.length) {
+    try { await db.prepare("UPDATE discord_attendance_notifications SET expires_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id IN (SELECT value FROM json_each(?)) AND status = 'delivered' AND message_id IS NOT NULL AND deleted_at IS NULL").bind(now, now, JSON.stringify(later.map((notice) => notice.meetingId))).run(); } catch { /* The meeting edit is saved; the stale notices still expire on schedule. */ }
+  }
+  for (const notice of live.slice(0, inlineLimit)) {
     let outcome: DiscordNoticeRetraction["outcome"] = "failed";
     try {
       const config = await discordConfiguration(env);
@@ -3230,7 +3414,7 @@ async function retractDiscordAttendanceNotices(env: Env, principal: Principal, m
     } catch { /* The meeting edit is saved; the stale notice still expires on schedule. */ }
     outcomes.push({ meetingId: notice.meetingId, outcome });
   }
-  return outcomes;
+  return [...outcomes, ...later.map((notice) => ({ meetingId: notice.meetingId, outcome: "pending_deletion" as const }))];
 }
 async function processDiscordAttendanceNotifications(env: Env, now = Date.now()): Promise<void> {
   const discord = await integrationRecord(env, "discord"); if (!discord || discord.enabled === 0 || !discord.verifiedAt) return;
@@ -3239,22 +3423,31 @@ async function processDiscordAttendanceNotifications(env: Env, now = Date.now())
   const config = await discordConfiguration(env);
   await expireDiscordAttendanceNotifications(env, config, settings?.contestWindowHours ?? 24, now);
   await retryDiscordAttendanceThreads(env, config, now);
-  const meetings = await db.prepare("SELECT m.id, m.title, m.ends_at AS endsAt, n.status AS notificationStatus, n.updated_at AS notificationUpdatedAt FROM meetings m LEFT JOIN discord_attendance_notifications n ON n.installation_id = m.installation_id AND n.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.required = 1 AND m.is_test = 0 AND m.ends_at IS NOT NULL ORDER BY m.ends_at DESC LIMIT 100").all<{ id: string; title: string; endsAt: string; notificationStatus?: string; notificationUpdatedAt?: string }>();
-  let sent = 0;
+  const meetings = await db.prepare("SELECT m.id, m.title, m.ends_at AS endsAt, n.status AS notificationStatus, n.updated_at AS notificationUpdatedAt, n.attempts AS notificationAttempts FROM meetings m LEFT JOIN discord_attendance_notifications n ON n.installation_id = m.installation_id AND n.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.required = 1 AND m.is_test = 0 AND m.ends_at IS NOT NULL ORDER BY m.ends_at DESC LIMIT 100").all<{ id: string; title: string; endsAt: string; notificationStatus?: string; notificationUpdatedAt?: string; notificationAttempts?: number }>();
+  // Notices never attempted go first. A failed notice, or one left pending by an invocation that was stopped, is tried
+  // again only when its backoff has passed, and no longer once it has used its attempts (Send Discord absence notice on the meeting still sends it).
+  const fresh = [], retries = [];
   for (const meeting of meetings.results ?? []) {
-    const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30)); const newlyEligible = cutoff <= now; const retry = meeting.notificationStatus === "failed";
-    if (!((!meeting.notificationStatus && newlyEligible) || retry)) continue;
-    // Only new notices ask for another slice right away; failed ones retry at the job's normal interval.
+    if (!meeting.notificationStatus) { if (Date.parse(attendanceClosesAt(meeting.endsAt, settings?.lateScanMinutes ?? 30)) <= now) fresh.push(meeting); continue; }
+    const stale = meeting.notificationStatus === "pending" && !(Date.parse(meeting.notificationUpdatedAt ?? "") + DISCORD_ATTENDANCE_PENDING_STALE_MS > now);
+    if ((meeting.notificationStatus === "failed" || stale) && discordDeliveryRetryDue(meeting.notificationAttempts, meeting.notificationUpdatedAt, now)) retries.push(meeting);
+  }
+  let sent = 0;
+  for (const meeting of [...fresh, ...retries]) {
+    // Only new notices ask for another slice right away; retries wait for the job's normal interval and their backoff.
     if (sent >= DISCORD_ATTENDANCE_NOTICES_PER_PASS) { if (!meeting.notificationStatus) passMore(env); break; }
-    if (!passAllows(env, DISCORD_ATTENDANCE_NOTICE_COST)) break;
-    sent += 1; await sendDiscordAttendanceNotification(env, meeting);
+    // A new notice the budget cannot cover asks for another slice; a retry waits for the job's next regular run.
+    if (!(meeting.notificationStatus ? passFits(env, DISCORD_ATTENDANCE_NOTICE_COST) : passAllows(env, DISCORD_ATTENDANCE_NOTICE_COST))) break;
+    sent += 1;
+    // One notice that fails (it is recorded as failed) must not hold back the others.
+    try { await sendDiscordAttendanceNotification(env, meeting, { contestWindowHours: settings?.contestWindowHours ?? 24 }); } catch (error) { if (error instanceof SchedulerBudgetError) throw error; }
   }
 }
 type DiscordAnomalyRow = { memberId: string; firstName: string; lastName: string; checkedInAt?: string; checkedOutAt?: string; lateMinutes?: number; earlyMinutes?: number };
 const discordReportText = (value: string, limit: number) => value.replace(/[\r\n\t]+/g, " ").replace(/[\\`*_~|<>@]/g, "").replace(/\s+/g, " ").trim().slice(0, limit);
 const discordReportMinutes = (minutes: number) => Number(minutes.toFixed(1)).toString();
-function discordAnomalyReportContent(meeting: { title: string; startsAt: string }, rows: DiscordAnomalyRow[]): string {
-  const header = `**Attendance anomalies · ${discordReportText(meeting.title, 120)}**\nMeeting date: ${meeting.startsAt.slice(0, 10)}`;
+function discordAnomalyReportContent(meeting: { title: string; startsAt: string }, rows: DiscordAnomalyRow[], timeZone: string): string {
+  const header = `**Attendance anomalies · ${discordReportText(meeting.title, 120)}**\nMeeting date: ${memberDateText(meeting.startsAt, timeZone)}`;
   const lines = rows.map((row) => {
     const values = [row.lateMinutes !== undefined ? `arrived ${discordReportMinutes(row.lateMinutes)} min late` : "", row.earlyMinutes !== undefined ? `left ${discordReportMinutes(row.earlyMinutes)} min early` : ""].filter(Boolean).join("; ");
     return `• ${discordReportText(`${row.firstName} ${row.lastName}`, 120)} (${discordReportText(row.memberId, 80)}) — ${values}`;
@@ -3267,24 +3460,27 @@ function discordAnomalyReportContent(meeting: { title: string; startsAt: string 
   const omitted = lines.length - included.length;
   return `${header}\n${included.join("\n")}${omitted ? `\n… ${omitted} more anomalous member${omitted === 1 ? "" : "s"} omitted.` : ""}`;
 }
-async function sendDiscordAnomalyReport(env: Env, config: Record<string, string>, channelId: string, meeting: { id: string; title: string; startsAt: string; endsAt: string }, thresholds: { late: number; early: number }): Promise<void> {
+async function sendDiscordAnomalyReport(env: Env, config: Record<string, string>, channelId: string, meeting: { id: string; title: string; startsAt: string; endsAt: string }, thresholds: { late: number; early: number }, timeZone: string): Promise<void> {
   const db = requireDatabase(env); const now = new Date().toISOString();
   const existing = await db.prepare("SELECT status, nonce, message_id AS messageId, attempts FROM discord_anomaly_reports WHERE installation_id = 'primary' AND meeting_id = ?").bind(meeting.id).first<{ status: string; nonce?: string; messageId?: string; attempts: number }>();
   if (["delivered", "no_anomalies"].includes(existing?.status ?? "")) return;
   const nonce = existing?.nonce ?? (await sha256(`discord-anomaly-report:primary:${meeting.id}`)).slice(0, 25);
   if (!existing) await db.prepare("INSERT INTO discord_anomaly_reports (installation_id, meeting_id, channel_id, status, nonce, attempts, updated_at) VALUES ('primary', ?, ?, 'pending', ?, 1, ?)").bind(meeting.id, channelId, nonce, now).run();
   else await db.prepare("UPDATE discord_anomaly_reports SET channel_id = ?, status = 'pending', attempts = attempts + 1, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(channelId, now, meeting.id).run();
-  const raw = await db.prepare("SELECT m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') AS checkedOutAt FROM members m WHERE m.installation_id = 'primary' AND COALESCE(m.attendance_required_from, substr(m.created_at, 1, 10)) <= substr(?, 1, 10) AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ?) OR EXISTS (SELECT 1 FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ?)) ORDER BY m.last_name, m.first_name, m.external_id").bind(meeting.id, meeting.id, meeting.startsAt, meeting.id, meeting.id).all<Omit<DiscordAnomalyRow, "lateMinutes" | "earlyMinutes">>();
-  const anomalies = (raw.results ?? []).flatMap((row) => {
-    const values = attendanceAnomalyMinutes({ ...meeting, ...row }, thresholds.late, thresholds.early);
-    return values.lateMinutes === undefined && values.earlyMinutes === undefined ? [] : [{ ...row, ...values }];
-  });
-  if (!anomalies.length) {
-    await db.prepare("UPDATE discord_anomaly_reports SET status = 'no_anomalies', processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, now, meeting.id).run();
-    return;
-  }
+  // From here every failure is recorded on the report, so it is retried with backoff rather than left pending.
   try {
-    const payload = { content: discordAnomalyReportContent(meeting, anomalies), allowed_mentions: { parse: [] }, nonce, enforce_nonce: true };
+    const raw = await db.prepare("SELECT m.external_id AS memberId, m.first_name AS firstName, m.last_name AS lastName, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_in') AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ? AND e.action = 'check_out') AS checkedOutAt, m.attendance_required_from AS attendanceRequiredFrom, m.created_at AS rosterAddedAt, (SELECT time_zone FROM organization_settings WHERE installation_id = 'primary') AS timeZone FROM members m WHERE m.installation_id = 'primary' AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ?) OR EXISTS (SELECT 1 FROM attendance_events e WHERE e.installation_id = m.installation_id AND e.member_id = m.id AND e.meeting_id = ?)) ORDER BY m.last_name, m.first_name, m.external_id").bind(meeting.id, meeting.id, meeting.id, meeting.id).all<Omit<DiscordAnomalyRow, "lateMinutes" | "earlyMinutes"> & { attendanceRequiredFrom?: string | null; rosterAddedAt?: string | null; timeZone?: string | null }>();
+    // Participation starts on an organization-local date, so the meeting's local date decides (the same read carries the time zone).
+    const participating = (raw.results ?? []).filter((row) => { const timeZone = row.timeZone || "UTC"; const startsOn = participationStartDate(row, timeZone); return !startsOn || startsOn <= policyLocalDate(meeting.startsAt, timeZone); });
+    const anomalies = participating.flatMap(({ attendanceRequiredFrom: _from, rosterAddedAt: _added, timeZone: _zone, ...row }) => {
+      const values = attendanceAnomalyMinutes({ ...meeting, ...row }, thresholds.late, thresholds.early);
+      return values.lateMinutes === undefined && values.earlyMinutes === undefined ? [] : [{ ...row, ...values }];
+    });
+    if (!anomalies.length) {
+      await db.prepare("UPDATE discord_anomaly_reports SET status = 'no_anomalies', processed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, now, meeting.id).run();
+      return;
+    }
+    const payload = { content: discordAnomalyReportContent(meeting, anomalies, timeZone), allowed_mentions: { parse: [] }, nonce, enforce_nonce: true };
     const { body } = await discordRequest(config, `/channels/${encodeURIComponent(channelId)}/messages`, { method: "POST", body: JSON.stringify(payload) });
     const messageId = String(body.id ?? "");
     if (!messageId) throw new HttpError(502, "Discord did not return an anomaly-report message identifier");
@@ -3296,27 +3492,32 @@ async function sendDiscordAnomalyReport(env: Env, config: Record<string, string>
   }
 }
 // Per pass: one Discord message and about 5 D1 queries per report. Reports left over stay pending for the next pass.
+// Reports never attempted go first, oldest meeting first. One that failed (or was left pending by an invocation that
+// was stopped) is tried again only after its backoff, and no longer once it has used DISCORD_DELIVERY_MAX_ATTEMPTS, so
+// reports that keep failing can neither crowd out a new one nor keep the job asking for another slice.
 const DISCORD_ANOMALY_REPORTS_PER_PASS = 3;
 const DISCORD_ANOMALY_REPORT_COST: PassCost = { d1: 6, external: 1 };
 async function processDiscordAnomalyReports(env: Env, now = Date.now()): Promise<void> {
   const discord = await integrationRecord(env, "discord"); if (!discord || discord.enabled === 0 || !discord.verifiedAt) return;
   const db = requireDatabase(env);
-  const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes, anomaly_early_threshold_minutes AS anomalyEarlyThresholdMinutes, discord_anomaly_reports_enabled AS enabled, discord_anomaly_report_channel_id AS channelId, discord_anomaly_reports_enabled_at AS enabledAt FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes?: number; anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number; enabled?: number; channelId?: string; enabledAt?: string }>();
+  const settings = await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, anomaly_late_threshold_minutes AS anomalyLateThresholdMinutes, anomaly_early_threshold_minutes AS anomalyEarlyThresholdMinutes, discord_anomaly_reports_enabled AS enabled, discord_anomaly_report_channel_id AS channelId, discord_anomaly_reports_enabled_at AS enabledAt, time_zone AS timeZone FROM organization_settings WHERE installation_id = 'primary'").first<{ lateScanMinutes?: number; anomalyLateThresholdMinutes?: number; anomalyEarlyThresholdMinutes?: number; enabled?: number; channelId?: string; enabledAt?: string; timeZone?: string | null }>();
   if (!settings?.enabled || !settings.channelId || !settings.enabledAt) return;
   const lateScanMinutes = settings.lateScanMinutes ?? 30; const enabledAt = Date.parse(settings.enabledAt);
   if (!Number.isFinite(enabledAt)) return;
   const earliestEnd = new Date(enabledAt - lateScanMinutes * 60_000).toISOString();
-  const meetings = await db.prepare("SELECT m.id, m.title, m.starts_at AS startsAt, m.ends_at AS endsAt, r.status AS reportStatus FROM meetings m LEFT JOIN discord_anomaly_reports r ON r.installation_id = m.installation_id AND r.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.is_test = 0 AND m.ends_at IS NOT NULL AND m.ends_at >= ? AND (r.status IS NULL OR r.status IN ('pending', 'failed')) ORDER BY m.ends_at ASC LIMIT 100").bind(earliestEnd).all<{ id: string; title: string; startsAt: string; endsAt: string; reportStatus?: string }>();
+  // Only meetings that have ended can be due, so meetings still to come no longer take up the 100 rows.
+  const meetings = await db.prepare("SELECT m.id, m.title, m.starts_at AS startsAt, m.ends_at AS endsAt, r.status AS reportStatus, r.attempts AS reportAttempts, r.updated_at AS reportUpdatedAt FROM meetings m LEFT JOIN discord_anomaly_reports r ON r.installation_id = m.installation_id AND r.meeting_id = m.id WHERE m.installation_id = 'primary' AND m.deleted_at IS NULL AND m.is_test = 0 AND m.ends_at IS NOT NULL AND m.ends_at >= ? AND m.ends_at <= ? AND (r.status IS NULL OR (r.status IN ('pending', 'failed') AND r.attempts < ?)) ORDER BY (r.status IS NOT NULL), m.ends_at ASC LIMIT 100").bind(earliestEnd, new Date(now).toISOString(), DISCORD_DELIVERY_MAX_ATTEMPTS).all<{ id: string; title: string; startsAt: string; endsAt: string; reportStatus?: string; reportAttempts?: number; reportUpdatedAt?: string }>();
   if (await deliveryPausedUntil(env) !== null) return;
   const config = await discordConfiguration(env); let attempted = 0;
   for (const meeting of meetings.results ?? []) {
     const cutoff = Date.parse(attendanceClosesAt(meeting.endsAt, lateScanMinutes));
     if (cutoff < enabledAt || cutoff > now) continue;
-    // Only reports never attempted ask for another slice right away; failed ones retry at the job's normal interval.
+    if (meeting.reportStatus && !discordDeliveryRetryDue(meeting.reportAttempts, meeting.reportUpdatedAt, now)) continue;
+    // Only reports never attempted ask for another slice right away; retries wait for their backoff.
     if (attempted >= DISCORD_ANOMALY_REPORTS_PER_PASS) { if (!meeting.reportStatus) passMore(env); break; }
-    if (!passAllows(env, DISCORD_ANOMALY_REPORT_COST)) break;
+    if (!(meeting.reportStatus ? passFits(env, DISCORD_ANOMALY_REPORT_COST) : passAllows(env, DISCORD_ANOMALY_REPORT_COST))) break;
     attempted += 1;
-    try { await sendDiscordAnomalyReport(env, config, settings.channelId, meeting, { late: settings.anomalyLateThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES, early: settings.anomalyEarlyThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES }); } catch { /* One failed report must not delay other eligible meetings. */ }
+    try { await sendDiscordAnomalyReport(env, config, settings.channelId, meeting, { late: settings.anomalyLateThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES, early: settings.anomalyEarlyThresholdMinutes ?? DEFAULT_ANOMALY_THRESHOLD_MINUTES }, settings.timeZone || "UTC"); } catch (error) { if (error instanceof SchedulerBudgetError) throw error; /* One failed report must not delay other eligible meetings. */ }
   }
 }
 async function discordMissing(request: Request, env: Env): Promise<Response> {
@@ -3373,7 +3574,7 @@ async function discordAttendanceReport(db: D1Database, discordUserId: string): P
   const heading = "**Your attendance report**\n" + policySummaryText(summary);
   const absent = summary.rows.filter((row) => row.regularEligible && row.disposition === "absent");
   let content = `${heading}\n\n${absent.length ? "**Missed required meetings**" : "No missed required meetings in the current reporting period."}`;
-  for (const row of absent) { const meeting = meetings.get(row.meetingId); const line = `\n• ${meeting?.startsAt.slice(0, 10) ?? ""} - ${meeting?.title ?? "Meeting"} (${row.audience})`; if ((content + line).length > 1850) { content += "\nMore meetings omitted to fit Discord."; break; } content += line; }
+  for (const row of absent) { const meeting = meetings.get(row.meetingId); const line = `\n• ${meeting ? memberDateText(meeting.startsAt, report.timeZone) : ""} - ${meeting?.title ?? "Meeting"} (${row.audience})`; if ((content + line).length > 1850) { content += "\nMore meetings omitted to fit Discord."; break; } content += line; }
   if (summary.belowTargetWeeks.length) { const line = `\n\nWeeks below target: ${summary.belowTargetWeeks.map((week) => week.weekStartsOn).join(", ")}`; if ((content + line).length <= 2000) content += line; }
   return content;
 }
@@ -3770,9 +3971,11 @@ const DISCORD_LABEL_ROLE_JOB_START_COST: PassCost = { d1: 6 + (DISCORD_LABEL_ROL
 // on top of about 15 for the job, so that pass does fewer members; the dashboard's polling and the scheduler do the rest.
 const DISCORD_LABEL_ROLE_ITEMS_AFTER_REQUEST = 4;
 // The one-label routes cost more before their pass starts, so their passes do fewer members. Sync to Discord and Retry
-// failed use 18 subrequests themselves (42 with a pass of 3 members); turning on two-way sync uses 24 (45 with 2).
+// failed use 18 subrequests themselves (42 with a pass of 3 members). Turning on two-way sync uses about 24 by itself
+// and runs no pass of its own: with one it reached about 46 of 50, and a single rate-limited retry put it over. The
+// role changes it queues are the label job's, which its response pokes (a Durable Object runs it within seconds; on
+// the cron fallback the dashboard's polling and the next tick do).
 const DISCORD_LABEL_ROLE_ITEMS_AFTER_SINGLE_SYNC = 3;
-const DISCORD_LABEL_ROLE_ITEMS_AFTER_TWO_WAY_CONFIRM = 2;
 /**
  * Runs the oldest due role sync job for up to `itemLimit` members. In a scheduled pass the job is claimed only when the
  * pass can still afford its checks and at least one member; otherwise it is left untouched and the pass reports more
@@ -3895,7 +4098,12 @@ async function processDiscordTwoWayLabels(env: Env): Promise<boolean> {
   // Disabled or unverified Discord pauses two-way checks until it is verified again.
   try { config = await discordConfiguration(env); } catch (error) { if (error instanceof HttpError && error.status === 503) return false; throw error; }
   const { server, deps } = await discordTwoWayServer(db, config);
-  const results = await pollTwoWayLabels(db, server, deps, DISCORD_TWO_WAY_LABELS_PER_PASS, () => passAllows(env, DISCORD_TWO_WAY_LABEL_COST), labelIds);
+  // The cron fallback runs the role job a check queues later in the same pass, and D1 queries and Discord requests
+  // share one limit, so there a further label is checked only while that job could still start afterwards. On the
+  // Durable Object the job has the next slice to itself.
+  const labelCost: PassCost = env.schedulerPass?.steps ? DISCORD_TWO_WAY_LABEL_COST : { d1: (DISCORD_TWO_WAY_LABEL_COST.d1 ?? 0) + (DISCORD_LABEL_ROLE_JOB_START_COST.d1 ?? 0), external: DISCORD_LABEL_ROLE_JOB_START_COST.external ?? 0 };
+  let first = true;
+  const results = await pollTwoWayLabels(db, server, deps, DISCORD_TWO_WAY_LABELS_PER_PASS, () => { const cost = first ? DISCORD_TWO_WAY_LABEL_COST : labelCost; first = false; return passAllows(env, cost); }, labelIds);
   return results.some((result) => Boolean(result.jobId));
 }
 async function discordTwoWayPreview(request: Request, env: Env): Promise<Response> {
@@ -3904,12 +4112,11 @@ async function discordTwoWayPreview(request: Request, env: Env): Promise<Respons
   const db = requireDatabase(env); const { server, deps } = await discordTwoWayServer(db, await discordConfiguration(env));
   return response(await previewTwoWay(db, principal.userId, input.labelId, server, deps));
 }
-async function discordTwoWayConfirm(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
+async function discordTwoWayConfirm(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const input = await parseJson<Record<string, unknown>>(request);
   const db = requireDatabase(env); const { server, deps } = await discordTwoWayServer(db, await discordConfiguration(env));
-  const result = await confirmTwoWay(db, principal.userId, input, server, deps);
-  if (result.jobId && context) context.waitUntil(processDiscordLabelRoleJobs(env, result.jobId, DISCORD_LABEL_ROLE_ITEMS_AFTER_TWO_WAY_CONFIRM));
-  return response(result);
+  // The queued role changes run in the scheduler, not here: see DISCORD_LABEL_ROLE_ITEMS_AFTER_SINGLE_SYNC.
+  return response(await confirmTwoWay(db, principal.userId, input, server, deps));
 }
 /** Turning two-way sync on needs a reviewed reconciliation, so this only switches a label back to Dashboard to Discord. */
 async function discordLabelDirection(request: Request, env: Env, labelId: string): Promise<Response> {
@@ -4037,17 +4244,13 @@ async function discordInteraction(request: Request, env: Env): Promise<Response>
     return contest?.status === "open" ? discordEphemeral("Your attendance contest was recorded for review. Your attendance has not been changed.") : discordEphemeral(`Your attendance contest was already reviewed with status ${contest?.status ?? "unknown"}.`);
   } catch (error) { return discordEphemeral(error instanceof HttpError ? error.message : "Attendance is unavailable. Ask an Admin to review the module."); }
 }
-type DiscordCalendarOutcome = { meetingId: string; title: string; status: "synced" | "queued" | "skipped" | "failed"; reason?: string };
-type DiscordCalendarSyncSummary = { synced: number; queued: number; skipped: number; failed: number; outcomes: DiscordCalendarOutcome[] };
-type DiscordCalendarOperation = { meetingId: string; generation: number; action: "upsert" | "delete"; eventId?: string | null; status: "pending" | "processing" | "delivered" | "failed"; attempts: number; revision: number; actorUserId?: string | null; leaseToken?: string };
-type DiscordCalendarSyncCursor = { startsAt: string; id: string };
+type DiscordCalendarSyncSummary = CalendarQueueSummary["discord"];
+type DiscordCalendarOutcome = DiscordCalendarSyncSummary["outcomes"][number];
+type DiscordCalendarOperation = { meetingId: string; generation: number; action: "upsert" | "delete"; eventId?: string | null; status: "pending" | "processing" | "delivered" | "failed"; attempts: number; revision: number; actorUserId?: string | null; leaseToken?: string; claimedBefore?: string | null };
 // Per pass: up to 2 Discord requests per operation (3 attempts each on a short 429) and about 8 D1 queries, plus one
-// scheduled-event list shared by the batch. The manual Sync all pages through meetings in batches of the same size.
+// scheduled-event list shared by the batch. An event removal left by Delete attendance data takes an operation's place.
 const DISCORD_CALENDAR_OPERATION_BATCH_LIMIT = 3;
 const DISCORD_CALENDAR_OPERATION_COST: PassCost = { d1: 10, external: 3 };
-const DISCORD_CALENDAR_SYNC_ALL_LIMIT = 100;
-/** Discord caps a server at 100 scheduled events, so LancerLogin only creates events for meetings starting within 60 days. */
-const DISCORD_CALENDAR_HORIZON_DAYS = 60;
 const discordCalendarHorizon = (now: number) => new Date(now + DISCORD_CALENDAR_HORIZON_DAYS * 86_400_000).toISOString();
 const discordCalendarEmptySummary = (): DiscordCalendarSyncSummary => ({ synced: 0, queued: 0, skipped: 0, failed: 0, outcomes: [] });
 async function discordCalendarIsReady(env: Env): Promise<boolean> { const record = await integrationRecord(env, "discord"); return Boolean(record?.enabled && record.verifiedAt); }
@@ -4058,85 +4261,40 @@ function discordCalendarRetryAt(attempts: number, error: unknown): string | null
   return new Date(Date.now() + Math.min(3_600_000, Math.max(60_000, 2 ** Math.min(attempts, 12) * 1_000, requested))).toISOString();
 }
 async function markDiscordCalendarFailure(db: D1Database, operation: DiscordCalendarOperation, error: unknown): Promise<string> {
-  const message = (error instanceof Error ? error.message : "Discord calendar delivery failed. LancerLogin will retry automatically.").slice(0, 300); const attempts = Number(operation.attempts ?? 0) + 1; const now = new Date().toISOString();
+  const message = (error instanceof Error ? error.message : "Discord calendar delivery failed. LancerLogin will retry automatically.").slice(0, 300); const attempts = Number(operation.attempts ?? 0) + 1; const now = new Date().toISOString(); const retryAt = discordCalendarRetryAt(attempts, error);
   await db.batch([
     db.prepare("UPDATE discord_calendar_event_mappings SET last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND EXISTS (SELECT 1 FROM discord_calendar_operations WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = ? AND lease_token = ?)").bind(message, now, operation.meetingId, operation.generation, operation.meetingId, operation.generation, operation.action, operation.leaseToken),
-    db.prepare("UPDATE discord_calendar_operations SET status = 'failed', attempts = ?, next_attempt_at = ?, lease_token = NULL, lease_expires_at = NULL, last_error = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = ? AND lease_token = ?").bind(attempts, discordCalendarRetryAt(attempts, error), message, now, operation.meetingId, operation.generation, operation.action, operation.leaseToken),
+    // A meeting change queued while this was in flight (a newer revision) keeps its operation pending and due now.
+    db.prepare("UPDATE discord_calendar_operations SET status = CASE WHEN revision = ? THEN 'failed' ELSE 'pending' END, attempts = ?, next_attempt_at = CASE WHEN revision = ? THEN ? ELSE COALESCE(?, ?) END, lease_token = NULL, lease_expires_at = NULL, last_error = CASE WHEN revision = ? THEN ? ELSE NULL END, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = ? AND lease_token = ?").bind(operation.revision, attempts, operation.revision, retryAt, retryAt, now, operation.revision, message, now, operation.meetingId, operation.generation, operation.action, operation.leaseToken),
   ]);
   return message;
 }
-async function enqueueDiscordCalendarUpsert(db: D1Database, env: Env, principal: Principal | null, ids: string[]): Promise<DiscordCalendarSyncSummary> {
-  const ready = await discordCalendarIsReady(env); const now = new Date().toISOString(); const queuedIds: string[] = [];
-  for (const id of ids) {
-    const meeting = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(id).first<{ id: string }>();
-    if (!meeting) continue;
-    let mapping = await db.prepare("SELECT generation, active FROM discord_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ?").bind(id).first<{ generation: number; active: number }>();
-    if ((!mapping || !mapping.active) && !ready) continue;
-    if (!mapping) {
-      await db.prepare("INSERT INTO discord_calendar_event_mappings (installation_id, meeting_id, event_id, generation, active, updated_at) VALUES ('primary', ?, NULL, 1, 1, ?)").bind(id, now).run();
-      mapping = { generation: 1, active: 1 };
-    } else if (!mapping.active) {
-      const generation = Number(mapping.generation) + 1;
-      await db.prepare("UPDATE discord_calendar_event_mappings SET event_id = NULL, generation = ?, active = 1, synced_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(generation, now, id).run();
-      mapping = { generation, active: 1 };
-    }
-    await db.prepare("INSERT INTO discord_calendar_operations (installation_id, meeting_id, generation, action, event_id, status, attempts, next_attempt_at, actor_user_id, updated_at) VALUES ('primary', ?, ?, 'upsert', NULL, 'pending', 0, ?, ?, ?) ON CONFLICT(installation_id, meeting_id, generation, action) DO UPDATE SET revision = discord_calendar_operations.revision + 1, status = CASE WHEN discord_calendar_operations.status = 'processing' AND discord_calendar_operations.lease_expires_at > excluded.updated_at THEN 'processing' ELSE 'pending' END, next_attempt_at = excluded.next_attempt_at, last_error = NULL, actor_user_id = COALESCE(excluded.actor_user_id, discord_calendar_operations.actor_user_id), updated_at = excluded.updated_at").bind(id, mapping.generation, now, principal?.userId ?? null, now).run();
-    queuedIds.push(id);
-  }
-  return ready && queuedIds.length ? processDiscordCalendarOperations(env, queuedIds) : { ...discordCalendarEmptySummary(), queued: queuedIds.length, outcomes: queuedIds.map((meetingId) => ({ meetingId, title: "Meeting", status: "queued", reason: "Discord delivery is paused until the integration is enabled and verified" })) };
-}
-async function enqueueDiscordCalendarDelete(db: D1Database, env: Env, principal: Principal | null, ids: string[]): Promise<DiscordCalendarSyncSummary> {
-  const now = new Date().toISOString(); const queuedIds: string[] = [];
-  for (const id of ids) {
-    const mapping = await db.prepare("SELECT event_id AS eventId, generation FROM discord_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ?").bind(id).first<{ eventId?: string | null; generation: number }>();
-    if (!mapping) continue;
-    await db.prepare("UPDATE discord_calendar_operations SET revision = revision + 1, status = CASE WHEN status = 'processing' AND lease_expires_at > ? THEN 'processing' ELSE 'delivered' END, next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'upsert' AND status != 'delivered'").bind(now, now, id, mapping.generation).run();
-    await db.prepare("UPDATE discord_calendar_event_mappings SET active = 0, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(now, id).run();
-    if (!mapping.eventId) continue;
-    await db.prepare("INSERT INTO discord_calendar_operations (installation_id, meeting_id, generation, action, event_id, status, attempts, next_attempt_at, actor_user_id, updated_at) VALUES ('primary', ?, ?, 'delete', ?, 'pending', 0, ?, ?, ?) ON CONFLICT(installation_id, meeting_id, generation, action) DO UPDATE SET event_id = excluded.event_id, revision = discord_calendar_operations.revision + 1, status = CASE WHEN discord_calendar_operations.status = 'processing' AND discord_calendar_operations.lease_expires_at > excluded.updated_at THEN 'processing' ELSE 'pending' END, next_attempt_at = excluded.next_attempt_at, last_error = NULL, actor_user_id = COALESCE(excluded.actor_user_id, discord_calendar_operations.actor_user_id), updated_at = excluded.updated_at").bind(id, mapping.generation, mapping.eventId, now, principal?.userId ?? null, now).run();
-    queuedIds.push(id);
-  }
-  return queuedIds.length && await discordCalendarIsReady(env) ? processDiscordCalendarOperations(env, queuedIds) : { ...discordCalendarEmptySummary(), queued: queuedIds.length };
-}
-async function enqueueDiscordCalendarRestore(db: D1Database, env: Env, principal: Principal | null, ids: string[]): Promise<DiscordCalendarSyncSummary> {
-  const now = new Date().toISOString(); const ready = await discordCalendarIsReady(env); const queuedIds: string[] = []; const missingIds: string[] = [];
-  for (const id of ids) {
-    const mapping = await db.prepare("SELECT event_id AS eventId, generation FROM discord_calendar_event_mappings WHERE installation_id = 'primary' AND meeting_id = ?").bind(id).first<{ eventId?: string | null; generation: number }>();
-    if (!mapping) { if (ready) missingIds.push(id); continue; }
-    await db.prepare("UPDATE discord_calendar_operations SET revision = revision + 1, status = CASE WHEN status = 'processing' AND lease_expires_at > ? THEN 'processing' ELSE 'delivered' END, next_attempt_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = 'upsert' AND status != 'delivered'").bind(now, now, id, mapping.generation).run();
-    if (mapping.eventId) await db.prepare("INSERT INTO discord_calendar_operations (installation_id, meeting_id, generation, action, event_id, status, attempts, next_attempt_at, actor_user_id, updated_at) VALUES ('primary', ?, ?, 'delete', ?, 'pending', 0, ?, ?, ?) ON CONFLICT(installation_id, meeting_id, generation, action) DO UPDATE SET revision = discord_calendar_operations.revision + 1, status = CASE WHEN discord_calendar_operations.status = 'processing' AND discord_calendar_operations.lease_expires_at > excluded.updated_at THEN 'processing' ELSE 'pending' END, next_attempt_at = excluded.next_attempt_at, last_error = NULL, updated_at = excluded.updated_at").bind(id, mapping.generation, mapping.eventId, now, principal?.userId ?? null, now).run();
-    const generation = Number(mapping.generation) + 1;
-    await db.batch([
-      db.prepare("UPDATE discord_calendar_event_mappings SET event_id = NULL, generation = ?, active = 1, synced_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id = ?").bind(generation, now, id),
-      db.prepare("INSERT INTO discord_calendar_operations (installation_id, meeting_id, generation, action, event_id, status, attempts, next_attempt_at, actor_user_id, updated_at) VALUES ('primary', ?, ?, 'upsert', NULL, 'pending', 0, ?, ?, ?)").bind(id, generation, now, principal?.userId ?? null, now),
-    ]);
-    queuedIds.push(id);
-  }
-  if (ready) {
-    const created = await enqueueDiscordCalendarUpsert(db, env, principal, missingIds);
-    return addDiscordCalendarSummaries(queuedIds.length ? await processDiscordCalendarOperations(env, queuedIds) : discordCalendarEmptySummary(), created);
-  }
-  return { ...discordCalendarEmptySummary(), queued: queuedIds.length };
-}
-function addDiscordCalendarSummaries(...summaries: DiscordCalendarSyncSummary[]): DiscordCalendarSyncSummary { return summaries.reduce((total, item) => ({ synced: total.synced + item.synced, queued: total.queued + item.queued, skipped: total.skipped + item.skipped, failed: total.failed + item.failed, outcomes: [...total.outcomes, ...item.outcomes] }), discordCalendarEmptySummary()); }
 type DiscordScheduledEvent = { id?: string; entity_metadata?: { location?: string } };
 async function discordCalendarCorrelationLocation(meetingId: string, generation: number): Promise<string> { return `LancerLogin · ${(await sha256(`discord-calendar:primary:${meetingId}:${generation}`)).slice(0, 24)}`; }
 async function reconcileDiscordCalendarEvent(config: Record<string, string>, correlationLocation: string, listEvents: () => Promise<DiscordScheduledEvent[]>): Promise<string | undefined> {
   return (await listEvents()).find((event) => event.entity_metadata?.location === correlationLocation && typeof event.id === "string" && event.id.length > 0)?.id;
 }
-async function processDiscordCalendarOperations(env: Env, meetingIds?: string[]): Promise<DiscordCalendarSyncSummary> {
+/**
+ * The scheduled Discord calendar delivery: the oldest due operations, then due event removals. Nothing else delivers to
+ * Discord's scheduled events; meeting routes only queue. An operation is due once its next_attempt_at has passed: a
+ * pending one from when it was queued (or from when its meeting comes within the horizon), a failed one from its retry
+ * time, and one being delivered from the end of its lease, so a delivery that died is picked up again.
+ */
+async function processDiscordCalendarOperations(env: Env): Promise<DiscordCalendarSyncSummary> {
   if (!await discordCalendarIsReady(env)) return discordCalendarEmptySummary();
   // A Stop holds first attempts too: the operations stay pending and go out when delivery resumes.
-  if (await deliveryPausedUntil(env) !== null) return { ...discordCalendarEmptySummary(), queued: meetingIds?.length ? new Set(meetingIds).size : 0 };
-  const db = requireDatabase(env); const now = new Date().toISOString(); const filter = meetingIds?.length ? `AND o.meeting_id IN (${meetingIds.map(() => "?").join(",")}) AND (o.status IN ('pending', 'failed') OR (o.status = 'processing' AND o.lease_expires_at <= ?))` : "AND (o.status = 'pending' OR (o.status = 'failed' AND o.next_attempt_at IS NOT NULL AND o.next_attempt_at <= ?) OR (o.status = 'processing' AND o.lease_expires_at <= ?))"; const values = meetingIds?.length ? [...meetingIds, now] : [now, now];
+  if (await deliveryPausedUntil(env) !== null) return discordCalendarEmptySummary();
+  const db = requireDatabase(env); const now = new Date().toISOString();
   // Discord allows a server 100 scheduled events, so only meetings starting within the horizon get a new event. An upsert
-  // for a later meeting with no event yet stays pending and is picked up once its meeting comes within range; a meeting
-  // that already has an event keeps it in sync.
+  // for a later meeting with no event yet is queued to fall due when its meeting comes within range (calendar-queue.ts);
+  // the horizon is checked here as well, for operations queued before that and meetings moved since. A meeting that
+  // already has an event keeps it in sync. Work due at once goes deletes first, then by meeting start (calendar-queue.ts).
   const horizon = discordCalendarHorizon(Date.now());
-  const result = await db.prepare(`SELECT o.meeting_id AS meetingId, o.generation, o.action, o.event_id AS eventId, o.status, o.attempts, o.revision, o.actor_user_id AS actorUserId FROM discord_calendar_operations o WHERE o.installation_id = 'primary' ${filter} AND NOT (o.action = 'upsert' AND EXISTS (SELECT 1 FROM meetings hm WHERE hm.installation_id = o.installation_id AND hm.id = o.meeting_id AND hm.starts_at > ?) AND NOT EXISTS (SELECT 1 FROM discord_calendar_event_mappings hx WHERE hx.installation_id = o.installation_id AND hx.meeting_id = o.meeting_id AND hx.generation = o.generation AND hx.event_id IS NOT NULL)) ORDER BY o.generation, CASE o.action WHEN 'delete' THEN 0 ELSE 1 END, o.updated_at LIMIT ${DISCORD_CALENDAR_OPERATION_BATCH_LIMIT}`).bind(...values, horizon).all<DiscordCalendarOperation>();
-  const operations = result.results ?? []; if (!operations.length) return discordCalendarEmptySummary();
-  if (operations.length === DISCORD_CALENDAR_OPERATION_BATCH_LIMIT) passMore(env);
-  let config: Record<string, string>; try { config = await discordConfiguration(env); } catch { return { ...discordCalendarEmptySummary(), queued: operations.length }; }
+  const { operations, removals } = await dueCalendarWork<DiscordCalendarOperation>(db, "discord", `SELECT o.meeting_id AS meetingId, o.generation, o.action, o.event_id AS eventId, o.status, o.attempts, o.revision, o.actor_user_id AS actorUserId, o.lease_token AS claimedBefore, NULL AS removalAttempts, NULL AS removalTarget FROM discord_calendar_operations o WHERE o.installation_id = 'primary' AND o.status != 'delivered' AND o.next_attempt_at IS NOT NULL AND o.next_attempt_at <= ? AND (o.status != 'processing' OR o.lease_expires_at <= ?) AND NOT (o.action = 'upsert' AND EXISTS (SELECT 1 FROM meetings hm WHERE hm.installation_id = o.installation_id AND hm.id = o.meeting_id AND hm.starts_at > ?) AND NOT EXISTS (SELECT 1 FROM discord_calendar_event_mappings hx WHERE hx.installation_id = o.installation_id AND hx.meeting_id = o.meeting_id AND hx.generation = o.generation AND hx.event_id IS NOT NULL)) ORDER BY o.next_attempt_at, o.starts_at LIMIT ${DISCORD_CALENDAR_OPERATION_BATCH_LIMIT}`, [now, now, horizon], "NULL, 0, 'delete', r.event_id, 'pending', 0, 0, NULL, NULL", DISCORD_CALENDAR_OPERATION_BATCH_LIMIT, now);
+  if (!operations.length && !removals.length) return discordCalendarEmptySummary();
+  // Without its configuration nothing here can proceed, so the job does not ask to run again at once.
+  let config: Record<string, string>; try { config = await discordConfiguration(env); } catch (error) { if (error instanceof SchedulerBudgetError) throw error; return { ...discordCalendarEmptySummary(), queued: operations.length }; }
+  const full = operations.length + removals.length === DISCORD_CALENDAR_OPERATION_BATCH_LIMIT;
   const summary = discordCalendarEmptySummary();
   // One list per batch: each meeting's correlation location is unique, so events this batch creates are never looked up.
   let guildEvents: Promise<DiscordScheduledEvent[]> | undefined;
@@ -4144,12 +4302,14 @@ async function processDiscordCalendarOperations(env: Env, meetingIds?: string[])
     if (!Array.isArray(listed.body)) throw new DiscordResponseError(502, "Discord did not return a scheduled event list");
     return listed.body;
   }).catch((error) => { guildEvents = undefined; throw error; });
+  let stopped = false;
   for (const operation of operations) {
     // Operations the pass cannot afford stay pending and count as queued below.
-    if (!passAllows(env, DISCORD_CALENDAR_OPERATION_COST)) break;
+    if (!passAllows(env, DISCORD_CALENDAR_OPERATION_COST)) { stopped = true; break; }
     operation.leaseToken = crypto.randomUUID();
     const leaseExpiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
-    const claimed = await db.prepare("UPDATE discord_calendar_operations SET status = 'processing', lease_token = ?, lease_expires_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = ? AND revision = ? AND (status IN ('pending', 'failed') OR (status = 'processing' AND lease_expires_at <= ?))").bind(operation.leaseToken, leaseExpiresAt, operation.meetingId, operation.generation, operation.action, operation.revision, now).run();
+    // While it is being delivered an operation is due again when its lease ends.
+    const claimed = await db.prepare("UPDATE discord_calendar_operations SET status = 'processing', lease_token = ?, lease_expires_at = ?, next_attempt_at = ? WHERE installation_id = 'primary' AND meeting_id = ? AND generation = ? AND action = ? AND revision = ? AND (status IN ('pending', 'failed') OR (status = 'processing' AND lease_expires_at <= ?))").bind(operation.leaseToken, leaseExpiresAt, leaseExpiresAt, operation.meetingId, operation.generation, operation.action, operation.revision, now).run();
     if ((claimed.meta?.changes ?? 0) < 1) continue;
     let title = "Meeting";
     try {
@@ -4174,7 +4334,9 @@ async function processDiscordCalendarOperations(env: Env, meetingIds?: string[])
         const started = Date.parse(meeting.startsAt) <= Date.now();
         const payload = { name: meeting.title, description, privacy_level: 2, entity_type: 3, ...(started ? {} : { scheduled_start_time: meeting.startsAt }), scheduled_end_time: meeting.endsAt, entity_metadata: { location: correlationLocation } };
         let eventId = mapping.eventId ?? undefined;
-        let needsReconciliation = started || operation.status === "processing" || Number(operation.attempts) > 0;
+        // A row that still carries a lease token was claimed by a delivery whose closing write never ran (the slice was
+        // stopped, or the budget refused the write): Discord may already have the event, whatever the row says now.
+        let needsReconciliation = started || operation.status === "processing" || Number(operation.attempts) > 0 || Boolean(operation.claimedBefore);
         if (eventId) try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }); needsReconciliation = false; } catch (error) { if (error instanceof DiscordResponseError && error.discordStatus === 404) { eventId = undefined; needsReconciliation = true; } else throw error; }
         if (!eventId && needsReconciliation) eventId = await reconcileDiscordCalendarEvent(config, correlationLocation, listEvents);
         if (eventId && needsReconciliation) await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) });
@@ -4192,64 +4354,101 @@ async function processDiscordCalendarOperations(env: Env, meetingIds?: string[])
         if ((completion[3]?.meta?.changes ?? 1) > 0) await db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'discord.calendar_synced', 'meeting', ?, ?, ?)").bind(crypto.randomUUID(), operation.actorUserId ?? null, operation.meetingId, JSON.stringify({ eventId }), completedAt).run();
       }
       summary.synced += 1; summary.outcomes.push({ meetingId: operation.meetingId, title, status: "synced" });
-    } catch (error) { const reason = await markDiscordCalendarFailure(db, operation, error); summary.failed += 1; summary.outcomes.push({ meetingId: operation.meetingId, title, status: "failed", reason }); if (error instanceof DiscordPermissionError || error instanceof DiscordRateLimitError) break; }
+    } catch (error) { if (error instanceof SchedulerBudgetError) throw error; const reason = await markDiscordCalendarFailure(db, operation, error); summary.failed += 1; summary.outcomes.push({ meetingId: operation.meetingId, title, status: "failed", reason }); if (error instanceof DiscordPermissionError || error instanceof DiscordRateLimitError) { stopped = true; break; } }
   }
-  const processedMeetings = new Set(summary.outcomes.map((outcome) => outcome.meetingId));
-  summary.queued = meetingIds?.length
-    ? Math.max(0, new Set(meetingIds).size - processedMeetings.size)
-    : Math.max(0, operations.length - summary.synced - summary.skipped - summary.failed);
+  summary.queued = Math.max(0, operations.length - summary.synced - summary.skipped - summary.failed);
+  // Once Discord has refused for want of a permission or rate limited the bot, the rest of this batch would be refused
+  // the same way: its removals are not sent and keep their attempts (only an attempt that was made counts), and the job
+  // does not ask to run again at once.
+  const refused = (removal: CalendarRemoval, error: unknown) => failCalendarRemoval(db, "discord", removal, error instanceof Error ? error.message : "Discord calendar delivery failed", error instanceof DiscordRateLimitError ? error.retryAfterMs : 0);
+  for (const removal of removals) {
+    if (stopped) break;
+    if (!passAllows(env, CALENDAR_REMOVAL_COST)) break;
+    // An event recorded for another server than the one now configured is not on this one.
+    if (removal.target && removal.target !== config.guildId) { await dropCalendarRemoval(db, "discord", removal); continue; }
+    try {
+      try { await discordRequest(config, `/guilds/${config.guildId}/scheduled-events/${removal.eventId}`, { method: "DELETE" }); }
+      catch (error) { if (!(error instanceof DiscordResponseError) || error.discordStatus !== 404) throw error; }
+      await completeCalendarRemoval(db, "discord", removal);
+    } catch (error) {
+      if (error instanceof SchedulerBudgetError) throw error; 
+      await refused(removal, error);
+      if (error instanceof DiscordPermissionError || error instanceof DiscordRateLimitError) stopped = true;
+    }
+  }
+  if (full && !stopped) passMore(env);
   return summary;
 }
-function encodeDiscordCalendarSyncCursor(cursor: DiscordCalendarSyncCursor): string { return btoa(JSON.stringify([cursor.startsAt, cursor.id])); }
-function decodeDiscordCalendarSyncCursor(value: string | null): DiscordCalendarSyncCursor | undefined {
-  if (!value) return undefined;
-  try {
-    const parsed = JSON.parse(atob(value));
-    if (!Array.isArray(parsed) || parsed.length !== 2 || typeof parsed[0] !== "string" || typeof parsed[1] !== "string" || !parsed[0] || !parsed[1]) throw new Error("invalid");
-    return { startsAt: parsed[0], id: parsed[1] };
-  } catch { throw new HttpError(400, "Discord calendar sync cursor is invalid"); }
+/**
+ * Queues every current and upcoming meeting for Discord in one batch (see CALENDAR_SYNC_ALL_RULE), with the same repairs
+ * as the Google route. `deferred` counts the meetings further out than the 60-day horizon: their operations are queued
+ * but only fall due when the meeting comes within range, because Discord allows a server 100 scheduled events.
+ */
+async function queueAllDiscordCalendarMeetings(db: D1Database, principal: Principal, env: Env) {
+  const now = new Date().toISOString(); const upcoming = calendarTargets.upcoming(now);
+  const catchUp = calendarCatchUp(db, "discord", now, principal.userId);
+  const results = await db.batch([...catchUp.statements, calendarRemovalRetry(db, "discord", now), calendarWaitingCount(db, "discord", now),
+    db.prepare(`SELECT COUNT(*) AS selected, COALESCE(SUM(CASE WHEN julianday(m.starts_at) > julianday(?) + ${DISCORD_CALENDAR_HORIZON_DAYS} AND NOT EXISTS (SELECT 1 FROM discord_calendar_event_mappings d WHERE d.installation_id = 'primary' AND d.meeting_id = m.id AND d.event_id IS NOT NULL) THEN 1 ELSE 0 END), 0) AS deferred FROM meetings m WHERE m.id IN (${upcoming.sql})`).bind(now, ...upcoming.values)]);
+  const counts = (results.at(-1) as D1Result<{ selected: number; deferred: number }>).results?.[0];
+  return { ...discordCalendarEmptySummary(), queued: catchUp.queued(results, 0), selected: Number(counts?.selected ?? 0), deferred: Number(counts?.deferred ?? 0), deletesQueued: catchUp.deletesQueued(results, 0), remaining: 0, waiting: Number((results.at(-2) as D1Result<{ waiting: number }>).results?.[0]?.waiting ?? 0), perPass: calendarPerPass.discord };
 }
 async function syncAllDiscordCalendarMeetings(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); await requireIntegrationConfigured(env, "discord"); const db = requireDatabase(env);
-  const cursor = decodeDiscordCalendarSyncCursor(new URL(request.url).searchParams.get("after"));
-  const page = await db.prepare("SELECT id, starts_at AS startsAt FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL AND (? IS NULL OR starts_at > ? OR (starts_at = ? AND id > ?)) ORDER BY starts_at ASC, id ASC LIMIT ?").bind(cursor?.startsAt ?? null, cursor?.startsAt ?? null, cursor?.startsAt ?? null, cursor?.id ?? null, DISCORD_CALENDAR_OPERATION_BATCH_LIMIT + 1).all<DiscordCalendarSyncCursor>();
-  const available = page.results ?? []; const meetings = available.slice(0, DISCORD_CALENDAR_OPERATION_BATCH_LIMIT);
-  const result = await enqueueDiscordCalendarUpsert(db, env, principal, meetings.map((meeting) => meeting.id));
-  const nextCursor = available.length > DISCORD_CALENDAR_OPERATION_BATCH_LIMIT && meetings.length ? encodeDiscordCalendarSyncCursor(meetings.at(-1)!) : null;
-  await writeAudit(db, principal, "discord.calendar_sync_all_requested", "integration", "discord", { selected: meetings.length, continued: Boolean(cursor), hasMore: Boolean(nextCursor), ...result });
-  return response({ ...result, selected: meetings.length, nextCursor, limit: DISCORD_CALENDAR_SYNC_ALL_LIMIT, batchLimit: DISCORD_CALENDAR_OPERATION_BATCH_LIMIT });
+  const result = await queueAllDiscordCalendarMeetings(db, principal, env);
+  await writeAudit(db, principal, "discord.calendar_sync_all_requested", "integration", "discord", { ...result, outcomes: undefined, waiting: undefined, perPass: undefined });
+  // nextCursor stays in the response for dashboards that page: one request now covers every meeting.
+  return response({ ...result, scheduler: calendarSchedulerMode(env), nextCursor: null, rule: CALENDAR_SYNC_ALL_RULE });
 }
 async function discordCalendar(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const db = requireDatabase(env); const input = await parseJson<{ meetingId?: string; all?: boolean }>(request);
-  if (input.all) { const result = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at ASC LIMIT 100").all<{ id: string }>(); return response(await enqueueDiscordCalendarUpsert(db, env, principal, (result.results ?? []).map((meeting) => meeting.id))); }
+  if (input.all) return response({ ...await queueAllDiscordCalendarMeetings(db, principal, env), scheduler: calendarSchedulerMode(env), rule: CALENDAR_SYNC_ALL_RULE });
   if (!input.meetingId) throw new HttpError(400, "Meeting is required");
-  const meeting = await db.prepare("SELECT id, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; endsAt: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
+  const meeting = await db.prepare("SELECT id, title, starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(input.meetingId).first<{ id: string; title: string; startsAt: string; endsAt: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
   if (Date.parse(meeting.endsAt) < Date.now()) throw new HttpError(409, "Discord calendar sync is unavailable after the scheduled meeting end");
-  return response(await enqueueDiscordCalendarUpsert(db, env, principal, [meeting.id]));
+  const sync = discordCalendarSyncStatements(db, calendarTargets.ids([meeting.id]), new Date().toISOString(), principal.userId); const queued = sync.queued(await db.batch(sync.statements), 0);
+  // Nothing is queued for a meeting that has started and has no event (Discord cannot schedule one in the past), or while Discord is not verified and the meeting was never synced.
+  const skipped = !queued && Date.parse(meeting.startsAt) <= Date.now();
+  return response({ ...discordCalendarEmptySummary(), queued, skipped: skipped ? 1 : 0, outcomes: queued ? [{ meetingId: meeting.id, title: meeting.title, status: "queued", reason: "Queued for the scheduled Discord calendar delivery" } satisfies DiscordCalendarOutcome] : skipped ? [{ meetingId: meeting.id, title: meeting.title, status: "skipped", reason: "Meeting has already started and has no Discord event. Sync upcoming meetings before their start time." } satisfies DiscordCalendarOutcome] : [] });
 }
-type CalendarLifecycleAction = "sync" | "delete" | "restore";
-type CalendarDeliveryResult = { google_calendar: GoogleCalendarSyncSummary; discord: DiscordCalendarSyncSummary };
-async function deliverCalendarLifecycle(db: D1Database, env: Env, principal: Principal, action: CalendarLifecycleAction, meetingIds: string[]): Promise<CalendarDeliveryResult> {
-  const google = await bestEffortGoogleCalendar(() => action === "delete" ? enqueueGoogleCalendarDelete(db, env, meetingIds) : action === "restore" ? restoreGoogleCalendarMeetings(db, env, meetingIds) : syncGoogleCalendarMeetings(db, env, meetingIds));
-  let discord: DiscordCalendarSyncSummary;
-  try { discord = action === "delete" ? await enqueueDiscordCalendarDelete(db, env, principal, meetingIds) : action === "restore" ? await enqueueDiscordCalendarRestore(db, env, principal, meetingIds) : await enqueueDiscordCalendarUpsert(db, env, principal, meetingIds); }
-  catch (error) { discord = { ...discordCalendarEmptySummary(), failed: 1, outcomes: [{ meetingId: meetingIds[0] ?? "meeting", title: "Meeting", status: "failed", reason: error instanceof Error ? error.message : "Discord calendar delivery failed" }] }; }
-  return { google_calendar: google, discord };
-}
+type CalendarDeliveryResult = CalendarQueueSummary;
+/**
+ * Sync now for one meeting. It queues like every other meeting change and the scheduler delivers within seconds on a
+ * Durable Object deployment (the route pokes it), or on the next five-minute pass. Delivering inline would cost about 40
+ * subrequests with both calendars, too close to the 50 a Workers Free invocation is allowed.
+ */
 async function syncMeetingCalendars(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]); const input = await parseJson<{ meetingId?: string }>(request); const meetingId = input.meetingId?.trim();
   if (!meetingId) throw new HttpError(400, "Meeting is required"); const db = requireDatabase(env);
   const meeting = await db.prepare("SELECT id FROM meetings WHERE installation_id = 'primary' AND id = ? AND deleted_at IS NULL").bind(meetingId).first<{ id: string }>(); if (!meeting) throw new HttpError(404, "Meeting not found");
   const [googleReady, discordReady] = await Promise.all([googleCalendarIsReady(env), discordCalendarIsReady(env)]); if (!googleReady && !discordReady) throw new HttpError(409, "Configure and verify at least one calendar integration before syncing this meeting");
-  const delivery = await deliverCalendarLifecycle(db, env, principal, "sync", [meeting.id]);
-  const providers = [
-    ...(googleReady ? [{ provider: "google_calendar" as const, ...delivery.google_calendar }] : []),
-    ...(discordReady ? [{ provider: "discord" as const, ...delivery.discord }] : []),
-  ];
-  await writeAudit(db, principal, "calendar.meeting_sync_requested", "meeting", meeting.id, { providers: providers.map((item) => item.provider) });
-  return response({ meetingId: meeting.id, providers });
+  const calendar = calendarLifecycleQueue(db, "sync", calendarTargets.ids([meeting.id]), principal.userId); const providerNames = [...(googleReady ? ["google_calendar" as const] : []), ...(discordReady ? ["discord" as const] : [])];
+  const results = await db.batch([...calendar.statements, db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'calendar.meeting_sync_requested', 'meeting', ?, ?, ?)").bind(crypto.randomUUID(), principal.userId, meeting.id, JSON.stringify({ providers: providerNames }), new Date().toISOString()), calendarWaitingCount(db, "google_calendar", new Date().toISOString()), calendarWaitingCount(db, "discord", new Date().toISOString())]);
+  const delivery: CalendarDeliveryResult = calendar.summary(results, 0); const waiting = (index: number) => Number((results.at(index) as D1Result<{ waiting: number }>).results?.[0]?.waiting ?? 0);
+  // `waiting` and `perPass` let the dashboard say how long a backlog will take where the cron delivers it.
+  return response({ meetingId: meeting.id, scheduler: calendarSchedulerMode(env), providers: providerNames.map((provider) => ({ provider, ...delivery[provider], waiting: waiting(provider === "google_calendar" ? -2 : -1), perPass: calendarPerPass[provider] })) });
 }
-async function syncDiscordKioskStatus(env: Env, pin?: boolean): Promise<{ changed: boolean; messageId?: string; online?: boolean; kioskId?: string }> {
+/** A kiosk counts as online in the status message while its last heartbeat is newer than this. */
+const KIOSK_STATUS_ONLINE_MS = 2 * 60_000;
+/**
+ * How often an unchanged tracked Discord message (the kiosk status, the help message) is checked against Discord: that
+ * it still exists and, where it should be, is still pinned. Between checks an unchanged message costs no request.
+ */
+const DISCORD_TRACKED_MESSAGE_REFRESH_MS = 60 * 60_000;
+/** While one pass is posting a tracked message, another that finds it missing waits this long before posting too. */
+const DISCORD_TRACKED_MESSAGE_CLAIM_MS = 2 * 60_000;
+/**
+ * Whether a heartbeat changes this kiosk's line in the status message, decided from the row the heartbeat's
+ * authentication already read: the kiosk was not online before, or its reader state or release differs.
+ */
+function kioskStatusLineChanged(before: Pick<PairedKiosk, "lastSeenAt" | "readerOnline" | "releaseVersion">, reported: { readerOnline: boolean; releaseVersion: string }, now: number): boolean {
+  const seen = Date.parse(before.lastSeenAt ?? "");
+  return !Number.isFinite(seen) || now - seen >= KIOSK_STATUS_ONLINE_MS || Boolean(before.readerOnline) !== reported.readerOnline || (before.releaseVersion ?? null) !== reported.releaseVersion;
+}
+/**
+ * Posts or edits the kiosk status message when what it shows has changed. `verify` also checks an unchanged message
+ * against Discord now (the Update status button); the scheduled job leaves that to the hourly refresh.
+ */
+async function syncDiscordKioskStatus(env: Env, pin?: boolean, verify = false): Promise<{ changed: boolean; messageId?: string; online?: boolean; kioskId?: string }> {
   // While delivery is stopped the status message is left as it is; the channel job refreshes it once delivery resumes.
   if (await deliveryPausedUntil(env) !== null) return { changed: false };
   const db = requireDatabase(env); const config = await discordConfiguration(env);
@@ -4259,7 +4458,7 @@ async function syncDiscordKioskStatus(env: Env, pin?: boolean): Promise<{ change
   }
   const result = await db.prepare("SELECT id, name, last_seen_at AS lastSeenAt, reader_online AS readerOnline, release_version AS releaseVersion FROM kiosks WHERE installation_id = 'primary' AND active = 1 ORDER BY lower(name), created_at").all<{ id: string; name: string; lastSeenAt?: string; readerOnline?: number; releaseVersion?: string }>();
   const kiosks = result.results ?? [];
-  const states = kiosks.map((kiosk) => ({ kiosk, online: Boolean(kiosk.lastSeenAt && Date.now() - Date.parse(kiosk.lastSeenAt) < 2 * 60_000) }));
+  const states = kiosks.map((kiosk) => ({ kiosk, online: Boolean(kiosk.lastSeenAt && Date.now() - Date.parse(kiosk.lastSeenAt) < KIOSK_STATUS_ONLINE_MS) }));
   const onlineCount = states.filter((state) => state.online).length;
   const online = kiosks.length > 0 && onlineCount === kiosks.length;
   const visible = states.slice(0, 10);
@@ -4267,52 +4466,35 @@ async function syncDiscordKioskStatus(env: Env, pin?: boolean): Promise<{ change
     ? [`**Kiosk status** · ${onlineCount} of ${kiosks.length} online`, ...visible.map(({ kiosk, online: kioskOnline }) => `• **${kiosk.name}** · ${kioskOnline ? "online" : "offline"} · reader ${kiosk.readerOnline ? "online" : "offline"} · release ${kiosk.releaseVersion ?? "unknown"}${kioskOnline ? "" : ` · last seen ${kiosk.lastSeenAt ?? "never"}`}`), ...(kiosks.length > visible.length ? [`• ${kiosks.length - visible.length} more active kiosks are available in the dashboard.`] : [])].join("\n")
     : "No kiosk is paired.";
   const kioskId = kiosks.length === 1 ? kiosks[0]!.id : undefined;
-  if (pin) {
-    const tracked = await upsertTrackedDiscordMessage(db, config, "kiosk-status", content, true);
-    return { changed: tracked.changed, messageId: tracked.messageId, online, kioskId };
-  }
-  const contentHash = await sha256(content);
-  const existing = await db.prepare("SELECT external_id AS externalId, content_hash AS contentHash FROM integration_state WHERE installation_id = 'primary' AND provider = 'discord' AND state_key = 'kiosk-status'").first<{ externalId?: string; contentHash?: string }>();
-  if (existing?.externalId && existing.contentHash === contentHash) {
-    try {
-      await discordRequest(config, `/channels/${encodeURIComponent(config.channelId)}/messages/${encodeURIComponent(existing.externalId)}`, { method: "GET" });
-      return { changed: false, messageId: existing.externalId, online, kioskId };
-    } catch (error) { if (!discordMessageMissing(error)) throw error; existing.externalId = undefined; }
-  }
-  const messagesPath = `/channels/${encodeURIComponent(config.channelId)}/messages`;
-  const payload = { method: existing?.externalId ? "PATCH" : "POST", body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) };
-  let messageId: string;
-  try {
-    const { body } = await discordRequest(config, existing?.externalId ? `${messagesPath}/${encodeURIComponent(existing.externalId)}` : messagesPath, payload);
-    messageId = String(body.id ?? existing?.externalId ?? "");
-  } catch (error) {
-    if (!(error instanceof DiscordResponseError) || error.discordStatus !== 404 || error.discordCode !== 10_008 || !existing?.externalId) throw error;
-    const { body } = await discordRequest(config, messagesPath, { ...payload, method: "POST" });
-    messageId = String(body.id ?? "");
-  }
-  if (!messageId) throw new HttpError(502, "Discord did not return a kiosk-status message identifier");
-  const now = new Date().toISOString();
-  await db.prepare("INSERT INTO integration_state (installation_id, provider, state_key, external_id, content_hash, updated_at) VALUES ('primary', 'discord', 'kiosk-status', ?, ?, ?) ON CONFLICT(installation_id, provider, state_key) DO UPDATE SET external_id = excluded.external_id, content_hash = excluded.content_hash, updated_at = excluded.updated_at").bind(messageId, contentHash, now).run();
-  return { changed: true, messageId, online, kioskId };
+  // Pinned (the channel manager) or not, the message is tracked the same way: one row holding its id and content hash.
+  const tracked = await upsertTrackedDiscordMessage(db, config, "kiosk-status", content, pin, undefined, verify ? 0 : DISCORD_TRACKED_MESSAGE_REFRESH_MS);
+  return { changed: tracked.changed, ...(tracked.messageId ? { messageId: tracked.messageId } : {}), online, kioskId };
 }
+// One tracked message: its row, the kiosks (for the status), a claim and the write; and up to 4 Discord requests when it
+// has to be re-posted and pinned (the check, the edit that finds it gone, the new message, the pin).
+const DISCORD_TRACKED_MESSAGE_COST: PassCost = { d1: 5, external: 4 };
 async function syncDiscordManagedSurface(env: Env): Promise<JobRunResult> {
   if (await deliveryPausedUntil(env) !== null) return;
   const db = requireDatabase(env);
+  // The job's first step is due again whenever the budget cannot cover a message; the failed check asks for that slice.
+  if (!passAllows(env, DISCORD_TRACKED_MESSAGE_COST)) return;
   const settings = await db.prepare("SELECT discord_channel_manager_enabled AS enabled FROM organization_settings WHERE installation_id = 'primary'").first<{ enabled?: number }>();
-  if (!settings?.enabled) { await syncDiscordKioskStatus(env); return; }
+  if (!settings?.enabled) { await syncDiscordKioskStatus(env, false); return; }
   // On the Durable Object the pinned kiosk status and the help message are separate slices, one Discord message each.
   const step = env.schedulerPass?.steps ? env.schedulerPass.cursor ?? "kiosk-status" : undefined;
   if (step !== "howto") {
     await syncDiscordKioskStatus(env, true);
     if (step) return { more: true, cursor: "howto" };
   }
+  if (!passAllows(env, DISCORD_TRACKED_MESSAGE_COST)) return step ? { more: true, cursor: "howto" } : undefined;
   const config = await discordConfiguration(env);
   const guidance = "**LancerLogin attendance help**\nUse `/pair` with your LancerLogin member ID to link your Discord account. Use **View my attendance report** below or `/attendance-report` to receive your private report. Ask general questions in the thread under each absence notice. Only a mentioned linked member can use **Contest absence** during the configured contest window. A contest requests private review; it does not change attendance until an Operator or Admin approves it.";
-  await upsertTrackedDiscordMessage(db, config, "channel-manager-howto", guidance, false, discordAttendanceReportComponents);
+  await upsertTrackedDiscordMessage(db, config, "channel-manager-howto", guidance, false, discordAttendanceReportComponents, DISCORD_TRACKED_MESSAGE_REFRESH_MS);
 }
 async function discordKioskStatus(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin", "operator"]);
-  const result = await syncDiscordKioskStatus(env);
+  // The button always checks the message against Discord, so one deleted by hand is posted again at once.
+  const result = await syncDiscordKioskStatus(env, undefined, true);
   await writeAudit(requireDatabase(env), principal, "discord.kiosk_status_updated", "kiosk", result.kioskId ?? null, { online: result.online, messageId: result.messageId, changed: result.changed });
   const config = await discordConfiguration(env);
   const messageUrl = result.messageId ? `https://discord.com/channels/${config.guildId}/${config.channelId}/${result.messageId}` : undefined;
@@ -4423,9 +4605,9 @@ const safeBackupValue = (value: unknown) => value === null || typeof value === "
 const backupSchemaVersion = 52;
 /** Exported values computed from other columns: a label paused after a restore is still two-way in a backup. */
 const backupColumnExpressions: Partial<Record<BackupTable, Record<string, string>>> = {
-  discord_label_role_mappings: { sync_direction: `CASE WHEN sync_direction = 'to_discord' AND two_way_error = '${twoWayRestorePaused}' THEN 'two_way' ELSE sync_direction END AS sync_direction` },
+  discord_label_role_mappings: { sync_direction: `CASE WHEN sync_direction = 'to_discord' AND two_way_error = '${twoWayRestorePaused}' THEN 'two_way' ELSE sync_direction END` },
 };
-const backupSelectColumns = (table: BackupTable) => tableColumns[table].map((column) => backupColumnExpressions[table]?.[column] ?? column).join(", ");
+const backupSelectColumns = (table: BackupTable) => tableColumns[table].map((column) => { const expression = backupColumnExpressions[table]?.[column]; return expression ? `${expression} AS ${column}` : column; }).join(", ");
 const backupEnvelopeFormat = "lancerlogin-community-modular";
 const backupEnvelopeVersion = 1;
 /** Installed plugin modules. Their portable rows travel in the `externalModules` section, outside the first-party Core envelope. */
@@ -4478,7 +4660,68 @@ async function backupData(request: Request, env: Env): Promise<Response> {
   return response(backup, 200, { "content-disposition": `attachment; filename="lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json"` });
 }
 
-type NormalizedBackup = { product: "LancerLogin"; schemaVersion: number; scope: BackupScope; exportedAt: string; attendanceRecentDays: number; attendancePolicyActivatedOn: string | null; tables: Record<BackupTable, Record<string, unknown>[]>; recovery: { revokedKiosks: number; invalidatedPairingCodes: number; pausedProviderOperations: number }; externalModules: { included: readonly PreparedExternalModule[]; excluded: readonly ExcludedModuleSummary[] } };
+/**
+ * Backup in parts, for an installation too large to read and serialize in one request (data-transfer.ts). Starting a
+ * session copies every table into staged parts in one batch, so the file is one snapshot exactly as the single-request
+ * backup above is, and writes the same audit entry. The dashboard downloads each part and assembles the same file.
+ * - POST   /admin/data/backup/sessions                     { scope, updateRequestId? } -> the document without rows, its parts, and their columns
+ * - GET    /admin/data/backup/sessions/:id/parts/:seq      one part: a JSON array of rows, each an array in column order
+ * - POST   /admin/data/backup/sessions/:id/complete        every part was received: clears staging, records a web update's backup
+ * - DELETE /admin/data/backup/sessions/:id                 cancel
+ * Queries per request, after the session check: one (a batch, when starting).
+ */
+async function backupSessions(request: Request, env: Env, pathname: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  const match = /^\/admin\/data\/backup\/sessions(?:\/([^/]+)(?:\/(parts\/\d{1,12}|complete))?)?$/.exec(pathname); const id = match?.[1]; const action = match?.[2];
+  if (!match || id !== undefined && !validTransferSessionId(id)) return response({ error: "Not found" }, 404);
+  if (id === undefined) {
+    if (request.method !== "POST") return response({ error: "Not found" }, 404);
+    const input = await parseJson<{ scope?: BackupScope; updateRequestId?: unknown }>(request); const scope = input.scope as BackupScope;
+    if (!["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Backup scope must be meetings, roster, or installation");
+    if (input.updateRequestId !== undefined && (typeof input.updateRequestId !== "string" || !input.updateRequestId || input.updateRequestId.length > 200)) throw new HttpError(400, "The update request is invalid");
+    if (input.updateRequestId !== undefined && scope !== "installation") throw new HttpError(400, "Web updates require an entire-installation backup");
+    // An update that can no longer take its backup is refused before anything is staged; completing the download records it.
+    if (input.updateRequestId !== undefined) await requirePreparedUpdate(env, input.updateRequestId);
+    const tables = tablesForScope(scope).filter((table) => backupTableAt(table, backupSchemaVersion));
+    // Lifecycle, assignment and setup rows of a module whose code is not in this build stay out, as in the single-request backup.
+    const bundled = bundledModuleRegistry.modules.map((module) => `'${module.id.replaceAll("'", "''")}'`).join(", ");
+    const external = scope === "installation" ? installedExternalBackupModules : [];
+    const externalTables = external.flatMap(({ definition, adapter }) => Object.entries(adapter?.tables ?? {}).map(([table, columns]) => ({ module: definition.id, table, columns })));
+    const sources: (BackupSource & { module?: string })[] = [
+      ...tables.map((table) => ({ table, columns: tableColumns[table], expressions: backupColumnExpressions[table], where: `${table === "installations" ? "id = 'primary'" : "installation_id = 'primary'"}${(moduleKeyedTables as readonly string[]).includes(table) ? ` AND module_id IN (${bundled})` : ""}` })),
+      ...externalTables.map(({ module, table, columns }) => ({ module, table, columns, where: "installation_id = 'primary'" })),
+    ];
+    const session = await createBackupSession(db, {
+      userId: principal.userId, scope, sources, context: input.updateRequestId === undefined ? {} : { updateRequestId: input.updateRequestId },
+      reads: [
+        ...(external.length ? [db.prepare("SELECT module_id AS moduleId,source,source_commit AS sourceCommit FROM platform_module_catalog WHERE installation_id='primary'")] : []),
+        ...(scope === "roster" ? [db.prepare("SELECT attendance_recent_days AS recentDays, attendance_policy_activated_on AS policyActivatedOn FROM organization_settings WHERE installation_id = 'primary'")] : []),
+      ],
+      writes: [auditStatement(db, principal, "data.backup_exported", "installation", "primary", { scope, schemaVersion: backupSchemaVersion })],
+    });
+    const recorded = new Map(((external.length ? session.reads[0]?.results ?? [] : []) as { moduleId: string; source: string | null; sourceCommit: string | null }[]).map((row) => [row.moduleId, row]));
+    const externalModules = scope === "installation" ? external.map(({ definition }) => ({ id: definition.id, label: definition.label, contractVersion: definition.contractVersion, backupVersion: definition.backup.version, source: recorded.get(definition.id)?.source ?? null, commit: recorded.get(definition.id)?.sourceCommit ?? null, tables: Object.fromEntries(externalTables.filter((entry) => entry.module === definition.id).map((entry) => [entry.table, []])) })) : undefined;
+    const policySettings = scope === "roster" ? (session.reads.at(-1)?.results?.[0] ?? null) as { recentDays: number; policyActivatedOn: string | null } | null : null;
+    const exportedAt = new Date().toISOString();
+    // The same fields in the same order as the single-request backup, with every table present and empty.
+    const document = { product: "LancerLogin", format: backupEnvelopeFormat, formatVersion: backupEnvelopeVersion, schemaVersion: backupSchemaVersion, scope, exportedAt, ownership: backupOwnership(scope), tables: Object.fromEntries(tables.map((table) => [table, []])), ...(externalModules ? { externalModules } : {}), ...(policySettings ? { attendanceRecentDays: policySettings.recentDays, attendancePolicyActivatedOn: policySettings.policyActivatedOn } : {}) };
+    const parts = session.parts.map((part) => { const source = sources[part.source]!; return { seq: part.seq, rows: part.rows, table: source.table, ...(source.module ? { module: source.module } : {}) }; });
+    // Each part's rows are arrays; `columns` names their values, once per table that has parts.
+    const columns = Object.fromEntries([...new Set(session.parts.map((part) => part.source))].map((index) => [sources[index]!.table, sources[index]!.columns]));
+    return response({ id: session.id, expiresAt: session.expiresAt, filename: `lancerlogin-${scope}-backup-${exportedAt.slice(0, 10)}.json`, document, columns, parts }, 201);
+  }
+  if (action?.startsWith("parts/") && request.method === "GET") return new Response(await backupPartPayload(db, id, principal.userId, Number(action.slice(6))), { status: 200, headers: baseHeaders });
+  if (action === "complete" && request.method === "POST") {
+    const context = await finishBackupSession(db, id, principal.userId);
+    if (!context) throw new HttpError(404, "This backup is no longer being prepared. Download the backup again.", undefined, "transfer_session_missing");
+    if (typeof context.updateRequestId === "string") await recordUpdateBackup(env, context.updateRequestId);
+    return response({ completed: true });
+  }
+  if (action === undefined && request.method === "DELETE") { await deleteTransferSession(db, "backup", id, principal.userId); return response({ cancelled: true }); }
+  return response({ error: "Not found" }, 404);
+}
+
+type NormalizedBackup = { product: "LancerLogin"; schemaVersion: number; scope: BackupScope; exportedAt: string; /** How the file's rows are shaped (the schema its columns follow), and which of its tables are uploaded in parts. */ source: { schemaVersion: number; community22: boolean; exactColumns: boolean; staged: BackupTable[] }; attendanceRecentDays: number; attendancePolicyActivatedOn: string | null; tables: Record<BackupTable, Record<string, unknown>[]>; recovery: { revokedKiosks: number; invalidatedPairingCodes: number; pausedProviderOperations: number }; externalModules: { included: readonly PreparedExternalModule[]; excluded: readonly ExcludedModuleSummary[] } };
 const legacyTableColumns: Partial<Record<BackupTable, readonly string[]>> = {
   organization_settings: tableColumns.organization_settings.slice(0, -17),
   attendance_events: tableColumns.attendance_events.slice(0, -1),
@@ -4557,7 +4800,84 @@ function validateInstallationBackupState(tables: Record<BackupTable, Record<stri
   for (const definition of definitions.values()) if (modules.get(definition.id)?.setup_complete === 1 && definition.setup.steps.some((step) => step.required && !setup.has(`${definition.id}:${step.id}`))) throw new HttpError(400, "Backup module setup progress is incomplete");
 }
 
-function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: unknown): NormalizedBackup {
+/**
+ * Tables a restore may upload in parts (data-transfer.ts): the ones that grow with every meeting, scan and audited action.
+ * Nothing about one of their rows depends on another row or table, so each part is checked and normalized alone
+ * (normalizeStagedPart), exactly as normalizeBackup does for rows the backup document carries itself.
+ */
+const stagedBackupTables: ReadonlySet<BackupTable> = new Set<BackupTable>(["meetings", "meeting_audience_labels", "attendance_events", "attendance_corrections", "member_label_changes", "audit_log", "integration_deliveries", "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports", "google_calendar_event_mappings", "google_calendar_operations", "discord_calendar_event_mappings", "discord_calendar_operations"]);
+
+/** The columns a table's rows carry in a backup of the given schema. */
+function backupSourceColumns(table: BackupTable, schemaVersion: number, community22: boolean): readonly string[] {
+  return schemaVersion < 45 && (table === "member_label_changes" || table === "discord_label_role_mappings") ? tableColumns[table].slice(0, -1) : table === "discord_attendance_contests" && schemaVersion < 41 ? tableColumns.discord_attendance_contests.slice(0, schemaVersion === 1 ? -3 : -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 52 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -8 : schemaVersion < 31 ? -7 : schemaVersion < 40 ? -6 : schemaVersion < 46 ? -5 : schemaVersion < 47 ? -3 : -2) : table === "pairing_codes" && schemaVersion < 46 ? tableColumns.pairing_codes.slice(0, -2) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -15) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -13) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -11) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -8) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -6) : schemaVersion < 41 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 47 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -4) : schemaVersion < 51 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
+}
+
+/** Every row is an object of scalar values with the expected columns, and no others where the format is exact. */
+function validateBackupRows(table: BackupTable, tableRows: readonly unknown[], columns: readonly string[], exactColumns: boolean) {
+  // This loop runs once per record of a backup that may hold 150,000, so it allocates nothing per row.
+  const known: ReadonlySet<string> = new Set(columns);
+  for (const row of tableRows) {
+    let valid = isObject(row);
+    if (valid) for (const column of columns) if (!safeBackupValue((row as Record<string, unknown>)[column])) { valid = false; break; }
+    if (valid && exactColumns) for (const column in row as Record<string, unknown>) if (!known.has(column)) { valid = false; break; }
+    if (!valid) throw new HttpError(400, `Backup table ${table} contains an invalid row`);
+  }
+}
+
+/**
+ * Row-by-row normalization of a table that may arrive in parts: defaults for columns the backup's schema did not have,
+ * and queued provider work stopped for explicit review. `paused` counts that stopped work. Other tables pass through.
+ */
+function normalizeStagedTable(table: BackupTable, rows: Record<string, unknown>[], source: { schemaVersion: number; exportedAt: unknown }): { rows: Record<string, unknown>[]; paused: number } {
+  let paused = 0;
+  const stop = (pending: (row: Record<string, unknown>) => boolean, stopped: Record<string, unknown>) => rows.map((row) => { if (!pending(row)) return row; paused += 1; return { ...row, ...stopped }; });
+  const isPending = (row: Record<string, unknown>) => row.status === "pending";
+  if (table === "meetings") rows = rows.map((row) => {
+    const normalized: Record<string, unknown> = { series_id: null, recurrence_frequency: null, recurrence_until: null, recurrence_sequence: null, deleted_at: null, weight_category_id: null, weight_category_name: null, attendance_weight: 1, audience_mode: "all", ...row };
+    if (normalized.ends_at !== null) return normalized;
+    const start = Date.parse(String(row.starts_at));
+    return { ...normalized, ends_at: Number.isFinite(start) ? new Date(start + 60 * 60_000).toISOString() : row.starts_at };
+  });
+  else if (table === "attendance_events") { if (source.schemaVersion === 1) rows = rows.map((row) => ({ ...row, action: "check_in" })); }
+  else if (table === "discord_attendance_notifications") {
+    rows = rows.map((row) => ({ channel_id: null, expires_at: null, deleted_at: null, thread_created_at: null, delivery_id: null, ...row }));
+    rows = stop(isPending, { status: "failed", last_error: "Restore requires explicit notification review", processed_at: source.exportedAt });
+  }
+  else if (table === "discord_attendance_recipients") rows = rows.map((row) => ({ delivery_id: null, ...row }));
+  else if (table === "discord_attendance_contests") {
+    rows = rows.map((row) => ({ submitted_by_discord_user_id: null, review_note: null, prior_reviews_json: "[]", ...row }));
+    for (const row of rows) {
+      try {
+        const history = JSON.parse(String(row.prior_reviews_json));
+        if (!Array.isArray(history) || history.some(review => !isObject(review) || review.status !== "rejected"
+          || typeof review.createdAt !== "string" || !validTimestamp(review.createdAt)
+          || typeof review.messageId !== "string" || !review.messageId
+          || ![review.resolvedBy, review.submittedByDiscordUserId, review.reviewNote].every(value => value === null || typeof value === "string")
+          || review.resolvedAt !== null && (typeof review.resolvedAt !== "string" || !validTimestamp(review.resolvedAt)))) throw new Error();
+      } catch { throw new HttpError(400, "Backup contest review history is invalid"); }
+    }
+  }
+  else if (table === "member_label_changes") {
+    // Before schema 45 every label change came from the dashboard.
+    rows = rows.map((row) => ({ source: "dashboard", ...row }));
+    if (rows.some((row) => row.source !== "dashboard" && row.source !== "discord")) throw new HttpError(400, "Backup label change has an invalid source");
+  }
+  else if (table === "integration_deliveries") rows = stop(isPending, { status: "failed" });
+  else if (table === "google_calendar_operations") rows = stop(isPending, { status: "failed", next_attempt_at: null, last_error: "Restore requires explicit Calendar review" });
+  else if (table === "discord_calendar_operations") rows = stop((row) => ["pending", "processing"].includes(String(row.status)), { status: "failed", next_attempt_at: null, lease_token: null, lease_expires_at: null, last_error: "Restore requires explicit Calendar review" });
+  else if (table === "discord_anomaly_reports") rows = stop(isPending, { status: "failed", last_error: "Restore requires explicit anomaly report review", processed_at: source.exportedAt });
+  return { rows, paused };
+}
+
+/** Check and normalize one uploaded part of a staged table, and return it in its staged form. */
+function normalizeStagedPart(table: BackupTable, rows: unknown[], source: { schemaVersion: number; community22: boolean; exactColumns: boolean; exportedAt: unknown }): { payload: string; paused: number } {
+  validateBackupRows(table, rows, backupSourceColumns(table, source.schemaVersion, source.community22), source.exactColumns);
+  const normalized = normalizeStagedTable(table, rows as Record<string, unknown>[], source);
+  for (const row of normalized.rows) if (row.installation_id !== "primary") throw new HttpError(400, `Backup table ${table} is not scoped to this installation`);
+  return { payload: stagedPayload(table, tableColumns[table], normalized.rows), paused: normalized.paused };
+}
+
+function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: unknown, stagedRows?: ReadonlyMap<BackupTable, number>): NormalizedBackup {
   if (!isObject(value) || value.product !== "LancerLogin" || !Number.isSafeInteger(Number(value.schemaVersion)) || Number(value.schemaVersion) < 1 || Number(value.schemaVersion) > backupSchemaVersion || value.scope !== scope || typeof value.exportedAt !== "string" || !validTimestamp(value.exportedAt) || !isObject(value.tables)) throw new HttpError(400, "The selected file is not a matching current LancerLogin backup");
   const sourceSchemaVersion = Number(value.schemaVersion);
   // Public Community 1.2.5 and early Modular archives both used schema 22.
@@ -4578,18 +4898,15 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   const knownTables = new Set<unknown>([...tablesForScope(scope), ...extractedModuleTables(scope, schemaVersion)]);
   if (Object.keys(sourceTables).some((table) => !knownTables.has(table))) throw new HttpError(400, "Backup contains tables that are not owned by this Community-based application");
   const requiredTables = (schemaVersion < 6 ? legacyTablesForScope(scope) : tablesForScope(scope)).filter((table) => !(schemaVersion < 22 && table.startsWith("platform_module")) && !(schemaVersion < 24 && table === "user_preferences") && !(schemaVersion < 23 && table === "platform_module_setup_progress") && !(schemaVersion < 21 && table === "user_walkthroughs") && !(schemaVersion < 10 && table === "discord_anomaly_reports") && !(schemaVersion < 11 && table === "meeting_weight_categories") && !(schemaVersion < 12 && ["google_calendar_authorizations", "google_calendar_event_mappings", "google_calendar_operations"].includes(table)) && !(schemaVersion < 13 && ["discord_calendar_event_mappings", "discord_calendar_operations"].includes(table)) && !(schemaVersion < 14 && ["member_labels", "member_label_changes", "label_weekly_targets", "meeting_audience_labels"].includes(table)) && !(schemaVersion < 15 && table === "label_attendance_rules") && !(schemaVersion < 16 && table === "discord_label_role_mappings") && !(schemaVersion < 20 && ["saved_report_views", "saved_report_tabs"].includes(table)) && backupTableAt(table, schemaVersion));
-  let rows = 0;
+  let rows = 0; const exactColumns = sourceSchemaVersion >= 31 || community22; const staged: BackupTable[] = [];
   for (const table of requiredTables) {
-    const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`); rows += tableRows.length;
-    const columns = schemaVersion < 45 && (table === "member_label_changes" || table === "discord_label_role_mappings") ? tableColumns[table].slice(0, -1) : table === "discord_attendance_contests" && schemaVersion < 41 ? tableColumns.discord_attendance_contests.slice(0, schemaVersion === 1 ? -3 : -1) : community22 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table] : schemaVersion < 7 && table === "installations" ? tableColumns.installations.slice(0, -4) : schemaVersion < 12 && table === "installations" ? tableColumns.installations.slice(0, -1) : schemaVersion < 23 && table === "platform_modules" ? tableColumns.platform_modules.slice(0, -2) : table === "kiosks" && schemaVersion < 52 ? tableColumns.kiosks.slice(0, schemaVersion < 28 ? -8 : schemaVersion < 31 ? -7 : schemaVersion < 40 ? -6 : schemaVersion < 46 ? -5 : schemaVersion < 47 ? -3 : -2) : table === "pairing_codes" && schemaVersion < 46 ? tableColumns.pairing_codes.slice(0, -2) : schemaVersion < 14 && table === "members" ? tableColumns.members.slice(0, -2) : schemaVersion < 34 && table === "members" ? tableColumns.members.slice(0, -1) : schemaVersion < 19 && table === "users" ? tableColumns.users.slice(0, -1) : schemaVersion === 1 ? legacyTableColumns[table] ?? (table === "meetings" ? tableColumns.meetings.slice(0, -9) : table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : tableColumns[table]) : schemaVersion === 2 && table === "meetings" ? tableColumns.meetings.slice(0, -9) : schemaVersion < 4 && table === "encrypted_integrations" ? tableColumns.encrypted_integrations.slice(0, -1) : schemaVersion < 5 && table === "meetings" ? tableColumns.meetings.slice(0, -5) : schemaVersion < 11 && table === "meetings" ? tableColumns.meetings.slice(0, -4) : schemaVersion < 14 && table === "meetings" ? tableColumns.meetings.slice(0, -1) : schemaVersion < 8 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -15) : schemaVersion < 9 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -13) : schemaVersion < 10 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -11) : schemaVersion < 15 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -8) : schemaVersion < 31 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -6) : schemaVersion < 41 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -5) : schemaVersion < 47 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -4) : schemaVersion < 51 && table === "organization_settings" ? tableColumns.organization_settings.slice(0, -1) : schemaVersion < 8 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -5) : schemaVersion < 19 && table === "discord_attendance_notifications" ? tableColumns.discord_attendance_notifications.slice(0, -2) : schemaVersion < 32 && ["discord_attendance_notifications", "discord_attendance_recipients"].includes(table) ? tableColumns[table].slice(0, -1) : schemaVersion < 18 && table === "label_attendance_rules" ? tableColumns.label_attendance_rules.slice(0, -1) : tableColumns[table];
-    // This loop runs once per record of a backup that may hold 150,000, so it allocates nothing per row.
-    const exactColumns = sourceSchemaVersion >= 31 || community22; const known: ReadonlySet<string> = new Set(columns);
-    for (const row of tableRows) {
-      let valid = isObject(row);
-      if (valid) for (const column of columns) if (!safeBackupValue((row as Record<string, unknown>)[column])) { valid = false; break; }
-      if (valid && exactColumns) for (const column in row as Record<string, unknown>) if (!known.has(column)) { valid = false; break; }
-      if (!valid) throw new HttpError(400, `Backup table ${table} contains an invalid row`);
-    }
+    const tableRows = sourceTables[table]; if (!Array.isArray(tableRows)) throw new HttpError(400, `Backup table ${table} is missing`);
+    // A table uploaded in parts is empty in the document; its rows were declared with the parts and are checked as each arrives.
+    const stagedCount = stagedRows?.get(table);
+    if (stagedCount !== undefined) { if (tableRows.length) throw new HttpError(400, `Backup table ${table} was sent both in the backup document and in parts`); rows += stagedCount; staged.push(table); continue; }
+    rows += tableRows.length;
+    const columns = backupSourceColumns(table, schemaVersion, community22);
+    validateBackupRows(table, tableRows, columns, exactColumns);
   }
   rows += externalPlan.entries.reduce((total, entry) => total + entry.rows, 0);
   if (rows > 150_000) throw new HttpError(400, "Backup contains too many records for dashboard restore; use the documented D1 restore workflow");
@@ -4598,14 +4915,10 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   // The rows are this request's own parsed JSON and every later step replaces rows rather than changing them, so the
   // arrays are copied but the rows are not.
   for (const table of requiredTables) tables[table] = (sourceTables[table] as Record<string, unknown>[]).slice();
-  const pausedProviderOperations = tables.integration_deliveries.filter((row) => row.status === "pending").length
-    + tables.google_calendar_operations.filter((row) => row.status === "pending").length
-    + tables.discord_calendar_operations.filter((row) => ["pending", "processing"].includes(String(row.status))).length
-    + tables.discord_attendance_notifications.filter((row) => row.status === "pending").length
-    + tables.discord_anomaly_reports.filter((row) => row.status === "pending").length;
+  // Tables that may arrive in parts are normalized row by row, here for the rows the document itself carries.
+  let pausedProviderOperations = 0;
+  for (const table of stagedBackupTables) { const normalized = normalizeStagedTable(table, tables[table], { schemaVersion, exportedAt: value.exportedAt }); tables[table] = normalized.rows; pausedProviderOperations += normalized.paused; }
   if (tables.organization_settings) tables.organization_settings = tables.organization_settings.map((row) => ({ late_scan_minutes: 30, logo_backdrop: "auto", discord_contest_window_hours: 24, discord_block_recontests_after_rejection: 0, discord_channel_manager_enabled: 0, attendance_reporting_starts_on: null, anomaly_late_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, anomaly_early_threshold_minutes: DEFAULT_ANOMALY_THRESHOLD_MINUTES, discord_anomaly_reports_enabled: 0, discord_anomaly_report_channel_id: null, discord_anomaly_reports_enabled_at: null, attendance_recent_days: 30, pin_lockout_enabled: 0, pin_lockout_attempts: 5, pin_lockout_minutes: 15, early_scan_minutes: DEFAULT_EARLY_SCAN_MINUTES, attendance_policy_activated_on: null, ...row, ...(schemaVersion < 31 ? { kiosk_authentication_method: "fingerprint" } : {}) }));
-  if (tables.discord_attendance_notifications) tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => ({ channel_id: null, expires_at: null, deleted_at: null, thread_created_at: null, delivery_id: null, ...row }));
-  if (tables.discord_attendance_recipients) tables.discord_attendance_recipients = tables.discord_attendance_recipients.map((row) => ({ delivery_id: null, ...row }));
   if (tables.encrypted_integrations) tables.encrypted_integrations = tables.encrypted_integrations.map((row) => ({ verified_at: null, ...row }));
   if (tables.pairing_codes) tables.pairing_codes = tables.pairing_codes.map((row) => ({ kiosk_kind: "pi", kiosk_name: null, ...row }));
   if (tables.kiosks) tables.kiosks = tables.kiosks.map((row) => ({ pairing_bound: 0, kind: "pi", member_lookup: "entry", require_pin: 0, discord_code: 0, discord_code_backup: "offline", ...row, ...(schemaVersion < 31 ? { authentication_method: "fingerprint" } : {}), ...(schemaVersion < 40 ? { configured_authentication_method: tables.organization_settings.find(settings => settings.installation_id === row.installation_id)?.kiosk_authentication_method ?? "fingerprint" } : {}) }));
@@ -4623,7 +4936,10 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   if (scope === "installation" && schemaVersion < 50) { const startsOn = tables.organization_settings.find((row) => row.installation_id === "primary")?.attendance_reporting_starts_on; if (typeof startsOn === "string" && validDate(startsOn)) tables.module_report_baselines = [{ installation_id: "primary", module_id: "hour-tracking", starts_on: startsOn, revision: 0, updated_at: String(value.exportedAt ?? new Date().toISOString()) }]; }
   if (schemaVersion < 7 && tables.installations) { const providers = new Set(tables.encrypted_integrations.map((row) => row.provider)); tables.installations = tables.installations.map((row) => ({ ...row, google_enabled: providers.has("google") ? 1 : 0, resend_enabled: providers.has("resend") ? 1 : 0, discord_enabled: providers.has("discord") ? 1 : 0 })); }
   if (schemaVersion < 12 && tables.installations) tables.installations = tables.installations.map((row) => ({ google_calendar_enabled: 0, ...row }));
-  if (tables.members) tables.members = tables.members.map((row) => ({ attendance_required_from: String(row.created_at ?? "").slice(0, 10), ...row, ...(schemaVersion < 34 ? { inactive_periods_json: row.active === 0 ? JSON.stringify([[new Date().toISOString(), null]]) : "[]" } : {}) }));
+  // A backup from before participation dates starts each member on their roster-added day in the backup's own time zone
+  // (a roster backup carries none, so UTC as before).
+  const backupZone = tables.organization_settings.find((row) => row.installation_id === "primary")?.time_zone; const backupTimeZone = typeof backupZone === "string" && validTimeZone(backupZone) ? backupZone : "UTC";
+  if (tables.members) tables.members = tables.members.map((row) => ({ ...("attendance_required_from" in row ? {} : { attendance_required_from: participationStartDate({ rosterAddedAt: String(row.created_at ?? "") }, backupTimeZone) }), ...row, ...(schemaVersion < 34 ? { inactive_periods_json: row.active === 0 ? JSON.stringify([[new Date().toISOString(), null]]) : "[]" } : {}) }));
   try { for (const member of tables.members ?? []) validateInactivePeriods(member.inactive_periods_json, member.active); } catch { throw new HttpError(400, "Backup contains invalid member inactivity history"); }
   if (tables.users) tables.users = tables.users.map((row) => ({ debug_mode: 0, ...row }));
   if (scope === "installation" && schemaVersion < 22) {
@@ -4646,14 +4962,9 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
       tables.platform_module_setup_progress = ["rules", "meeting", "input", "calendar", "discord"].map((stepId) => ({ installation_id: "primary", module_id: "attendance", step_id: stepId, setup_version: 2, outcome: ["calendar", "discord"].includes(stepId) ? "skipped" : "completed", completed_at: completedAt, completed_by: completedBy }));
     }
   }
-  if (tables.meetings) tables.meetings = tables.meetings.map((row) => {
-    const normalized: Record<string, unknown> = { series_id: null, recurrence_frequency: null, recurrence_until: null, recurrence_sequence: null, deleted_at: null, weight_category_id: null, weight_category_name: null, attendance_weight: 1, audience_mode: "all", ...row };
-    if (normalized.ends_at !== null) return normalized;
-    const start = Date.parse(String(row.starts_at));
-    return { ...normalized, ends_at: Number.isFinite(start) ? new Date(start + 60 * 60_000).toISOString() : row.starts_at };
-  });
+  // Schema 1 recorded arrivals only; each member's latest scan of a meeting also closes their attendance. Events
+  // uploaded in parts get the same check-outs from the final batch (legacyCheckoutStatement).
   if (schemaVersion === 1 && tables.attendance_events) {
-    tables.attendance_events = tables.attendance_events.map((row) => ({ ...row, action: "check_in" }));
     const latest = new Map<string, Record<string, unknown>>();
     for (const row of tables.attendance_events) {
       if (row.meeting_id === null) continue;
@@ -4663,26 +4974,13 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
     }
     for (const row of latest.values()) tables.attendance_events.push({ ...row, id: `legacy-restore-checkout:${row.member_id}:${row.meeting_id}`, source: "manual", kiosk_event_id: null, action: "check_out" });
   }
-  if (tables.discord_attendance_contests) tables.discord_attendance_contests = tables.discord_attendance_contests.map((row) => ({ submitted_by_discord_user_id: null, review_note: null, prior_reviews_json: "[]", ...row }));
   if (tables.organization_settings.some(row => row.discord_block_recontests_after_rejection !== 0 && row.discord_block_recontests_after_rejection !== 1)) throw new HttpError(400, "Backup contest rejection setting is invalid");
-  for (const row of tables.discord_attendance_contests) {
-    try {
-      const history = JSON.parse(String(row.prior_reviews_json));
-      if (!Array.isArray(history) || history.some(review => !isObject(review) || review.status !== "rejected"
-        || typeof review.createdAt !== "string" || !validTimestamp(review.createdAt)
-        || typeof review.messageId !== "string" || !review.messageId
-        || ![review.resolvedBy, review.submittedByDiscordUserId, review.reviewNote].every(value => value === null || typeof value === "string")
-        || review.resolvedAt !== null && (typeof review.resolvedAt !== "string" || !validTimestamp(review.resolvedAt)))) throw new Error();
-    } catch { throw new HttpError(400, "Backup contest review history is invalid"); }
-  }
   if (schemaVersion < 15) {
     tables.label_attendance_rules = tables.label_weekly_targets.map((row) => ({ id: "legacy:" + row.id, installation_id: row.installation_id, label_id: row.label_id, starts_on: row.starts_on, ends_on: row.ends_on, rule_type: "weekly_count", threshold_percent: null, meetings_per_week: row.meetings_per_week, created_by: row.created_by, created_at: row.created_at, updated_at: row.created_at }));
     if (tables.member_labels.some((row) => row.formula_enabled === 1) || tables.label_attendance_rules.length) tables.organization_settings = tables.organization_settings.map((row) => ({ ...row, attendance_policy_activated_on: new Date().toISOString().slice(0, 10) }));
   }
   tables.label_attendance_rules = tables.label_attendance_rules.map((row) => ({ excused_handling: "exclude", ...row }));
-  // Before schema 45 every label change came from the dashboard and every role link synced Dashboard to Discord.
-  tables.member_label_changes = tables.member_label_changes.map((row) => ({ source: "dashboard", ...row }));
-  if (tables.member_label_changes.some((row) => row.source !== "dashboard" && row.source !== "discord")) throw new HttpError(400, "Backup label change has an invalid source");
+  // Before schema 45 every label change came from the dashboard (normalizeStagedTable) and every role link synced Dashboard to Discord.
   tables.discord_label_role_mappings = tables.discord_label_role_mappings.map((row) => ({ sync_direction: "to_discord", ...row }));
   if (tables.discord_label_role_mappings.some((row) => row.sync_direction !== "to_discord" && row.sync_direction !== "two_way")) throw new HttpError(400, "Backup Discord role link has an invalid sync direction");
   if (tables.label_attendance_rules.some((row) => !["exclude", "count_missed"].includes(String(row.excused_handling)))) throw new HttpError(400, "Backup attendance rule has invalid excused-meeting handling");
@@ -4713,11 +5011,6 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   const includedExternalModules = externalPlan.included.map((included) => prepareIncludedModule(included, { installationId: "primary", exportedAt: value.exportedAt as string, restoredAt }, schemaVersion, typeof installationCreatedAt === "string" ? installationCreatedAt : null));
   requireConfirmedExclusions(externalPlan);
 
-  tables.integration_deliveries = tables.integration_deliveries.map((row) => row.status === "pending" ? { ...row, status: "failed" } : row);
-  tables.google_calendar_operations = tables.google_calendar_operations.map((row) => row.status === "pending" ? { ...row, status: "failed", next_attempt_at: null, last_error: "Restore requires explicit Calendar review" } : row);
-  tables.discord_calendar_operations = tables.discord_calendar_operations.map((row) => ["pending", "processing"].includes(String(row.status)) ? { ...row, status: "failed", next_attempt_at: null, lease_token: null, lease_expires_at: null, last_error: "Restore requires explicit Calendar review" } : row);
-  tables.discord_attendance_notifications = tables.discord_attendance_notifications.map((row) => row.status === "pending" ? { ...row, status: "failed", last_error: "Restore requires explicit notification review", processed_at: value.exportedAt } : row);
-  tables.discord_anomaly_reports = tables.discord_anomaly_reports.map((row) => row.status === "pending" ? { ...row, status: "failed", last_error: "Restore requires explicit anomaly report review", processed_at: value.exportedAt } : row);
   const invalidatedPairingCodes = tables.pairing_codes.length; const revokedKiosks = tables.kiosks.length;
   tables.pairing_codes = tables.pairing_codes.map((row) => ({ ...row, code_hash: `restored-${crypto.randomUUID()}`, expires_at: value.exportedAt, redeemed_at: value.exportedAt }));
   tables.kiosks = tables.kiosks.map((row) => ({ ...row, token_hash: `restored-${crypto.randomUUID()}`, active: 0 }));
@@ -4729,12 +5022,12 @@ function normalizeBackup(value: unknown, scope: BackupScope, excludeModules?: un
   if (attendancePolicyActivatedOn !== null && !validDate(attendancePolicyActivatedOn)) throw new HttpError(400, "Backup attendance policy activation date is invalid");
   // Provider work an included module paused for review counts with Core's paused operations.
   const pausedModuleOperations = includedExternalModules.reduce((total, module) => total + module.pausedOperations, 0);
-  return { product: "LancerLogin", schemaVersion: sourceSchemaVersion, scope, exportedAt: value.exportedAt, attendanceRecentDays, attendancePolicyActivatedOn, tables, recovery: { revokedKiosks, invalidatedPairingCodes, pausedProviderOperations: pausedProviderOperations + pausedModuleOperations }, externalModules: { included: includedExternalModules, excluded: externalPlan.unavailable } };
+  return { product: "LancerLogin", schemaVersion: sourceSchemaVersion, scope, exportedAt: value.exportedAt, source: { schemaVersion, community22, exactColumns, staged }, attendanceRecentDays, attendancePolicyActivatedOn, tables, recovery: { revokedKiosks, invalidatedPairingCodes, pausedProviderOperations: pausedProviderOperations + pausedModuleOperations }, externalModules: { included: includedExternalModules, excluded: externalPlan.unavailable } };
 }
 
 // Rows go in multi-row INSERT statements (insertRowsStatements), not one statement per row.
 const insertBackupRows = (db: D1Database, table: BackupTable, rows: Record<string, unknown>[]) => insertRowsStatements(db, table, tableColumns[table], rows);
-const upsertBackupMeetings = (db: D1Database, rows: Record<string, unknown>[]) => insertRowsStatements(db, "meetings", tableColumns.meetings, rows, ` ON CONFLICT(id) DO UPDATE SET ${tableColumns.meetings.filter((column) => column !== "id").map((column) => `${column} = excluded.${column}`).join(", ")}`);
+const upsertBackupMeetings = (db: D1Database, rows: Record<string, unknown>[]) => insertRowsStatements(db, "meetings", tableColumns.meetings, rows, meetingUpsertClause);
 
 function freshAuthorityStatements(db: D1Database, tables: Record<BackupTable, Record<string, unknown>[]>): D1Statement[] {
   const administrationRevision = Number(tables.platform_module_administration_epochs[0]?.revision ?? 0);
@@ -4762,18 +5055,45 @@ function restoredModuleStateStatements(db: D1Database, table: BackupTable, rows:
 }
 
 // The restore is one all-or-nothing D1 batch. D1 limits how long, and how much memory, a batch may take; when a very large
-// backup exceeds that, the batch is rolled back and nothing changes. Splitting it would lose that guarantee, so the Admin
-// is told to restore a smaller category or use the documented D1 restore workflow instead (docs/BACKUP-RESTORE.md).
+// backup exceeds that, the batch is rolled back and nothing changes. Splitting the writes would lose that guarantee, so
+// the Admin is told to restore a smaller category or use the documented D1 restore workflow instead
+// (docs/BACKUP-RESTORE.md). A restore uploaded in parts (restoreSessions) keeps the guarantee: the parts are only staged,
+// and the same single batch replaces the live rows from them.
 const restoreLimitMessage = "This backup is too large to restore from the dashboard within the database's time limit. Nothing was changed. Restore one category at a time, or use the documented D1 restore workflow.";
 const d1ResourceLimitError = (error: unknown) => error instanceof Error && /exceeded (?:its )?(?:timeout|cpu time limit|memory limit)|string or blob too big|sqlite_toobig/i.test(`${error.message} ${error.cause instanceof Error ? error.cause.message : ""}`);
 async function restoreData(request: Request, env: Env): Promise<Response> {
-  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: BackupScope; confirmation?: string; backup?: unknown; excludeModules?: unknown }>(request, 10_485_760); const scope = input.scope;
+  const principal = await requireRole(request, env, ["admin"]); requireDatabase(env); const input = await parseJson<{ scope?: BackupScope; confirmation?: string; backup?: unknown; excludeModules?: unknown }>(request, 10_485_760); const scope = input.scope;
   if (!scope || !["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Restore scope must be meetings, roster, or installation");
   const expected = `RESTORE ${scope.toUpperCase()}`; if (input.confirmation !== expected) throw new HttpError(400, `Type ${expected} exactly to continue`);
   let backup: NormalizedBackup;
   try { backup = normalizeBackup(input.backup, scope, input.excludeModules); }
   catch (error) { if (error instanceof ModuleRestoreRefusal) return response(error.body, 409); throw error; }
-  const tables = backup.tables;
+  return applyRestore(env, principal, backup);
+}
+
+const meetingUpsertClause = ` ON CONFLICT(id) DO UPDATE SET ${tableColumns.meetings.filter((column) => column !== "id").map((column) => `${column} = excluded.${column}`).join(", ")}`;
+/**
+ * Schema 1 check-outs for attendance events that were uploaded in parts: each member's latest scan of a meeting, the
+ * earliest-listed one when several share that time, also closes their attendance, as normalizeBackup adds for events the
+ * document carries. Runs right after the staged events are inserted, when the table holds exactly the backup's events.
+ * The `+` on o.installation_id keeps the inner lookup on the member and meeting index (two rows a lookup); without it, a
+ * database with no statistics reads every scan the member ever made for each event.
+ */
+const legacyCheckoutStatement = (db: D1Database) => db.prepare(`INSERT INTO attendance_events (id, installation_id, member_id, meeting_id, source, occurred_at, kiosk_event_id, created_by, action)
+  SELECT 'legacy-restore-checkout:' || e.member_id || ':' || e.meeting_id, e.installation_id, e.member_id, e.meeting_id, 'manual', e.occurred_at, NULL, e.created_by, 'check_out'
+  FROM attendance_events e WHERE e.installation_id = 'primary' AND e.meeting_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM attendance_events o
+    WHERE +o.installation_id = e.installation_id AND o.member_id = e.member_id AND o.meeting_id = e.meeting_id AND (o.occurred_at > e.occurred_at OR o.occurred_at = e.occurred_at AND o.rowid < e.rowid))`);
+
+/**
+ * Replace the live rows with a checked backup, in one all-or-nothing batch. `staged` names a restore session whose large
+ * tables wait in staging (backup.source.staged): those tables are copied into place by D1 itself inside the same batch,
+ * which also removes the staged parts, so this request costs the same Worker CPU whatever the backup's size.
+ */
+async function applyRestore(env: Env, principal: Principal, backup: NormalizedBackup, staged?: { id: string; paused: number }): Promise<Response> {
+  const db = requireDatabase(env); const scope = backup.scope; const tables = backup.tables;
+  const stagedTables: ReadonlySet<BackupTable> = new Set(staged ? backup.source.staged : []);
+  const insertRows = (table: BackupTable) => stagedTables.has(table) ? [stagedRowsInsert(db, staged!.id, table, tableColumns[table]), ...(table === "attendance_events" && backup.source.schemaVersion === 1 ? [legacyCheckoutStatement(db)] : [])] : insertBackupRows(db, table, tables[table]);
+  const upsertMeetings = () => stagedTables.has("meetings") ? [stagedRowsInsert(db, staged!.id, "meetings", tableColumns.meetings, meetingUpsertClause)] : upsertBackupMeetings(db, tables.meetings);
   // Excluded modules restore absent: their rows were removed from every module-keyed Core table and their section is skipped.
   const excludedModules = backup.externalModules.excluded.map(({ id, label, status, requiredBackupVersion, source, commit, rows }) => ({ id, label, status, backupVersion: requiredBackupVersion, source, commit, rows }));
   let statements: D1Statement[];
@@ -4789,22 +5109,25 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
   // event mappings (operational state, not portable backup data) keep linking them to their external events. Only meetings
   // absent from the backup are deleted, and their mappings cascade away; the response reports how many external events
   // were detached that way.
-  const restoredMeetingIds = JSON.stringify(tables.meetings.map((row) => row.id));
+  const restoredMeetingIds = scope === "meetings" && stagedTables.has("meetings") ? await stagedColumnValues(db, staged!.id, "meetings", tableColumns.meetings.indexOf("id")) : JSON.stringify(tables.meetings.map((row) => row.id));
   const detachedCalendarEvents = scope === "meetings" ? Number((await db.prepare(`SELECT (SELECT COUNT(*) FROM google_calendar_event_mappings WHERE installation_id = 'primary' AND active = 1 AND meeting_id NOT IN (SELECT value FROM json_each(?1)))
     + (SELECT COUNT(*) FROM discord_calendar_event_mappings WHERE installation_id = 'primary' AND active = 1 AND event_id IS NOT NULL AND meeting_id NOT IN (SELECT value FROM json_each(?1))) AS n`).bind(restoredMeetingIds).first<{ n: number }>())?.n ?? 0) : 0;
-  const recovery = { ...backup.recovery, ...(scope === "meetings" ? { detachedCalendarEvents } : {}) };
+  const recovery = { ...backup.recovery, pausedProviderOperations: backup.recovery.pausedProviderOperations + (staged?.paused ?? 0), ...(scope === "meetings" ? { detachedCalendarEvents } : {}) };
+  // Those detached events are recorded for the calendar jobs to delete, as Delete attendance data records them, before
+  // the meetings that are not in the backup go.
   if (scope === "meetings") statements = [
+    ...calendarRemovalStatements(db, new Date().toISOString(), await calendarRemovalTargets(env), { keep: restoredMeetingIds }),
     db.prepare("DELETE FROM discord_anomaly_reports WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_audience_labels WHERE installation_id = 'primary'"),
     db.prepare("DELETE FROM meetings WHERE installation_id = 'primary' AND id NOT IN (SELECT value FROM json_each(?))").bind(restoredMeetingIds), db.prepare("UPDATE meetings SET weight_category_id = NULL WHERE installation_id = 'primary' AND weight_category_id IS NOT NULL"),
     db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_weight_categories WHERE installation_id = 'primary'"),
-    ...insertBackupRows(db, "meeting_weight_categories", tables.meeting_weight_categories), ...upsertBackupMeetings(db, tables.meetings), ...insertBackupRows(db, "meeting_audience_labels", tables.meeting_audience_labels), ...insertBackupRows(db, "meeting_templates", tables.meeting_templates), ...insertBackupRows(db, "attendance_events", tables.attendance_events), ...insertBackupRows(db, "attendance_corrections", tables.attendance_corrections), ...insertBackupRows(db, "discord_attendance_notifications", tables.discord_attendance_notifications), ...insertBackupRows(db, "discord_attendance_recipients", tables.discord_attendance_recipients), ...insertBackupRows(db, "discord_attendance_contests", tables.discord_attendance_contests), ...insertBackupRows(db, "discord_anomaly_reports", tables.discord_anomaly_reports),
+    ...insertRows("meeting_weight_categories"), ...upsertMeetings(), ...insertRows("meeting_audience_labels"), ...insertRows("meeting_templates"), ...insertRows("attendance_events"), ...insertRows("attendance_corrections"), ...insertRows("discord_attendance_notifications"), ...insertRows("discord_attendance_recipients"), ...insertRows("discord_attendance_contests"), ...insertRows("discord_anomaly_reports"),
   ];
   else if (scope === "roster") statements = [
     db.prepare(`UPDATE members SET inactive_periods_json = ${inactivePeriodsUpdateSql("0")}, active = 0 WHERE installation_id = 'primary' AND external_id NOT IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(tables.members.map(row => row.external_id))),
     ...tables.members.map((row) => db.prepare("INSERT INTO members (id, installation_id, external_id, first_name, last_name, email, discord_user_id, active, created_at, attendance_required_from, inactive_periods_json) VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(installation_id, external_id) DO UPDATE SET first_name = excluded.first_name, last_name = excluded.last_name, email = excluded.email, discord_user_id = excluded.discord_user_id, active = excluded.active, attendance_required_from = excluded.attendance_required_from, inactive_periods_json = excluded.inactive_periods_json").bind(row.id, row.external_id, row.first_name, row.last_name, row.email, row.discord_user_id, row.active, row.created_at, row.attendance_required_from, row.inactive_periods_json)),
     db.prepare("DELETE FROM member_label_changes WHERE installation_id = 'primary'"), db.prepare("DELETE FROM label_attendance_rules WHERE installation_id = 'primary'"), db.prepare("DELETE FROM label_weekly_targets WHERE installation_id = 'primary'"), db.prepare("UPDATE member_labels SET active = 0 WHERE installation_id = 'primary'"),
     ...tables.member_labels.map((row) => db.prepare("INSERT INTO member_labels (id, installation_id, name, active, formula_enabled, created_by, created_at) VALUES (?, 'primary', ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, active = excluded.active, formula_enabled = excluded.formula_enabled").bind(row.id, row.name, row.active, row.formula_enabled, row.created_by, row.created_at)),
-    ...insertBackupRows(db, "member_label_changes", tables.member_label_changes), ...insertBackupRows(db, "label_weekly_targets", tables.label_weekly_targets), ...insertBackupRows(db, "label_attendance_rules", tables.label_attendance_rules), db.prepare("DELETE FROM discord_label_role_mappings WHERE installation_id = 'primary' AND label_id IN (SELECT id FROM member_labels WHERE installation_id = 'primary' AND active = 0)"), ...pauseRestoredTwoWayStatements(db), db.prepare("UPDATE discord_label_role_jobs SET status = 'stale', lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND status IN ('pending', 'running')").bind(new Date().toISOString(), new Date().toISOString()), db.prepare("UPDATE organization_settings SET attendance_recent_days = ?, attendance_policy_activated_on = ? WHERE installation_id = 'primary'").bind(backup.attendanceRecentDays, backup.attendancePolicyActivatedOn),
+    ...insertRows("member_label_changes"), ...insertRows("label_weekly_targets"), ...insertRows("label_attendance_rules"), db.prepare("DELETE FROM discord_label_role_mappings WHERE installation_id = 'primary' AND label_id IN (SELECT id FROM member_labels WHERE installation_id = 'primary' AND active = 0)"), ...pauseRestoredTwoWayStatements(db), db.prepare("UPDATE discord_label_role_jobs SET status = 'stale', lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ? WHERE installation_id = 'primary' AND status IN ('pending', 'running')").bind(new Date().toISOString(), new Date().toISOString()), db.prepare("UPDATE organization_settings SET attendance_recent_days = ?, attendance_policy_activated_on = ? WHERE installation_id = 'primary'").bind(backup.attendanceRecentDays, backup.attendancePolicyActivatedOn),
   ];
   else {
     // Installed plugin tables may not cascade from Core rows, so clear them child-first before Core deletion.
@@ -4818,16 +5141,40 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
     for (const table of installationTables) {
       if (authorityTables.has(table)) continue;
       if (table === "member_labels" && backup.schemaVersion >= 14) statements.push(db.prepare("DELETE FROM member_labels WHERE installation_id = 'primary'"));
-      statements.push(...(restoredStateTables.has(table) ? restoredModuleStateStatements(db, table, tables[table]) : table === "users" ? insertRowsStatements(db, "users", [...tableColumns.users, "session_epoch"], tables.users.map((row) => ({ ...row, session_epoch: restoredSessionEpoch }))) : insertBackupRows(db, table, tables[table])));
+      statements.push(...(restoredStateTables.has(table) ? restoredModuleStateStatements(db, table, tables[table]) : table === "users" ? insertRowsStatements(db, "users", [...tableColumns.users, "session_epoch"], tables.users.map((row) => ({ ...row, session_epoch: restoredSessionEpoch }))) : insertRows(table)));
       // Two-way labels restore paused, in the same batch, so no scheduled pass ever sees them syncing.
       if (table === "discord_label_role_mappings") statements.push(...pauseRestoredTwoWayStatements(db));
     }
     const restoredModules = new Set(tables.platform_modules.map((row) => String(row.module_id)));
     statements.push(...freshExternalModuleStatements(db, installedExternalBackupModules.filter(({ definition }) => !restoredModules.has(definition.id)), new Date().toISOString()), ...insertExternalModuleStatements(db, backup.externalModules.included));
   }
+  // A restore that replaces members brings back the backup's participation start dates, so their one-time correction
+  // starts again under a new run (participation-start-correction.ts), after the installation row is back.
+  if (scope !== "meetings") statements.push(startCorrectionReset(db));
   const actorRestored = scope !== "installation" || tables.users.some((row) => row.id === principal.userId); const now = new Date().toISOString(); statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'data.backup_restored', 'installation', 'primary', ?, ?)").bind(crypto.randomUUID(), actorRestored ? principal.userId : null, JSON.stringify({ scope, schemaVersion: backup.schemaVersion, exportedAt: backup.exportedAt, recovery, ...(excludedModules.length ? { excludedModules } : {}) }), now));
+  const answer = { restored: true, scope, recovery, ...(excludedModules.length ? { excludedModules } : {}) };
+  // The report revision triggers (migration 0037) add one to a counter for every row of nine tables that is inserted,
+  // changed or removed: a written row each, an eighth of what a restored scan costs. All the counter has to do is change,
+  // so the batch sets the triggers aside, adds one to it, and puts them back exactly as the schema had them. It is one
+  // transaction: a batch that fails leaves the triggers as they were. Without the schema read, the triggers simply fire.
+  const triggers = await reportRevisionTriggers(db);
+  if (triggers.length) statements = [...triggers.map((trigger) => db.prepare(`DROP TRIGGER ${trigger.name}`)), ...statements, ...triggers.map((trigger) => db.prepare(trigger.sql)), db.prepare("UPDATE report_data_revision SET revision = revision + 1 WHERE installation_id = 'primary'")];
+  // A staged restore's batch starts with its guards and ends by removing the staged parts and recording the answer: one
+  // transaction with the restore.
+  if (staged) statements = [...stagedCommitGuards(db, staged.id), ...statements, ...stagedCommitCleanup(db, staged.id, answer)];
   try { await db.batch(statements); }
-  catch (error) { if (d1ResourceLimitError(error)) throw new HttpError(503, restoreLimitMessage); throw error; }
+  catch (error) {
+    if (d1ResourceLimitError(error)) throw new HttpError(503, restoreLimitMessage);
+    if (staged) {
+      // A request racing this one may have completed the restore, or the session may be gone; otherwise a guard stopped the batch.
+      let recorded: Record<string, unknown> | undefined | null; try { recorded = await restoreSessionResult(db, staged.id); } catch { /* The original failure is reported. */ }
+      if (recorded) return response(recorded);
+      if (recorded === null) throw sessionGone("restore");
+      const message = error instanceof Error ? `${error.message} ${error.cause instanceof Error ? error.cause.message : ""}` : "";
+      if (/data_transfer_chunks/.test(message)) throw new HttpError(409, "Part of the backup has not been uploaded. Nothing was changed.", undefined, "restore_incomplete");
+    }
+    throw error;
+  }
   // An installation restore recreates the installation row, which cascades away the installed-module catalog. Record it again
   // now, so backups keep plugin sources and removed code stays deletable; a failure retries on the next scheduled pass.
   if (scope === "installation") { try { await reconcileInstalledModules(db); } catch { /* Retried by the scheduled pass. */ } }
@@ -4836,30 +5183,128 @@ async function restoreData(request: Request, env: Env): Promise<Response> {
   // account from the backup, as every other signed-in person's does.
   const restoredActor = scope === "installation" ? tables.users.find((row) => row.id === principal.userId && Number(row.active) === 1 && (row.role === "admin" || row.role === "operator")) : undefined;
   const session = restoredActor && env.SESSION_KEY ? sessionCookie(await createSessionCodec(env.SESSION_KEY).reissue({ ...principal, role: restoredActor.role as Role, epoch: restoredSessionEpoch }), Math.max(1, Math.ceil((principal.expiresAt - Date.now()) / 1000))) : undefined;
-  return response({ restored: true, scope, recovery, ...(excludedModules.length ? { excludedModules } : {}) }, 200, session ? { "set-cookie": session } : undefined);
+  return response(answer, 200, session ? { "set-cookie": session } : undefined);
 }
+
+/** The report revision triggers as the schema defines them, or none when the schema cannot be read. Queries: one. */
+async function reportRevisionTriggers(db: D1Database): Promise<{ name: string; sql: string }[]> {
+  try {
+    const rows = (await db.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' AND name LIKE 'report_revision_%' ORDER BY name").all<{ name: string; sql: string }>()).results ?? [];
+    return rows.every((row) => /^report_revision_[a-z_]+$/.test(row.name) && typeof row.sql === "string" && /^CREATE TRIGGER report_revision_/.test(row.sql)) ? rows : [];
+  } catch { return []; }
+}
+
+/**
+ * Restore in parts, for a backup too large to read and check in one request (data-transfer.ts). Every request but the
+ * last only stages rows; the last one runs the same all-or-nothing batch as a single-request restore. A restore that
+ * fails, is cancelled or is abandoned before that batch commits leaves the installation exactly as it was.
+ * - POST   /admin/data/restore/sessions                  { scope, confirmation, document, parts, excludeModules? }: checks the
+ *                                                        backup document (every check of the single-request restore that does
+ *                                                        not need the rows sent in parts) and stages it; 409 refusals as before
+ * - PUT    /admin/data/restore/sessions/:id/parts/:seq   one part: a JSON array of rows of the table it was declared for
+ * - GET    /admin/data/restore/sessions/:id              which parts have not arrived
+ * - POST   /admin/data/restore/sessions/:id/commit       { confirmation, digest }: checks the document again and replaces the data
+ * - DELETE /admin/data/restore/sessions/:id              cancel; staged parts are removed
+ * Queries per request, after the session check: starting one batch, a part two, the commit as a single-request restore plus one.
+ */
+async function restoreSessions(request: Request, env: Env, pathname: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
+  const match = /^\/admin\/data\/restore\/sessions(?:\/([^/]+)(?:\/(parts\/\d{1,6}|commit))?)?$/.exec(pathname); const id = match?.[1]; const action = match?.[2];
+  if (!match || id !== undefined && !validTransferSessionId(id)) return response({ error: "Not found" }, 404);
+  const confirmed = (scope: BackupScope, confirmation: unknown) => { const expected = `RESTORE ${scope.toUpperCase()}`; if (confirmation !== expected) throw new HttpError(400, `Type ${expected} exactly to continue`); };
+  const stagedCounts = (counts: Record<string, number>) => new Map(Object.entries(counts)) as Map<BackupTable, number>;
+  if (id === undefined) {
+    if (request.method !== "POST") return response({ error: "Not found" }, 404);
+    // The document is the backup with its staged tables emptied, so this body stays small however much the backup holds;
+    // the limit is the single-request restore's, for backups whose other tables or plugin sections are that large.
+    const input = await parseJson<{ scope?: BackupScope; confirmation?: string; document?: unknown; parts?: unknown; excludeModules?: unknown }>(request, 11_534_336); const scope = input.scope;
+    if (!scope || !["meetings", "roster", "installation"].includes(scope)) throw new HttpError(400, "Restore scope must be meetings, roster, or installation");
+    confirmed(scope, input.confirmation);
+    if (typeof input.document !== "string") throw new HttpError(400, "The restore must include the backup document");
+    let document: unknown; try { document = JSON.parse(input.document); } catch { throw new HttpError(400, "The selected backup is not valid JSON"); }
+    const parts = parseRestoreParts(input.parts, stagedBackupTables); const counts: Record<string, number> = {};
+    for (const part of parts) counts[part.table] = (counts[part.table] ?? 0) + part.rows;
+    let backup: NormalizedBackup;
+    try { backup = normalizeBackup(document, scope, input.excludeModules, stagedCounts(counts)); }
+    catch (error) { if (error instanceof ModuleRestoreRefusal) return response(error.body, 409); throw error; }
+    // A table this backup's schema never had is not read from the file, so its parts are not uploaded either.
+    const needed = parts.filter((part) => backup.source.staged.includes(part.table as BackupTable));
+    const context = { excludeModules: input.excludeModules ?? null, counts, staged: backup.source.staged, source: { schemaVersion: backup.source.schemaVersion, community22: backup.source.community22, exactColumns: backup.source.exactColumns, exportedAt: backup.exportedAt } };
+    const session = await createRestoreSession(db, { userId: principal.userId, scope, document: input.document, parts: needed, context });
+    // Rows the final batch will write, for the dashboard's warning about D1's daily allowance (restore-writes.ts).
+    const records: Record<string, number> = {};
+    for (const table of tablesForScope(scope)) records[table] = backup.source.staged.includes(table) ? counts[table] ?? 0 : backup.tables[table].length;
+    for (const module of backup.externalModules.included) for (const [table, rows] of Object.entries(module.tables)) records[table] = (records[table] ?? 0) + rows.length;
+    return response({ id: session.id, expiresAt: session.expiresAt, digest: session.digest, parts: needed.map((part) => part.seq), estimatedRowsWritten: estimateRestoreWrites(records) }, 201);
+  }
+  if (action === undefined && request.method === "GET") return response(await restoreSessionStatus(db, id, principal.userId));
+  if (action === undefined && request.method === "DELETE") { await deleteTransferSession(db, "restore", id, principal.userId); return response({ cancelled: true }); }
+  if (action?.startsWith("parts/") && request.method === "PUT") {
+    if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new HttpError(415, "Content-Type must be application/json");
+    if (Number(request.headers.get("content-length") ?? 0) > RESTORE_PART_MAX_BYTES) throw new HttpError(413, "Request body is too large");
+    const bytes = await request.arrayBuffer(); const seq = Number(action.slice(6));
+    if (bytes.byteLength > RESTORE_PART_MAX_BYTES) throw new HttpError(413, "Request body is too large");
+    const part = await restorePartMeta(db, id, principal.userId, seq);
+    // The bytes must be the ones declared when the restore started: a part that was changed or damaged on the way, or
+    // belongs to another file, is refused before it is read.
+    if (await transferDigest(bytes) !== part.sha256) throw new HttpError(409, "A part of the backup did not arrive as it was sent. Nothing was changed.", undefined, "restore_part_mismatch");
+    let rows: unknown; try { rows = JSON.parse(new TextDecoder().decode(bytes)); } catch { throw new HttpError(400, "Request body must be valid JSON"); }
+    if (!Array.isArray(rows) || rows.length !== part.rows) throw new HttpError(400, `Backup table ${part.table} does not hold the rows its part declared`);
+    const normalized = normalizeStagedPart(part.table as BackupTable, rows, part.context.source as { schemaVersion: number; community22: boolean; exactColumns: boolean; exportedAt: unknown });
+    await storeRestorePart(db, id, seq, normalized.payload, normalized.paused);
+    return response({ received: seq });
+  }
+  if (action === "commit" && request.method === "POST") {
+    const input = await parseJson<{ confirmation?: string; digest?: string }>(request);
+    const staged = await loadStagedRestore(db, id, principal.userId); const scope = staged.scope as BackupScope;
+    confirmed(scope, input.confirmation);
+    // The restore already completed: this is its final request sent again, answered as the first was, without running twice.
+    if (staged.result) return response(staged.result);
+    if (input.digest !== staged.digest) throw new HttpError(409, "This is not the restore that was prepared. Nothing was changed. Start the restore again.", undefined, "restore_digest_mismatch");
+    if (staged.missing) throw new HttpError(409, `${staged.missing} ${staged.missing === 1 ? "part of the backup has" : "parts of the backup have"} not been uploaded. Nothing was changed.`, undefined, "restore_incomplete", { missing: staged.missing });
+    const context = staged.context as { excludeModules: unknown; counts: Record<string, number>; staged: BackupTable[] };
+    // Every check of the document runs again on the stored copy, against the modules installed now.
+    let backup: NormalizedBackup;
+    try { backup = normalizeBackup(JSON.parse(staged.document), scope, context.excludeModules ?? undefined, stagedCounts(context.counts)); }
+    catch (error) { if (error instanceof ModuleRestoreRefusal) return response(error.body, 409); throw error; }
+    if (backup.source.staged.join() !== context.staged.join()) throw new HttpError(409, "The application changed while this restore was being uploaded. Nothing was changed. Start the restore again.", undefined, "restore_stale");
+    return applyRestore(env, principal, backup, { id, paused: staged.paused });
+  }
+  return response({ error: "Not found" }, 404);
+}
+
+/** Parts staged for a backup or a restore hold rows of the data being deleted, so every deletion removes them with it. */
+const stagedTransfersRemoval = (db: D1Database) => db.prepare("DELETE FROM data_transfer_sessions");
 
 async function deleteData(request: Request, env: Env): Promise<Response> {
   const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env); const input = await parseJson<{ scope?: "attendance" | "roster" | "installation"; confirmation?: string }>(request);
   const expected = input.scope === "attendance" ? "DELETE ATTENDANCE" : input.scope === "roster" ? "DELETE ROSTER" : input.scope === "installation" ? "DELETE INSTALLATION" : undefined;
   if (!expected || input.confirmation !== expected) throw new HttpError(400, `Type ${expected ?? "a valid confirmation"} exactly to continue`);
   const setupResetGrant = input.scope === "installation" && env.BOOTSTRAP_CODE_HASH ? await recordInstallationDeletion(db, env.BOOTSTRAP_CODE_HASH) : undefined;
-  if (input.scope === "attendance") await db.batch([
+  let calendarRemovals: number | undefined;
+  if (input.scope === "attendance") {
+    // Deleting the meetings takes their calendar mappings and queued operations with them, so the remote events that may
+    // still exist are recorded first, in the same batch, for the calendar jobs to delete.
+    const now = new Date().toISOString(); const removals = calendarRemovalStatements(db, now, await calendarRemovalTargets(env));
+    const deletion = [
     db.prepare("DELETE FROM discord_anomaly_reports WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_contests WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_recipients WHERE installation_id = 'primary'"), db.prepare("DELETE FROM discord_attendance_notifications WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_corrections WHERE installation_id = 'primary'"), db.prepare("DELETE FROM attendance_events WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meetings WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_templates WHERE installation_id = 'primary'"), db.prepare("DELETE FROM meeting_weight_categories WHERE installation_id = 'primary'"),
-    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.attendance_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString()),
-  ]);
+    db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.attendance_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, now),
+    ];
+    calendarRemovals = (await db.batch([...removals, ...deletion, stagedTransfersRemoval(db)])).slice(0, removals.length).reduce((total, result) => total + (result.meta?.changes ?? 0), 0);
+  }
   else if (input.scope === "roster") {
     const modules = moduleRosterReferences();
     const references = await db.prepare(`SELECT COUNT(*) AS count FROM members m WHERE m.installation_id = 'primary' AND (EXISTS (SELECT 1 FROM attendance_events e WHERE e.member_id = m.id) OR EXISTS (SELECT 1 FROM attendance_corrections c WHERE c.member_id = m.id) OR EXISTS (SELECT 1 FROM discord_attendance_contests d WHERE d.member_id = m.id)${modules.columns.map(({ table, column }) => ` OR EXISTS (SELECT 1 FROM ${table} h WHERE h.installation_id = m.installation_id AND h.${column} = m.id)`).join("")})`).first<{ count: number }>();
     if (Number(references?.count ?? 0) > 0) throw new HttpError(409, `Delete ${["Attendance", ...modules.labels].join(" and ")} participation first so historical records do not lose their roster references`);
-    await db.batch([db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id IS NOT NULL"), db.prepare("DELETE FROM members WHERE installation_id = 'primary'"), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.roster_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString())]);
+    await db.batch([stagedTransfersRemoval(db), db.prepare("UPDATE users SET member_id = NULL WHERE installation_id = 'primary' AND member_id IS NOT NULL"), db.prepare("DELETE FROM members WHERE installation_id = 'primary'"), db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, created_at) VALUES (?, 'primary', ?, 'data.roster_deleted', 'installation', ?)").bind(crypto.randomUUID(), principal.userId, new Date().toISOString())]);
   }
   // Installed plugin tables may not cascade from the installation row, so clear them child-first in the same batch, as an
   // installation restore does; otherwise a later first-Admin setup would inherit the deleted installation's plugin data.
   // The fingerprint match and scan integrity tables (migrations 0084 and 0088) have no foreign key to the installation
-  // either, so nothing cascades to them and they are deleted here.
-  else await db.batch([...clearExternalModuleStatements(db, installedExternalBackupModules), ...["kiosk_scan_matches", "kiosk_fingerprint_match_settings", "kiosk_accepted_scans", "kiosk_possible_wrong_matches"].map((table) => db.prepare(`DELETE FROM ${table} WHERE installation_id = 'primary'`)), db.prepare("DELETE FROM installations WHERE id = 'primary'")]);
-  return response({ deleted: true, scope: input.scope }, 200, setupResetGrant ? { "set-cookie": `${setupResetCookie}=${setupResetGrant}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${setupResetGrantMs / 1000}` } : undefined);
+  // either, so nothing cascades to them and they are deleted here. Neither do backup and restore sessions: parts staged
+  // for one hold the installation's rows, so they go too rather than wait for the clean-up.
+  else await db.batch([stagedTransfersRemoval(db), ...clearExternalModuleStatements(db, installedExternalBackupModules), ...["kiosk_scan_matches", "kiosk_fingerprint_match_settings", "kiosk_accepted_scans", "kiosk_possible_wrong_matches"].map((table) => db.prepare(`DELETE FROM ${table} WHERE installation_id = 'primary'`)), db.prepare("DELETE FROM installations WHERE id = 'primary'")]);
+  return response({ deleted: true, scope: input.scope, ...(calendarRemovals === undefined ? {} : { calendarEventRemovalsQueued: calendarRemovals }) }, 200, setupResetGrant ? { "set-cookie": `${setupResetCookie}=${setupResetGrant}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${setupResetGrantMs / 1000}` } : undefined);
 }
 /**
  * Before the installation is deleted, mark the current setup code as used (installations created before this check
@@ -4898,19 +5343,52 @@ export const registeredModuleSchedulerJobs = moduleSchedulerJobs<Env>({ modules:
  * object) stays small; the cron fallback runs all three in one pass as before. A cleanup with rows left asks for another
  * slice instead of looping inside this one.
  */
+// What each housekeeping step may cost before it starts. Each is checked against the pass budget first, so a step that
+// does not fit is left for the next round (the cron fallback) or the next slice instead of being cut off part-way.
+const HOUSEKEEPING_RECONCILE_COST: PassCost = { d1: 8 };
+const HOUSEKEEPING_PRUNE_COST: PassCost = { d1: 4 };
+const HOUSEKEEPING_CLEANUP_COST: PassCost = { d1: 8 };
+/**
+ * One pass of the participation start correction (participation-start-correction.ts). Returns whether members are left
+ * to examine. `read` is its state when the clean-up batch already read it; without it the pass reads the state itself.
+ * A failure (a schema before migration 0107 has no state table) is left for a later round.
+ */
+async function correctStoredParticipationStarts(env: Env, db: D1Database, read?: { row: unknown }): Promise<boolean> {
+  if (!read && !passFits(env, { d1: 1 })) return false;
+  try { return (await correctParticipationStarts(db, { fits: (queries) => passAllows(env, { d1: queries }), ...(read ? { read: read.row } : {}) })).more; }
+  catch (error) { if (error instanceof SchedulerBudgetError) throw error; return false; }
+}
 async function runSchedulerHousekeeping(env: Env): Promise<JobRunResult> {
   const db = requireDatabase(env); const step = env.schedulerPass?.steps ? env.schedulerPass.cursor ?? "reconcile" : undefined;
+  // A step the budget cannot cover ends the run. The failed check marks the pass as having more work; on the cron
+  // fallback that only means the next tick, which starts housekeeping from its first step again.
+  const fits = (cost: PassCost) => passAllows(env, cost);
   if (!step || step === "reconcile") {
-    try { await reconcileInstalledModules(db); } catch { /* Reconciliation retries on the next round and on requests. */ }
+    if (!fits(HOUSEKEEPING_RECONCILE_COST)) return step ? { more: true, cursor: "reconcile" } : {};
+    try { await reconcileInstalledModules(db); } catch (error) { if (error instanceof SchedulerBudgetError) throw error; /* Reconciliation retries on the next round and on requests. */ }
     if (step) return { more: true, cursor: "prune" };
   }
   if (!step || step === "prune") {
-    try { await pruneAuthProtection(db); } catch { /* Expired throttle rows are pruned on a later round. */ }
-    // One batch: used and expired kiosk codes, and PIN requests, label previews and report ids 30 days past their use.
+    if (!fits(HOUSEKEEPING_PRUNE_COST)) return step ? { more: true, cursor: "prune" } : {};
+    try { await pruneAuthProtection(db); } catch (error) { if (error instanceof SchedulerBudgetError) throw error; /* Expired throttle rows are pruned on a later round. */ }
+    // One batch: used and expired kiosk codes, PIN requests, label previews and report ids 30 days past their use,
+    // email sends left pending past their stale age, marked failed so they stop blocking Attendance disablement, and a
+    // few finished rows of the tables retainedRowPruning lists, so the step's cost is unchanged.
     // A schema before 0101 lacks one of its tables, and then the codes are removed alone, as before; one before 0100 has none.
-    try { await pruneStaleRows(db); } catch { try { await pruneDiscordKioskCodes(db); } catch { /* Pruned on a later round. */ } }
-    if (step) return { more: true, cursor: "cleanup" };
+    // The same batch reads where the one-time correction of stored participation start dates is. Once that is complete
+    // it costs nothing more; while it has members left it takes slices of its own before cleanup, so this one stays small.
+    let starts: { row: unknown } | undefined;
+    // A schema before 0107 has no state to read, and then the clean-up runs without it.
+    try { starts = { row: (await pruneStaleRowsWith(db, [startCorrectionStateRead(db)])).alongside[0]?.results?.[0] }; }
+    catch (first) {
+      if (first instanceof SchedulerBudgetError) throw first;
+      try { await pruneStaleRows(db); } catch (error) { if (error instanceof SchedulerBudgetError) throw error; try { await pruneDiscordKioskCodes(db); } catch (inner) { if (inner instanceof SchedulerBudgetError) throw inner; /* Pruned on a later round. */ } }
+    }
+    const startsLeft = starts ? await correctStoredParticipationStarts(env, db, starts) : false;
+    if (step) return { more: true, cursor: startsLeft ? "starts" : "cleanup" };
   }
+  if (step === "starts" && await correctStoredParticipationStarts(env, db)) return { more: true, cursor: "starts" };
+  if (!fits(HOUSEKEEPING_CLEANUP_COST)) return step ? { more: true, cursor: "cleanup" } : {};
   return (await runModuleCleanup(db)).status === "progress" ? { more: true, cursor: "cleanup" } : {};
 }
 export const registeredCoreSchedulerJobs: readonly SchedulerJob<Env>[] = Object.freeze([
@@ -4925,10 +5403,26 @@ const pluginJobStartCost: PassCost = Object.freeze({ d1: 12, external: 3 });
 /** The jobs a module's own writes poke: a plugin route that queues work gets its jobs run within seconds. */
 const moduleSchedulerJobIds = (moduleId: string) => (bundledModuleRegistry.modules.find((module) => module.id === moduleId)?.jobs ?? []).map((job) => job.id);
 
-type SchedulerStateRow = { pausedUntil: string | null; pausedAt: string | null; pausedBy: string | null; jobsJson: string | null };
-const schedulerStateSql = "SELECT paused_until AS pausedUntil, paused_at AS pausedAt, paused_by AS pausedBy, jobs_json AS jobsJson FROM platform_scheduler_state WHERE installation_id = 'primary'";
-// The state row exists only once the installation does; until then nothing is written and every job is due.
-const schedulerJobsWrite = (db: D1Database, jobs: JobStates, now: number) => db.prepare("INSERT INTO platform_scheduler_state (installation_id, jobs_json, updated_at) SELECT 'primary', ?, ? WHERE EXISTS (SELECT 1 FROM installations WHERE id = 'primary') ON CONFLICT(installation_id) DO UPDATE SET jobs_json = excluded.jobs_json, updated_at = excluded.updated_at").bind(JSON.stringify(jobs), new Date(now).toISOString());
+type SchedulerStateRow = { pausedUntil: string | null; pausedAt: string | null; pausedBy: string | null; jobsJson: string | null; updatedAt: string | null };
+const schedulerStateSql = "SELECT paused_until AS pausedUntil, paused_at AS pausedAt, paused_by AS pausedBy, jobs_json AS jobsJson, updated_at AS updatedAt FROM platform_scheduler_state WHERE installation_id = 'primary'";
+/**
+ * Writes the state of the named jobs only, each set in place inside jobs_json, so a write never puts back what its
+ * runner read earlier for a job it did not run: two writers (a cron pass and a slice during a change of mode, or two
+ * deliveries of one cron tick) no longer overwrite each other's jobs. The state row exists only once the installation
+ * does; until then nothing is written and every job is due.
+ *
+ * `claim` makes the write a compare-and-swap on the row as the runner read it (its updated_at, or null for no row):
+ * it changes nothing when another runner wrote first, and the caller then leaves the jobs to that runner.
+ */
+function schedulerJobsWrite(db: D1Database, jobs: JobStates, ids: readonly string[], now: number, claim?: { readAt: string | null }) {
+  const touched = Object.fromEntries(ids.map((id) => [id, jobs[id]!]));
+  const sets = ids.map(() => ", ?, json(?)").join("");
+  const guard = claim ? " WHERE platform_scheduler_state.updated_at IS ?" : "";
+  return db.prepare(`INSERT INTO platform_scheduler_state (installation_id, jobs_json, updated_at) SELECT 'primary', ?, ? WHERE EXISTS (SELECT 1 FROM installations WHERE id = 'primary') ON CONFLICT(installation_id) DO UPDATE SET jobs_json = json_set(platform_scheduler_state.jobs_json${sets}), updated_at = excluded.updated_at${guard}`)
+    .bind(JSON.stringify(touched), schedulerStateTime(now, claim?.readAt), ...ids.flatMap((id) => [`$.${JSON.stringify(id)}`, JSON.stringify(jobs[id])]), ...(claim ? [claim.readAt] : []));
+}
+/** The row's new updated_at: the write's time, moved a millisecond past the value read when the two would be equal, so a claim always changes it. */
+const schedulerStateTime = (now: number, readAt?: string | null) => { const at = new Date(now).toISOString(); return readAt && readAt >= at ? new Date(Date.parse(readAt) + 1).toISOString() : at; };
 const pausedUntilTime = (row: { pausedUntil?: string | null } | null | undefined, now: number): number | null => { const until = row?.pausedUntil ? Date.parse(row.pausedUntil) : NaN; return Number.isFinite(until) && until > now ? until : null; };
 
 /**
@@ -4957,7 +5451,7 @@ async function requireDeliveryRunning(env: Env): Promise<void> { const until = a
  * them on its next tick. Never fails or delays the write that created the work.
  */
 function pokeScheduler(env: Env, context: WorkerContext | undefined, jobIds: readonly string[]): void {
-  if (!durableScheduler(env) || !jobIds.length || env.schedulerPass) return;
+  if (schedulerRunner(env) !== "durable" || !jobIds.length || env.schedulerPass) return;
   const poke = (async () => { try { await schedulerObject(env)!.fetch(schedulerRequest("poke", { jobs: jobIds })); } catch { /* The job still runs when it next falls due. */ } })();
   context?.waitUntil(poke);
 }
@@ -4968,6 +5462,8 @@ function pokeScheduler(env: Env, context: WorkerContext | undefined, jobIds: rea
  */
 function schedulerPokesFor(pathname: string): readonly string[] {
   if (/^\/(meetings|meeting-series|meeting-templates|calendars\/sync|discord\/calendar)(\/|$)/.test(pathname) || /^\/admin\/integrations\/(google-calendar|discord\/calendar)(\/|$)/.test(pathname)) return [...schedulerJobsFor.calendar, ...schedulerJobsFor.notices];
+  // Delete attendance data leaves remote calendar events for the calendar jobs to remove.
+  if (pathname === "/admin/data") return schedulerJobsFor.calendar;
   if (/^\/labels(\/|$)/.test(pathname) || pathname.startsWith("/admin/integrations/discord/label-roles")) return schedulerJobsFor.labels;
   if (pathname === "/admin/integrations/discord/anomaly-reports" || pathname === "/discord/missing") return schedulerJobsFor.notices;
   if (pathname === "/admin/integrations/discord/channel-manager" || pathname === "/discord/kiosk-status") return schedulerJobsFor.channel;
@@ -4987,7 +5483,11 @@ const schedulerJobsFor = {
  * saving one D1 query in every slice. `steps` lets a job split its work into one step per slice (see JobRunResult).
  */
 type SchedulerPassOptions = { now?: number; pokes?: Pokes; maxJobs: number; limits: PassLimits; slack?: number; order?: number; hooks?: SliceHooks; steps?: boolean };
-export type SchedulerPassReport = SliceResult & { attempted: string[]; deferred: string[]; d1Queries: number; externalRequests: number; skipped?: "maintenance" | "unconfigured" };
+/**
+ * `skipped: "claimed"` is a cron pass that found another runner had written the state since it read it, and left the
+ * jobs to that runner. `stateless` is a pass that could not read the scheduler state and so kept none.
+ */
+export type SchedulerPassReport = SliceResult & { attempted: string[]; deferred: string[]; d1Queries: number; externalRequests: number; skipped?: "maintenance" | "unconfigured" | "claimed"; stateless?: boolean };
 /**
  * One scheduler invocation's work. A Durable Object alarm runs it with maxJobs 1 (one slice); the cron fallback runs it
  * over every due job. It opens with one batched read, marks the jobs it takes as running with their next time already
@@ -5014,21 +5514,40 @@ async function runSchedulerPass(env: Env, options: SchedulerPassOptions): Promis
   if (maintenance?.results?.length) return report({ nextWake: now + SLICE_RETRY_MS, attempted: [], deferred: [], skipped: "maintenance" });
   const pausedUntil = pausedUntilTime(stateRow, now);
   const states = parseJobStates(registeredPlatformSchedulerJobs, stateRow?.jobsJson, now);
-  // A job whose slice the platform stopped (it never reached its closing write) moves on: failed, due after its interval.
-  const crashed = options.hooks?.crashed; const crashedJob = crashed && registeredPlatformSchedulerJobs.find((job) => job.id === crashed.job);
+  // Without state every job looks due on every invocation, and a job's request for another slice could never be
+  // recorded as served: a Durable Object would run the first job's first step again every second. So a slice without
+  // state runs as the cron fallback's pass does (every due job once, each job's steps together, the pass's limits) and
+  // then sleeps the idle maximum, however much work the jobs report.
+  const stateless = !stateKept; const steps = options.steps === true && !stateless;
+  const maxJobs = stateless ? registeredPlatformSchedulerJobs.length : options.maxJobs;
+  if (stateless && options.steps) budget.widen(scheduledPassLimits);
+  // A job whose slice the platform stopped (it never reached its closing write). Once is usually a deploy or an eviction
+  // resetting the object mid-slice, so the job is simply still due and runs again. At SLICE_CRASH_LIMIT in a row the
+  // job itself is the likely cause and it moves on: failed, due after its interval.
+  const crashed = options.hooks?.crashed; const stoppedJob = crashed && registeredPlatformSchedulerJobs.find((job) => job.id === crashed.job);
+  const crashedJob = stoppedJob && (crashed!.count ?? SLICE_CRASH_LIMIT) >= SLICE_CRASH_LIMIT ? stoppedJob : undefined;
   if (crashedJob) states[crashedJob.id] = { next: now + crashedJob.interval, last: crashed!.at, outcome: "failed" };
   const pokes = crashedJob ? withoutPokes(options.pokes, [crashedJob.id]) : options.pokes;
   const ordered = rotateJobs(registeredPlatformSchedulerJobs, options.order ?? 0);
-  const due = dueJobs(ordered, states, now, { pokes, slack: options.slack, internalOnly: pausedUntil !== null }).slice(0, options.maxJobs);
+  const due = dueJobs(ordered, states, now, { pokes, slack: options.slack, internalOnly: pausedUntil !== null }).slice(0, maxJobs);
   if (!due.length) {
-    if (crashedJob && stateKept) await schedulerJobsWrite(db, states, now).run();
+    budget.close();
+    if (crashedJob && stateKept) await schedulerJobsWrite(db, states, [crashedJob.id], now).run();
     return report({ ran: crashedJob?.id, nextWake: nextWake(registeredPlatformSchedulerJobs, states, now, { pokes, pausedUntil }), attempted: [], deferred: [] });
   }
   const before = structuredClone(states);
   for (const job of due) states[job.id] = { next: now + job.interval, last: now, outcome: "running" };
+  // The ids this invocation writes at its close: the jobs it took, and a job it moved on from.
+  const written = [...new Set([...due.map((job) => job.id), ...(crashedJob ? [crashedJob.id] : [])])];
   if (options.hooks) await options.hooks.started(due[0]!.id);
-  else if (stateKept) await schedulerJobsWrite(db, states, now).run();
-  const schedulerPass: SchedulerPass = { budget, moduleGenerations: moduleServiceGenerations(modules?.results as { moduleId: string; generation: number }[] | undefined), integrations: new Map(), pausedUntil, steps: options.steps === true };
+  else if (stateKept) {
+    // The cron fallback has no object to serialize it, so its "running" write is also its claim: it succeeds only if
+    // nobody has written the state since this pass read it. A second delivery of the tick, or a runner from before a
+    // change of mode, finds the jobs taken and runs none of them.
+    const claim = await schedulerJobsWrite(db, states, written, now, { readAt: stateRow?.updatedAt ?? null }).run();
+    if ((claim.meta?.changes ?? 1) === 0 && await installationExists(db)) return report({ nextWake: now + SLICE_RETRY_MS, attempted: [], deferred: [], skipped: "claimed" });
+  }
+  const schedulerPass: SchedulerPass = { budget, moduleGenerations: moduleServiceGenerations(modules?.results as { moduleId: string; generation: number }[] | undefined), integrations: new Map(), pausedUntil, steps };
   // Core's own jobs make provider requests outside a module scope; counting them is all their authority check does.
   const jobEnv: Env = { ...passEnv, schedulerPass, moduleProviderAuthority: async () => budget.chargeExternal() };
   const attempted: string[] = []; let more = false;
@@ -5036,12 +5555,16 @@ async function runSchedulerPass(env: Env, options: SchedulerPassOptions): Promis
     try {
       // A disabled module's job is skipped, not deferred: its check reads the module state this pass already has.
       if (job.enabled && !await job.enabled(jobEnv)) { states[job.id]!.outcome = "paused"; attempted.push(job.id); continue; }
-      // Leave room for the closing write.
-      if (!budget.allows(addCosts(selfLimitingJobs.has(job.id) ? scheduledJobStartCost : pluginJobStartCost, { d1: 1 }))) { budget.defer(job.id); states[job.id] = before[job.id]!; continue; }
+      // The budget keeps its own reserve for the closing write, so this is the job's cost alone.
+      if (!budget.allows(selfLimitingJobs.has(job.id) ? scheduledJobStartCost : pluginJobStartCost)) { budget.defer(job.id); states[job.id] = before[job.id]!; continue; }
       budget.exhausted = false; attempted.push(job.id);
+      const refusedBefore = budget.refused;
       // The job sees the step it asked to continue from; jobs run one after another, so the shared pass can carry it.
       schedulerPass.cursor = before[job.id]!.cursor;
       const result = await job.run(jobEnv);
+      // The budget refused one of the job's queries or requests at the limit: whatever the job made of that error, its
+      // work is unfinished. It is recorded as failed and waits out its interval rather than asking for another slice.
+      if (budget.refused > refusedBefore) throw new SchedulerBudgetError("D1 query");
       const jobMore = budget.exhausted || Boolean(result && typeof result === "object" && (result as { more?: unknown }).more === true);
       const cursor = jobMore ? runCursor(result) : undefined;
       states[job.id] = { next: jobMore ? now + SLICE_CONTINUE_MS : now + job.interval, last: now, outcome: "ok", ...(cursor ? { cursor } : {}) };
@@ -5050,14 +5573,18 @@ async function runSchedulerPass(env: Env, options: SchedulerPassOptions): Promis
       // Each job's failure is its own; it retries when it next falls due.
       const status = (error as { status?: number })?.status;
       states[job.id]!.outcome = status === 409 || status === 503 ? "paused" : "failed";
+      if (error instanceof SchedulerBudgetError) console.log(JSON.stringify({ event: "scheduler_budget_refused", job: job.id, ...budget.snapshot() }));
     }
   }
-  if (stateKept) await schedulerJobsWrite(db, states, now).run();
+  // The jobs are done; the closing write may use the budget's reserve, so a busy pass still records its outcomes.
+  budget.close();
+  if (stateKept) await schedulerJobsWrite(db, states, written, now).run();
   if (budget.deferred.length) console.log(JSON.stringify({ event: "scheduler_jobs_deferred", ...budget.snapshot() }));
+  if (stateless) return report({ ran: due[0]!.id, more: false, nextWake: now + SLICE_IDLE_MAX_MS, attempted, deferred: [...budget.deferred], stateless: true });
   const wake = more ? now + SLICE_CONTINUE_MS : nextWake(registeredPlatformSchedulerJobs, states, now, { pokes: withoutPokes(options.pokes, attempted), pausedUntil });
   return report({ ran: due[0]!.id, more, nextWake: wake, attempted, deferred: [...budget.deferred] });
 }
-const addCosts = (left: PassCost, right: PassCost): PassCost => ({ d1: (left.d1 ?? 0) + (right.d1 ?? 0), external: (left.external ?? 0) + (right.external ?? 0) });
+const installationExists = async (db: D1Database) => Boolean(await db.prepare("SELECT 1 FROM installations WHERE id = 'primary'").first());
 const withoutPokes = (pokes: Pokes | undefined, ran: readonly string[]): Pokes | undefined => pokes && Object.fromEntries(Object.entries(pokes).filter(([id]) => !ran.includes(id)));
 
 /** One Durable Object slice: one job's small batch (or one step of it) inside one alarm invocation. */
@@ -5065,10 +5592,11 @@ export function runSchedulerSlice(env: Env, pokes: Pokes = {}, now?: number, hoo
   return runSchedulerPass(env, { now, pokes, maxJobs: 1, limits: scheduledSliceLimits, hooks, steps: true });
 }
 
-export const PlatformScheduler = schedulerClass<Env>(registeredPlatformSchedulerJobs, (env, pokes, hooks) => runSchedulerSlice(env, pokes, undefined, hooks));
+// The object and the Worker read the same setting: with the cron fallback forced, the object runs no slice.
+export const PlatformScheduler = schedulerClass<Env>(registeredPlatformSchedulerJobs, (env, pokes, hooks) => runSchedulerSlice(env, pokes, undefined, hooks), Date.now, (env) => !cronSchedulerForced(env));
 const schedulerObject = (env: Env) => env.PLATFORM_SCHEDULER ? env.PLATFORM_SCHEDULER.get(env.PLATFORM_SCHEDULER.idFromName("primary")) : undefined;
 /** The Durable Object runs the scheduler whenever it is bound; PLATFORM_SCHEDULER_MODE "cron" keeps the cron fallback. */
-const durableScheduler = (env: Env) => Boolean(env.PLATFORM_SCHEDULER) && env.PLATFORM_SCHEDULER_MODE !== "cron";
+const durableScheduler = (env: Env) => schedulerRunner(env) === "durable";
 
 /** Scheduler status and Stop/Start, read from D1 so they work with or without the Durable Object. */
 async function platformScheduler(request: Request, env: Env, context?: WorkerContext): Promise<Response> {
@@ -5081,11 +5609,15 @@ async function platformScheduler(request: Request, env: Env, context?: WorkerCon
     if (action === "stop") {
       // A Stop always lasts 24 hours from the latest Stop, so a forgotten Stop cannot hold delivery indefinitely.
       const until = new Date(at.getTime() + SCHEDULER_STOP_MS).toISOString();
-      await db.prepare("INSERT INTO platform_scheduler_state (installation_id, paused_until, paused_at, paused_by, updated_at) VALUES ('primary', ?, ?, ?, ?) ON CONFLICT(installation_id) DO UPDATE SET paused_until = excluded.paused_until, paused_at = excluded.paused_at, paused_by = excluded.paused_by, updated_at = excluded.updated_at").bind(until, at.toISOString(), principal.userId, at.toISOString()).run();
-      await writeAudit(db, principal, "scheduler.stop", "platform_scheduler", "primary", { pausedUntil: until });
+      await db.batch([
+        db.prepare("INSERT INTO platform_scheduler_state (installation_id, paused_until, paused_at, paused_by, updated_at) VALUES ('primary', ?, ?, ?, ?) ON CONFLICT(installation_id) DO UPDATE SET paused_until = excluded.paused_until, paused_at = excluded.paused_at, paused_by = excluded.paused_by, updated_at = excluded.updated_at").bind(until, at.toISOString(), principal.userId, at.toISOString()),
+        auditStatement(db, principal, "scheduler.stop", "platform_scheduler", "primary", { pausedUntil: until }),
+      ]);
     } else {
-      await db.prepare("UPDATE platform_scheduler_state SET paused_until = NULL, paused_at = NULL, paused_by = NULL, updated_at = ? WHERE installation_id = 'primary'").bind(at.toISOString()).run();
-      await writeAudit(db, principal, "scheduler.start", "platform_scheduler", "primary");
+      await db.batch([
+        db.prepare("UPDATE platform_scheduler_state SET paused_until = NULL, paused_at = NULL, paused_by = NULL, updated_at = ? WHERE installation_id = 'primary'").bind(at.toISOString()),
+        auditStatement(db, principal, "scheduler.start", "platform_scheduler", "primary"),
+      ]);
       // Work the Stop held goes out now rather than when each job next falls due.
       pokeScheduler(env, context, registeredPlatformSchedulerJobs.map((job) => job.id));
     }
@@ -5213,7 +5745,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     }
     else if (url.pathname === "/admin/kiosks/fingerprint-match" && ["GET", "PUT"].includes(request.method)) {
       const principal = await requireRole(request, env, ["admin"]); const db = requireDatabase(env);
-      if (request.method === "PUT") { const minimumScore = validateMinimumScore(await parseJson(request)); await saveFingerprintMinimumScore(db, minimumScore); await writeAudit(db, principal, "kiosk.fingerprint_minimum_score_changed", "kiosk", null, { minimumScore }); }
+      if (request.method === "PUT") { const minimumScore = validateMinimumScore(await parseJson(request)); await db.batch([saveFingerprintMinimumScoreStatement(db, minimumScore), auditStatement(db, principal, "kiosk.fingerprint_minimum_score_changed", "kiosk", null, { minimumScore })]); }
       result = response(await readFingerprintMatch(db));
     }
     else if (url.pathname === "/admin/kiosks/possible-wrong-matches" && request.method === "GET") { await requireRole(request, env, ["admin"]); result = response(await listPossibleWrongMatches(requireDatabase(env))); }
@@ -5297,7 +5829,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/integrations/discord/roles" && request.method === "GET") result = await discordGuildRoles(request, env);
     else if (url.pathname === "/admin/integrations/discord/label-roles/preview" && request.method === "POST") result = await discordLabelPreview(request, env);
     else if (url.pathname === "/admin/integrations/discord/label-roles/two-way/preview" && request.method === "POST") result = await discordTwoWayPreview(request, env);
-    else if (url.pathname === "/admin/integrations/discord/label-roles/two-way/confirm" && request.method === "POST") result = await discordTwoWayConfirm(request, env, context);
+    else if (url.pathname === "/admin/integrations/discord/label-roles/two-way/confirm" && request.method === "POST") result = await discordTwoWayConfirm(request, env);
     else if (url.pathname === "/admin/integrations/discord/label-roles/unmatched" && request.method === "GET") result = await discordUnmatchedRoleMembers(request, env);
     else if (/^\/admin\/integrations\/discord\/label-roles\/[^/]+\/direction$/.test(url.pathname) && request.method === "PUT") result = await discordLabelDirection(request, env, decodeURIComponent(url.pathname.split("/")[5]));
     else if (url.pathname === "/admin/integrations/discord/label-roles/apply" && request.method === "POST") result = await discordLabelApply(request, env, context);
@@ -5327,6 +5859,8 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/roster/history" && request.method === "GET") result = await rosterHistory(request, env);
     else if (url.pathname === "/admin/data/backup" && request.method === "GET") result = await backupData(request, env);
     else if (url.pathname === "/admin/data/restore" && request.method === "POST") result = await restoreData(request, env);
+    else if (url.pathname.startsWith("/admin/data/backup/sessions")) result = await backupSessions(request, env, url.pathname);
+    else if (url.pathname.startsWith("/admin/data/restore/sessions")) result = await restoreSessions(request, env, url.pathname);
     else if (url.pathname === "/admin/data" && request.method === "DELETE") result = await deleteData(request, env);
     else if (url.pathname === "/kiosk/pair" && request.method === "POST") result = await redeemPairingCode(request, env);
     else if (url.pathname === "/kiosk/fingerprint-review" || url.pathname.startsWith("/kiosk/fingerprint-review/")) {
@@ -5413,8 +5947,13 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     try { await schedulerObject(env)!.fetch(schedulerRequest("watchdog")); } catch { /* The next tick tries again. */ }
     return;
   }
-  // The cron fallback: one slice for each due job, within one pass budget, starting one job later each tick so a job
-  // the budget defers leads a later tick. A job due within a minute of the tick runs now rather than a tick later.
+  // The cron fallback is the runner. A bound object (the fallback was forced) is told to stand down first: that drops an
+  // alarm armed before the switch and waits for a slice still in flight, so the two never run jobs at once. An object
+  // that cannot be reached is not running slices either, and one that can stands down by itself when its alarm fires.
+  // This request is the invocation's one subrequest outside the pass budget.
+  try { await schedulerObject(env)?.fetch(schedulerRequest("standdown")); } catch { /* The pass's claim and the object's own check still apply. */ }
+  // One slice for each due job, within one pass budget, starting one job later each tick so a job the budget defers
+  // leads a later tick. A job due within a minute of the tick runs now rather than a tick later.
   const scheduledTime = controller.scheduledTime;
   await runSchedulerPass(env, { now: Date.now(), maxJobs: registeredPlatformSchedulerJobs.length, limits: scheduledPassLimits, slack: 60_000, order: scheduledTime === undefined ? 0 : passSlot(scheduledTime) });
 } };

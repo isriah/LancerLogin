@@ -115,11 +115,14 @@ test("the operation queue records a disabled Calendar API as not retryable and a
   const operation = () => ({ ...db.value<{ status: string; nextAttemptAt: string | null; lastError: string }>("SELECT status, next_attempt_at AS nextAttemptAt, last_error AS lastError FROM google_calendar_operations")! });
 
   mockCalendar(context, 403, googleError(403, "accessNotConfigured"));
+  // Retry makes the operation due again; the scheduled job delivers it and records Google's refusal.
+  const deliver = async () => { db.sqlite.exec("DELETE FROM platform_scheduler_state"); await worker.scheduled({ cron: "*/5 * * * *", scheduledTime: 0 } as never, env); };
   const retried = await call(env, "/admin/integrations/google-calendar/retry", { method: "POST", body: {} });
-  assert.equal(retried.status, 200, await retried.clone().text()); assert.deepEqual(await retried.json(), { synced: 0, queued: 0, failed: 1 });
+  assert.equal(retried.status, 200, await retried.clone().text()); assert.deepEqual(await retried.json(), { synced: 0, queued: 1, failed: 0, waiting: 1, scheduler: "cron", perPass: 5 });
+  await deliver();
   assert.deepEqual(operation(), { status: "failed", nextAttemptAt: null, lastError: apiDisabled });
 
   mockCalendar(context, 429, googleError(429, "rateLimitExceeded"));
-  await call(env, "/admin/integrations/google-calendar/retry", { method: "POST", body: {} });
+  await call(env, "/admin/integrations/google-calendar/retry", { method: "POST", body: {} }); await deliver();
   const limited = operation(); assert.equal(limited.status, "failed"); assert.equal(limited.lastError, rateLimited); assert.ok(limited.nextAttemptAt, "a rate limit is retried later");
 });

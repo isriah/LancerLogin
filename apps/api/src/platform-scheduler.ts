@@ -1,5 +1,6 @@
-// The background scheduler, built to fit one deployment on the Cloudflare Workers Free plan (10 ms CPU, 50 external
-// requests and 50 D1 queries per invocation, 100,000 Durable Object requests a day).
+// The background scheduler, built to fit one deployment on the Cloudflare Workers Free plan (10 ms CPU per HTTP request
+// or cron trigger, 50 subrequests per invocation counting D1 queries and outbound requests together (see
+// scheduler-budget.ts), 100,000 Durable Object requests a day).
 //
 // Work runs in slices. A slice opens with one D1 batch (maintenance, runnable modules, scheduler state), runs ONE job's
 // small batch under its own SchedulerBudget, and records the outcome in D1 (platform_scheduler_state). The state lives
@@ -9,6 +10,11 @@
 // second later while a job reports more work, otherwise when the next job falls due. Writes that create work poke the
 // alarm so that work goes out within seconds. The 5-minute cron is then only a watchdog that re-arms a missing alarm.
 // Without the binding, the cron runs the slices itself, each due job's slice once per tick within one pass budget.
+//
+// Exactly one of the two runs jobs. `schedulerRunner` decides which from the deployment's environment, and the Worker
+// and the object both use it: in cron mode the object runs no slice and arms no alarm (an alarm armed before the switch
+// stands down when it fires), and each cron tick first tells a bound object to stand down, which also waits for a slice
+// still in flight.
 import type { ModuleDefinition } from "../../../packages/shared/src/module-platform.ts";
 
 export type JobOutcome = "waiting" | "running" | "ok" | "failed" | "paused";
@@ -40,8 +46,13 @@ export interface SchedulerJob<E> {
 export const SCHEDULER_STOP_MS = 24 * 3_600_000;
 /** The delay before the next slice while a job reports more work. */
 export const SLICE_CONTINUE_MS = 1_000;
-/** The delay before retrying a slice that could not run (maintenance, or state that could not be read). */
+/**
+ * The delay before retrying a slice that could not run (maintenance, or a slice that threw). A slice that keeps throwing
+ * doubles it each time up to SLICE_IDLE_MAX_MS, so a persistent failure settles at one attempt every five minutes.
+ */
 export const SLICE_RETRY_MS = 30_000;
+/** Slices the platform may stop in a row on one job before that job is marked failed and waits out its interval. */
+export const SLICE_CRASH_LIMIT = 2;
 /** The longest an idle alarm sleeps; the watchdog re-arms one that is missing, and this bounds one that is late. */
 export const SLICE_IDLE_MAX_MS = 5 * 60_000;
 /**
@@ -51,6 +62,14 @@ export const SLICE_IDLE_MAX_MS = 5 * 60_000;
  */
 export const SLICE_DAILY_CONTINUATIONS = 10_000;
 export const SLICE_SLOW_CONTINUE_MS = 60_000;
+
+/** Which runner a deployment's environment selects; PLATFORM_SCHEDULER_MODE "cron" keeps the cron fallback. */
+export type SchedulerRunner = "durable" | "cron";
+type RunnerEnvironment = { PLATFORM_SCHEDULER?: unknown; PLATFORM_SCHEDULER_MODE?: string };
+/** Whether the deployment forces the cron fallback. The Durable Object reads this too, so both sides agree. */
+export const cronSchedulerForced = (env: RunnerEnvironment) => env.PLATFORM_SCHEDULER_MODE === "cron";
+/** The one runner that may run jobs: the Durable Object whenever it is bound, unless the cron fallback is forced. */
+export const schedulerRunner = (env: RunnerEnvironment): SchedulerRunner => env.PLATFORM_SCHEDULER && !cronSchedulerForced(env) ? "durable" : "cron";
 
 const outcomes: ReadonlySet<string> = new Set(["waiting", "running", "ok", "failed", "paused"]);
 const timestamp = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
@@ -133,20 +152,28 @@ export interface SchedulerState { storage: SchedulerStorage; }
 export interface SchedulerNamespace { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> }; }
 /** What one slice did, for the alarm to decide when to run the next. */
 export type SliceResult = { ran?: string; more?: boolean; nextWake: number };
-/** A slice the platform stopped part-way (for example at the CPU limit): its job and when it started. */
-export type InFlight = { job: string; at: number };
+/**
+ * A slice the platform stopped part-way: its job, when it started, and how many slices in a row stopped on that job.
+ * One stop is usually a deploy or an eviction resetting the object, not the job's fault.
+ */
+export type InFlight = { job: string; at: number; count?: number };
 /**
  * How the Durable Object follows a slice. `started` records the job before it runs, in the object's own storage rather
- * than with a D1 write; `crashed` is the job a previous alarm started but never finished, which the slice moves on from
- * (marked failed, next due after its interval) so one job the platform keeps stopping cannot hold up the others.
+ * than with a D1 write; `crashed` is the job a previous alarm started but never finished. The first time, the slice
+ * simply runs the job again (it is still due). At SLICE_CRASH_LIMIT stops in a row the slice moves on from it (marked
+ * failed, next due after its interval), so one job the platform keeps stopping cannot hold up the others.
  */
 export type SliceHooks = { crashed?: InFlight; started(job: string): Promise<void> };
 export type Pokes = Record<string, number>;
 
 /** Requests the Worker sends its own scheduler object. The object is reachable only through this Worker's binding. */
-export const schedulerRequest = (action: "poke" | "watchdog" | "status", body?: unknown) => new Request(`https://scheduler.internal/${action}`, action === "status" ? { method: "GET" } : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
+export const schedulerRequest = (action: "poke" | "watchdog" | "status" | "standdown", body?: unknown) => new Request(`https://scheduler.internal/${action}`, action === "status" ? { method: "GET" } : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
 
-export function schedulerClass<E>(jobs: readonly SchedulerJob<E>[], runSlice: (env: E, pokes: Pokes, hooks: SliceHooks) => Promise<SliceResult>, now: () => number = Date.now) {
+/**
+ * `active` says whether this object is the deployment's runner (see schedulerRunner). While it is not, the object runs
+ * no slice and keeps no alarm armed.
+ */
+export function schedulerClass<E>(jobs: readonly SchedulerJob<E>[], runSlice: (env: E, pokes: Pokes, hooks: SliceHooks) => Promise<SliceResult>, now: () => number = Date.now, active: (env: E) => boolean = () => true) {
   validateSchedulerRegistry(jobs);
   const known = new Set(jobs.map((job) => job.id));
   return class {
@@ -176,6 +203,12 @@ export function schedulerClass<E>(jobs: readonly SchedulerJob<E>[], runSlice: (e
         const path = new URL(request.url).pathname;
         if (request.method === "GET" && path === "/status") return Response.json({ alarm: await this.state.storage.getAlarm() }, { headers: { "cache-control": "no-store" } });
         if (request.method !== "POST") return new Response(null, { status: 404 });
+        // The cron fallback is the runner: nothing stays armed here. Requests run one at a time with alarms, so by the
+        // time this answers no slice is in flight either, and the cron pass that asked may start.
+        if (path === "/standdown" || ((path === "/watchdog" || path === "/poke") && !active(this.env))) {
+          await this.standDown();
+          return Response.json({ alarm: null, standby: true });
+        }
         if (path === "/watchdog") {
           // The cron's only scheduler work: an alarm lost to an error, a deploy or an eviction is re-armed.
           const current = await this.state.storage.getAlarm();
@@ -197,18 +230,34 @@ export function schedulerClass<E>(jobs: readonly SchedulerJob<E>[], runSlice: (e
       });
     }
 
+    /** Leave the work to the cron fallback: no alarm, and no record of a slice in flight. */
+    private async standDown(): Promise<void> {
+      if (await this.state.storage.getAlarm() !== null) await this.state.storage.deleteAlarm();
+      if (await this.state.storage.get<InFlight>("inflight")) await this.state.storage.delete?.("inflight");
+    }
+
     alarm(): Promise<void> {
       return this.serial(async () => {
+        // An alarm armed before the deployment switched to the cron fallback: it runs nothing and is not re-armed.
+        if (!active(this.env)) { await this.standDown(); return; }
         const started = now();
         const pokes = await this.state.storage.get<Pokes>("pokes") ?? {};
-        const crashed = await this.state.storage.get<InFlight>("inflight");
+        const stopped = await this.state.storage.get<InFlight>("inflight");
+        const crashed = stopped && known.has(stopped.job) ? { ...stopped, count: stopped.count ?? 1 } : undefined;
         let marked = false;
-        const hooks: SliceHooks = { ...(crashed && known.has(crashed.job) ? { crashed } : {}), started: async (job) => { marked = true; await this.state.storage.put("inflight", { job, at: started }); } };
-        let result: SliceResult;
+        // A job that stops the slice again carries its count forward; any other job starts from one.
+        const hooks: SliceHooks = { ...(crashed ? { crashed } : {}), started: async (job) => { marked = true; await this.state.storage.put("inflight", { job, at: started, count: crashed && crashed.job === job ? crashed.count + 1 : 1 }); } };
+        let result: SliceResult; let threw = false;
         try { result = await runSlice(this.env, pokes, hooks); }
-        catch { result = { nextWake: started + SLICE_RETRY_MS }; }
+        catch { threw = true; result = { nextWake: started }; }
+        // A slice that keeps throwing (D1 unreachable, for example) backs off: 30 s, 1 min, 2 min, 4 min, then every 5.
+        const failures = await this.state.storage.get<number>("failures") ?? 0;
+        if (threw) {
+          await this.state.storage.put("failures", failures + 1);
+          result = { nextWake: started + Math.min(SLICE_IDLE_MAX_MS, SLICE_RETRY_MS * 2 ** Math.min(failures, 8)) };
+        } else if (failures) await this.state.storage.put("failures", 0);
         // Reached only when the slice finished (or failed in JavaScript): the platform did not stop it.
-        if (marked || crashed) await this.state.storage.delete?.("inflight");
+        if (marked || stopped) await this.state.storage.delete?.("inflight");
         // A poke that arrived after the slice started stays for the next one.
         if (result.ran && pokes[result.ran] !== undefined && pokes[result.ran]! <= started) {
           delete pokes[result.ran];

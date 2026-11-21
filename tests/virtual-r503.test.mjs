@@ -71,5 +71,5 @@ test("faults: image errors, no match, a chosen score, a tapped finger and an unp
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(await reader.fingerPresent(), false);
   assert.throws(() => virtual.present("not a finger"), /Present a finger/);
-  assert.throws(() => virtual.setFaults({ image: "smudged" }), /faint, messy or unusable/);
+  assert.throws(() => virtual.setFaults({ image: "smudged" }), /faint, messy, unusable or garbled/);
 });

@@ -228,3 +228,52 @@ test("DELETE INSTALLATION clears installed plugin tables, including ones that do
   assert.equal(db.count("SELECT COUNT(*) AS n FROM installations"), 0);
   for (const table of ["synthetic_notes_entries", "synthetic_notes_tags", "synthetic_notes_jobs", "synthetic_notes_tokens", "synthetic_addon_items"]) assert.equal(db.count(`SELECT COUNT(*) AS n FROM ${table}`), 0, `${table} is cleared`);
 });
+
+test("backups and restores in parts carry plugin sections exactly as the single requests do", async (t) => {
+  const { downloadBackup, restoreInParts, splitBackup } = await import("../apps/dashboard/src/backup-transfer.ts");
+  const { createSessionCodec } = await import("../apps/api/src/runtime-security.ts");
+  const { sessionSecret, restoredSessionCookie } = await import("./fixtures/backup-database.ts");
+  const installation = () => {
+    const { db, client } = pluginDatabase(); t.after(() => db.raw.close());
+    // Enough audit history that the restore uploads it in parts while the plugin sections stay in the document.
+    db.raw.exec("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<400) INSERT INTO audit_log(id,installation_id,actor_user_id,action,target_type,target_id,metadata_json,created_at) SELECT 'test-audit-' || printf('%025d', x),'primary','admin','synthetic.audited','installation','primary','{\"synthetic\":true}','2026-01-02T00:00:00.000Z' FROM n");
+    const env = { DB: db, SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, APP_MODE: "configured" }; let cookie: string | undefined; const sent: string[] = [];
+    const request = async (path: string, init?: { method?: string; body?: string | Uint8Array }) => {
+      cookie ??= "lancerlogin_session=" + await createSessionCodec(sessionSecret).issue({ userId: "admin", role: "admin" });
+      const result = await worker.fetch(new Request("https://fixture.test" + path, { method: init?.method ?? "GET", headers: { cookie, ...(init?.body === undefined ? {} : { "content-type": "application/json" }) }, body: init?.body }), env);
+      sent.push(`${init?.method ?? "GET"} ${path}`); cookie = restoredSessionCookie(result) ?? cookie; return result;
+    };
+    const pluginRows = () => Object.fromEntries(["synthetic_notes_entries", "synthetic_notes_tags", "synthetic_notes_jobs", "synthetic_notes_tokens", "synthetic_addon_items", "platform_modules", "platform_module_assignments"].map((table) => [table, db.rows(`SELECT * FROM ${table}`).map((row) => JSON.stringify(row)).sort()]));
+    return { db, client, request, sent, pluginRows };
+  };
+  const source = installation(); await source.client.call("/health");
+  const single = await source.client.backup("installation");
+  const file = JSON.parse((await downloadBackup(source.request, { scope: "installation" }))!.text) as Backup;
+  // The single request ran first, so the later snapshot holds its audit entry and is otherwise the same file.
+  assert.deepEqual(Object.keys(file), Object.keys(single)); assert.deepEqual(file.externalModules, single.externalModules);
+  assert.deepEqual({ ...file, exportedAt: null, tables: { ...file.tables, audit_log: file.tables.audit_log.slice(0, -1) } }, { ...single, exportedAt: null });
+  assert.ok(source.sent.filter((path) => path.includes("/parts/")).length > 10);
+  assert.ok(splitBackup(file).parts.every((part) => part.table === "audit_log") && splitBackup(file).parts.length >= 2, "plugin sections stay in the document");
+
+  // Restored in parts and in one request, the plugin tables and module state come out the same.
+  const whole = installation(); const inParts = installation();
+  for (const target of [whole, inParts]) target.db.raw.exec("DELETE FROM synthetic_notes_tags; UPDATE synthetic_notes_entries SET body = 'Changed'; DELETE FROM synthetic_addon_items;");
+  assert.equal((await whole.client.restore(file)).status, 200);
+  const restored = await restoreInParts(inParts.request, { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: file }); assert.equal(restored?.status, 200, await restored?.clone().text());
+  assert.deepEqual(inParts.pluginRows(), whole.pluginRows());
+  assert.deepEqual(inParts.db.rows("SELECT id, status, lease_token FROM synthetic_notes_jobs ORDER BY id"), [{ id: "job-a-pending", status: "cancelled", lease_token: null }, { id: "job-b-done", status: "completed", lease_token: null }]);
+  assert.ok(inParts.sent.some((path) => path.startsWith("PUT ")) && inParts.sent.at(-1)!.endsWith("/commit"));
+  assert.equal(inParts.db.count("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'synthetic.audited'"), 400);
+
+  // A plugin the installation cannot restore is refused when the restore starts, before any part is uploaded, with the
+  // single request's answer; the explicit discard then restores everything else.
+  const retired = withRetiredPlugin(file); const before = inParts.sent.length;
+  const refused = await restoreInParts(inParts.request, { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: retired });
+  assert.equal(refused?.status, 409); const refusal = await refused!.json() as Backup;
+  assert.deepEqual(refusal, await (await whole.client.restore(retired)).json()); assert.equal(refusal.code, "module-restore-refused");
+  assert.deepEqual(inParts.sent.slice(before), ["POST /admin/data/restore/sessions"]); assert.equal(inParts.db.count("SELECT COUNT(*) AS n FROM data_transfer_sessions WHERE result_json IS NULL"), 0);
+  const discarded = await restoreInParts(inParts.request, { scope: "installation", confirmation: "RESTORE INSTALLATION", backup: retired, excludeModules: refusal.optOut.excludeModules });
+  assert.equal(discarded?.status, 200, await discarded?.clone().text());
+  assert.deepEqual((await discarded!.json() as Backup).excludedModules, (await (await whole.client.restore(retired, { excludeModules: ["synthetic-retired"] })).json() as Backup).excludedModules);
+  assert.deepEqual(inParts.pluginRows(), whole.pluginRows());
+});

@@ -69,9 +69,17 @@ export const attendanceCleanupSteps: readonly CleanupStep[] = [
   { kind: "delete", table: "discord_kiosk_codes" },
   // Report ids for offline wrong-PIN reports (migration 0101) belong to Attendance kiosks.
   { kind: "delete", table: "kiosk_pin_failure_reports" },
+  // Calendar events recorded for removal (migration 0103) cannot be reached once the module's data is gone and its jobs
+  // no longer run: those still waiting are set aside, so the integration cards stop counting them as waiting.
+  { kind: "reset", table: "calendar_event_removals", pending: "next_attempt_at IS NOT NULL", set: "next_attempt_at=NULL,last_error='Attendance was removed before this event could be deleted.'", bindings: [] },
 ];
 
-/** In-flight Attendance delivery work that must drain before deletion. Binds the installation three times. */
+/**
+ * Attendance delivery work that is being sent this moment and must finish before deletion: an email in progress, or a
+ * Discord calendar operation whose delivery holds its lease. Queued calendar operations do not block: they are deleted
+ * with the rest, and the remote events their deletes were for were recorded in calendar_event_removals when the module
+ * was disabled. The clean-up sets those removals aside; Sync all, after Attendance is set up again, makes them due.
+ * Binds the installation twice.
+ */
 export const attendanceCleanupBlocker = `EXISTS(SELECT 1 FROM integration_deliveries WHERE installation_id=? AND status='pending')
-  OR EXISTS(SELECT 1 FROM google_calendar_operations WHERE installation_id=? AND status='pending')
-  OR EXISTS(SELECT 1 FROM discord_calendar_operations WHERE installation_id=? AND (status='processing' OR julianday(lease_expires_at)>julianday('now')))`;
+  OR EXISTS(SELECT 1 FROM discord_calendar_operations WHERE installation_id=? AND status='processing' AND julianday(lease_expires_at)>julianday('now'))`;

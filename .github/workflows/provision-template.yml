@@ -170,7 +170,20 @@ jobs:
             const bindings = settings && settings.success === true && Array.isArray(settings.result?.bindings) ? settings.result.bindings.filter((binding) => binding?.name === "RELEASE_VERSION") : [];
             return bindings.length === 1 && bindings[0].type === "plain_text" ? installed({ releaseVersion: bindings[0].text }) : undefined;
           }
-          module.exports = { parse, compare, official, newest, installed, configured };
+          // Not part of the product policy: what a Worker's /health says after this run deployed tag. "ready" when it
+          // answers as that release in the ready mode; otherwise "release:<version>", "mode:<mode>" or "no_answer".
+          // Every release since 2.0.0 reports mode ready whenever its D1 database is bound: before the first Admin exists,
+          // in maintenance and during a web update alike (setup progress is on /setup/status). Only a Worker without its
+          // database reports unconfigured, so ready is the one accepted mode for create, resume and upgrade.
+          function deployed(health, tag) {
+            if (!health || typeof health !== "object" || Array.isArray(health) || health.service !== "lancerlogin-api") return "no_answer";
+            const version = health.releaseVersion;
+            if (typeof version !== "string" || `v${version}` !== tag) return `release:${typeof version === "string" && /^[0-9A-Za-z.+-]{1,80}$/.test(version) ? version : "unknown"}`;
+            const mode = health.ok === true ? health.mode : "not ok";
+            if (mode !== "ready") return `mode:${typeof mode === "string" && /^[a-z _-]{1,40}$/.test(mode) ? mode : "unknown"}`;
+            return "ready";
+          }
+          module.exports = { parse, compare, official, newest, installed, configured, deployed };
           if (require.main === module) {
             const [mode, first, second] = process.argv.slice(2);
             let result;
@@ -179,6 +192,7 @@ jobs:
               else if (mode === "compare") result = compare(first, second);
               else if (mode === "installed") result = installed(JSON.parse(fs.readFileSync(first, "utf8")));
               else if (mode === "configured") result = configured(JSON.parse(fs.readFileSync(first, "utf8")));
+              else if (mode === "deployed") result = deployed(JSON.parse(fs.readFileSync(first, "utf8")), second);
             } catch { result = undefined; }
             if (result === undefined) process.exit(1);
             process.stdout.write(String(result));
@@ -384,18 +398,34 @@ jobs:
         run: |
           mkdir -p .provision
           echo "::add-mask::$CLOUDFLARE_ACCOUNT_ID"
-          status=$(curl --silent --show-error --proto '=https' --tlsv1.2 \
+          rm -f .provision/token.json
+          status=$(curl --silent --show-error --proto '=https' --tlsv1.2 --max-time 30 \
             --output .provision/token.json --write-out '%{http_code}' \
             --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify")
-          if [ "$status" != "200" ]; then
-            # JavaScript expands this template literal, not Bash.
-            # shellcheck disable=SC2016
-            node -e 'const d=require("./.provision/token.json"); console.log(`::error title=cloudflare_token_rejected::Cloudflare rejected CLOUDFLARE_API_TOKEN for CLOUDFLARE_ACCOUNT_ID (HTTP ${process.argv[1]}; codes: ${(d.errors||[]).map(e=>e.code).join(" ")||"none"}): check that the account ID names the account that owns the Account API token and that the token is active.`)' "$status"
-            exit 1
-          fi
-          if ! node -e 'const d=require("./.provision/token.json"); if(d.success!==true||d.result?.status!=="active") process.exit(1)'; then
-            echo "::error title=account_token_invalid::CLOUDFLARE_API_TOKEN is not active: create a new Account API token in the Cloudflare dashboard (Manage account > Account API tokens) and replace the production environment secret."
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify") || status="${status:-000}"
+          # The token is required, so every failure here stops the run. Cloudflare's error codes are listed, not interpreted:
+          # its API documentation does not define them for this request, so the advice follows the HTTP status.
+          codes=$(node -e 'try { const d=require("./.provision/token.json"); process.stdout.write((d.errors||[]).map((e)=>e.code).join(" ")); } catch {}' 2>/dev/null || true)
+          seen="HTTP $status; codes: ${codes:-none}"
+          new_token="create a new Account API token in the Cloudflare dashboard (Manage account > Account API tokens) with the four permissions listed at https://isriah.github.io/LancerLogin/setup.html#cloudflare-token, replace the production environment secret CLOUDFLARE_API_TOKEN with it, then run this workflow again."
+          case "$status" in
+            200) ;;
+            401)
+              # Authentication failed: the usual cause for an installation updated months after setup is a token that
+              # expired or was deleted. A token used with another account's ID fails the same way.
+              echo "::error title=cloudflare_token_rejected::Cloudflare did not accept CLOUDFLARE_API_TOKEN ($seen). The token has probably expired or been deleted, which is the usual cause when this installation was set up or last updated a while ago: $new_token If the token is new, check instead that CLOUDFLARE_ACCOUNT_ID names the account that owns it."
+              exit 1 ;;
+            000|429|5??)
+              echo "::error title=cloudflare_token_check_unavailable::Cloudflare did not answer the check of CLOUDFLARE_API_TOKEN ($seen), so the token could not be verified and nothing was changed: run this workflow again in a few minutes."
+              exit 1 ;;
+            *)
+              echo "::error title=cloudflare_token_rejected::Cloudflare refused CLOUDFLARE_API_TOKEN for CLOUDFLARE_ACCOUNT_ID ($seen): check that CLOUDFLARE_ACCOUNT_ID names the account that owns the Account API token (Manage account > Account API tokens in that account) and that the token is active. If the token has expired or been deleted, $new_token"
+              exit 1 ;;
+          esac
+          token_status=$(node -e 'try { const d=require("./.provision/token.json"); process.stdout.write(d.success === true && typeof d.result?.status === "string" ? d.result.status : ""); } catch {}' 2>/dev/null || true)
+          if [ "$token_status" != "active" ]; then
+            if [ -n "$token_status" ] && printf '%s' "$token_status" | grep -Eq '^[a-z_]{1,20}$'; then reported="Cloudflare reports CLOUDFLARE_API_TOKEN as $token_status, not active"; else reported="Cloudflare did not report CLOUDFLARE_API_TOKEN as active"; fi
+            echo "::error title=account_token_invalid::$reported. An expired or disabled token cannot deploy: $new_token"
             exit 1
           fi
       - name: Check the Cloudflare account and token permissions before any cloud mutation
@@ -870,7 +900,7 @@ jobs:
             echo ""
             echo "### Environment variables for future updates"
             echo ""
-            echo "The update workflows read these variables, and this workflow cannot set them. Add each one to the \`production\` environment in [Settings > Environments]($ENVIRONMENTS_URL)."
+            echo "One-click updates from the dashboard read these variables (the Upgrade LancerLogin web and Refresh web update credential workflows). This workflow's \`upgrade\` operation does not need them, and this workflow cannot set them. Add each one to the \`production\` environment in [Settings > Environments]($ENVIRONMENTS_URL)."
             echo ""
             echo "| Variable | Value |"
             echo "| --- | --- |"
@@ -893,4 +923,63 @@ jobs:
               echo "2. Store it as the environment secret \`LANCERLOGIN_WEB_UPDATE_TOKEN\` in the \`production\` environment in [Settings > Environments]($ENVIRONMENTS_URL)."
               echo "3. Set the environment variables above, then run [Refresh web update credential]($REFRESH_CREDENTIAL_WORKFLOW_URL)."
             fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Written here, not in a script, because this workflow can install a release older than this check. The policy file
+      # it uses is the one the release step wrote before any release was checked out.
+      - name: Verify that the installation answers on the new release
+        shell: bash
+        env:
+          API_URL: ${{ steps.deploy-api.outputs.deployment-url }}
+          DASHBOARD_URL: https://${{ inputs.installation_slug }}-dashboard.pages.dev
+        run: |
+          # Read-only. Polls the Worker's public /health, at the address the downgrade check read the installed release
+          # from, and the same answer through the dashboard's /api proxy, until both report the release just deployed in
+          # the ready mode. Deployments usually answer within seconds; the wait is bounded at two minutes.
+          subdomain=$(cat .provision/workers-subdomain.txt 2>/dev/null || true)
+          if printf '%s' "$subdomain" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'; then
+            api_origin="https://$INSTALLATION_SLUG-api.$subdomain.workers.dev"
+          else
+            api_origin="${API_URL%/}"
+          fi
+          endpoints=("$api_origin/health" "$DASHBOARD_URL/api/health")
+          wait_seconds=120
+          interval=5
+          deadline=$((SECONDS + wait_seconds))
+          while :; do
+            failed=""
+            for url in "${endpoints[@]}"; do
+              rm -f .provision/deployed-health.json
+              code=$(curl --silent --proto '=https' --tlsv1.2 --max-time 10 --header 'Cache-Control: no-cache' \
+                --output .provision/deployed-health.json --write-out '%{http_code}' "$url" 2>/dev/null) || code="${code:-000}"
+              state="no_answer"
+              if [ "$code" = "200" ]; then
+                state=$(node "$RUNNER_TEMP/release-policy.cjs" deployed .provision/deployed-health.json "$RELEASE_TAG" 2>/dev/null) || state="no_answer"
+              fi
+              if [ "$state" != "ready" ]; then
+                failed=$url
+                break
+              fi
+            done
+            if [ -z "$failed" ]; then break; fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              case "$INPUT_OPERATION" in upgrade) rerun=upgrade ;; *) rerun=resume ;; esac
+              next="The deploy steps themselves completed. In the Cloudflare dashboard, open Workers & Pages and check the Worker $INSTALLATION_SLUG-api and the Pages project $INSTALLATION_SLUG-dashboard (their latest deployment and logs), then run this workflow again with the operation $rerun and the same slug. See https://isriah.github.io/LancerLogin/troubleshooting.html#install."
+              case "$state" in
+                release:*)
+                  echo "::error title=installation_health_release_mismatch::$failed still reports LancerLogin release ${state#release:} instead of ${RELEASE_TAG#v} after $wait_seconds seconds, so an older or different deployment is still the one answering, not the release this run deployed. $next" ;;
+                mode:*)
+                  echo "::error title=installation_health_not_ready::$failed reports LancerLogin $RELEASE_TAG, but in the mode ${state#mode:} instead of ready after $wait_seconds seconds (unconfigured means the Worker has no D1 database binding). $next" ;;
+                *)
+                  echo "::error title=installation_health_no_answer::$failed did not answer with LancerLogin's health status within $wait_seconds seconds (last answer: HTTP $code). $next" ;;
+              esac
+              exit 1
+            fi
+            sleep "$interval"
+          done
+          echo "The Worker API and the dashboard's /api both answer as LancerLogin $RELEASE_TAG in the ready mode."
+          {
+            echo ""
+            echo "### Health check passed"
+            echo ""
+            echo "The Worker API (\`$api_origin/health\`) and the dashboard (\`$DASHBOARD_URL/api/health\`) both answer as LancerLogin $RELEASE_TAG in the ready mode."
           } >> "$GITHUB_STEP_SUMMARY"

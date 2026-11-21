@@ -5,10 +5,13 @@
 // Budget (Workers Free: 10 ms CPU, 50 D1 queries with a batch counting once, 100 bound parameters per statement): rows are
 // placed with one memoised zone clock, catalogs and the existing meetings in the file's date range are read once (with their
 // audience, calendar mappings and Discord notice state), and calendar delivery is queued in the batch for the scheduled jobs
-// rather than run inline; the jobs deliver a few per pass (5 Google, 3 Discord every five minutes) within their own budget. A commit makes about ten queries and at most one inline Discord notice retraction.
+// rather than run inline; the jobs deliver a few per pass (5 Google, 3 Discord every five minutes) within their own budget. A commit makes about ten queries and at most one inline Discord notice retraction;
+// a commit whose overlap guard finds another write got there first runs once more, about twenty in all.
 import { attendanceClosesAt, DEFAULT_EARLY_SCAN_MINUTES } from "./attendance-lifecycle.ts";
 import type { D1Database, D1Statement } from "./d1-usage.ts";
 import { HttpError } from "./http-error.ts";
+import { discordCalendarDueSql } from "./calendar-queue.ts";
+import { isMeetingOverlapAbort, meetingOverlapGuard } from "./meeting-overlap-guard.ts";
 import { formatCsvDate, formatCsvTimeRange } from "../../../packages/shared/src/csv-import.ts";
 import { meetingCsvCellLimit, meetingCsvClock, meetingCsvFields, meetingCsvRowLimit, resolveMeetingCsvRow, type MeetingCsvMeeting, type MeetingCsvRow } from "../../../packages/shared/src/meeting-csv.ts";
 
@@ -53,7 +56,8 @@ function requestRows(value: unknown): { rows: MeetingCsvRow[]; dryRun: boolean; 
   return { rows: rows as MeetingCsvRow[], dryRun: input?.dryRun !== false, actions: actions as Record<string, "skip" | "update"> };
 }
 
-export async function runMeetingImport(body: unknown, deps: MeetingImportDeps) {
+type MeetingImportResult = { dryRun: true; timeZone: string; rows: MeetingImportRowResult[]; summary: Record<string, number> } | Awaited<ReturnType<typeof commit>>;
+export async function runMeetingImport(body: unknown, deps: MeetingImportDeps, retried = false): Promise<MeetingImportResult> {
   const { rows, dryRun, actions } = requestRows(body); const { db } = deps; const now = deps.now ?? Date.now();
   const settings = await db.prepare("SELECT time_zone AS timeZone, late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<{ timeZone?: string; lateScanMinutes?: number; earlyScanMinutes?: number }>();
   const timeZone = settings?.timeZone && deps.validTimeZone(settings.timeZone) ? settings.timeZone : "UTC"; const lateScanMs = (settings?.lateScanMinutes ?? 30) * 60_000; const earlyScanMs = (settings?.earlyScanMinutes ?? DEFAULT_EARLY_SCAN_MINUTES) * 60_000;
@@ -177,14 +181,23 @@ export async function runMeetingImport(body: unknown, deps: MeetingImportDeps) {
   if (dryRun) return { dryRun: true, timeZone, rows: results, summary };
   const apply = planned.filter((plan) => plan.result.action === "add" || plan.result.action === "update");
   if (!apply.length) throw new HttpError(400, "No rows can be imported. Fix the file and preview again");
-  return commit(deps, apply, results, summary, now);
+  // The commit repeats the overlap check for the windows it adds or moves (meetingOverlapGuard). When another write got
+  // there first, such as the same file committed twice at once, nothing was written: the import runs once more against
+  // the meetings now saved and answers as a commit sent after that write would, matching rows rather than adding them again.
+  const guard = meetingOverlapGuard(db, apply.filter((plan) => !plan.match || rescheduled(plan)).map((plan) => plan.meeting!), { lateScanMinutes: lateScanMs / 60_000, earlyScanMinutes: earlyScanMs / 60_000 }, [...moving.keys()]);
+  try { return await commit(deps, apply, results, summary, now, guard); }
+  catch (error) {
+    if (!isMeetingOverlapAbort(error)) throw error;
+    if (retried) throw new HttpError(409, "Meetings changed while this import was saved. Preview the file again");
+    return runMeetingImport(body, deps, true);
+  }
 }
 
-async function commit(deps: MeetingImportDeps, apply: Planned[], results: MeetingImportRowResult[], summary: Record<string, number>, now: number) {
-  const { db } = deps; const at = new Date(now).toISOString(); const statements: D1Statement[] = []; const ready = await deps.calendarReady();
+async function commit(deps: MeetingImportDeps, apply: Planned[], results: MeetingImportRowResult[], summary: Record<string, number>, now: number, guard: D1Statement | undefined) {
+  const { db } = deps; const at = new Date(now).toISOString(); const statements: D1Statement[] = guard ? [guard] : []; const ready = await deps.calendarReady();
   const ids = new Map(apply.map((plan) => [plan, plan.match?.id ?? crypto.randomUUID()]));
   const google: { meetingId: string; eventId: string; startsAt: string; endsAt: string }[] = []; const googleMappings: { meetingId: string; eventId: string }[] = [];
-  const discord: { meetingId: string; generation: number }[] = []; const discordNew: string[] = []; const discordRegenerated: string[] = [];
+  const discord: { meetingId: string; generation: number; startsAt: string }[] = []; const discordNew: string[] = []; const discordRegenerated: string[] = [];
   const retract: string[] = []; const expire: string[] = []; const skippedNotices: string[] = [];
   for (const plan of apply) {
     const id = ids.get(plan)!; const input = plan.input!; const audience = plan.audience!; const match = plan.match; const past = Date.parse(input.endsAt) <= now;
@@ -203,19 +216,20 @@ async function commit(deps: MeetingImportDeps, apply: Planned[], results: Meetin
     if (match?.googleActive) google.push({ meetingId: id, eventId: match.googleEventId!, startsAt: input.startsAt, endsAt: input.endsAt });
     else if (!match?.googleEventId && ready.google) { const eventId = await deps.googleEventId(id, 1); googleMappings.push({ meetingId: id, eventId }); google.push({ meetingId: id, eventId, startsAt: input.startsAt, endsAt: input.endsAt }); }
     // Discord skips meetings that have ended, as its delivery job would.
-    if (!past && match?.discordActive) discord.push({ meetingId: id, generation: Number(match.discordGeneration) });
-    else if (!past && ready.discord && match?.discordGeneration == null) { discordNew.push(id); discord.push({ meetingId: id, generation: 1 }); }
-    else if (!past && ready.discord) { discordRegenerated.push(id); discord.push({ meetingId: id, generation: Number(match!.discordGeneration) + 1 }); }
+    if (!past && match?.discordActive) discord.push({ meetingId: id, generation: Number(match.discordGeneration), startsAt: input.startsAt });
+    else if (!past && ready.discord && match?.discordGeneration == null) { discordNew.push(id); discord.push({ meetingId: id, generation: 1, startsAt: input.startsAt }); }
+    else if (!past && ready.discord) { discordRegenerated.push(id); discord.push({ meetingId: id, generation: Number(match!.discordGeneration) + 1, startsAt: input.startsAt }); }
   }
   // Imported meetings that have ended never get an automatic Discord absence notice.
   if (skippedNotices.length) statements.push(db.prepare("INSERT INTO discord_attendance_notifications (installation_id, meeting_id, status, attempts, updated_at, processed_at) SELECT 'primary', value, 'skipped', 0, ?, ? FROM json_each(?) WHERE true ON CONFLICT(installation_id, meeting_id) DO NOTHING").bind(at, at, JSON.stringify(skippedNotices)));
   if (expire.length) statements.push(db.prepare("UPDATE discord_attendance_notifications SET expires_at = ?, updated_at = ? WHERE installation_id = 'primary' AND meeting_id IN (SELECT value FROM json_each(?)) AND status = 'delivered'").bind(at, at, JSON.stringify(expire)));
-  // Calendar delivery is queued exactly as the meeting editor queues it; the scheduled Google and Discord jobs deliver it.
+  // Calendar delivery is queued as the meeting editor queues it (calendar-queue.ts); the scheduled Google and Discord jobs deliver it.
+  // A Discord upsert for a meeting beyond the 60-day horizon falls due when the meeting comes within range.
   if (googleMappings.length) statements.push(db.prepare("INSERT OR IGNORE INTO google_calendar_event_mappings (installation_id, meeting_id, event_id, generation, active, updated_at) SELECT 'primary', json_extract(value, '$.meetingId'), json_extract(value, '$.eventId'), 1, 1, ? FROM json_each(?)").bind(at, JSON.stringify(googleMappings)));
   if (google.length) statements.push(db.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, starts_at, ends_at, status, attempts, next_attempt_at, updated_at) SELECT 'primary', json_extract(value, '$.meetingId'), json_extract(value, '$.eventId'), 'upsert', json_extract(value, '$.startsAt'), json_extract(value, '$.endsAt'), 'pending', 0, ?, ? FROM json_each(?) WHERE true ON CONFLICT(installation_id, event_id) DO UPDATE SET action = 'upsert', starts_at = excluded.starts_at, ends_at = excluded.ends_at, status = 'pending', next_attempt_at = excluded.next_attempt_at, last_error = NULL, updated_at = excluded.updated_at").bind(at, at, JSON.stringify(google)));
   if (discordNew.length) statements.push(db.prepare("INSERT INTO discord_calendar_event_mappings (installation_id, meeting_id, event_id, generation, active, updated_at) SELECT 'primary', value, NULL, 1, 1, ? FROM json_each(?)").bind(at, JSON.stringify(discordNew)));
   if (discordRegenerated.length) statements.push(db.prepare("UPDATE discord_calendar_event_mappings SET event_id = NULL, generation = generation + 1, active = 1, synced_at = NULL, last_error = NULL, updated_at = ? WHERE installation_id = 'primary' AND meeting_id IN (SELECT value FROM json_each(?))").bind(at, JSON.stringify(discordRegenerated)));
-  if (discord.length) statements.push(db.prepare("INSERT INTO discord_calendar_operations (installation_id, meeting_id, generation, action, event_id, status, attempts, next_attempt_at, actor_user_id, updated_at) SELECT 'primary', json_extract(value, '$.meetingId'), json_extract(value, '$.generation'), 'upsert', NULL, 'pending', 0, ?, ?, ? FROM json_each(?) WHERE true ON CONFLICT(installation_id, meeting_id, generation, action) DO UPDATE SET revision = discord_calendar_operations.revision + 1, status = CASE WHEN discord_calendar_operations.status = 'processing' AND discord_calendar_operations.lease_expires_at > excluded.updated_at THEN 'processing' ELSE 'pending' END, next_attempt_at = excluded.next_attempt_at, last_error = NULL, actor_user_id = COALESCE(excluded.actor_user_id, discord_calendar_operations.actor_user_id), updated_at = excluded.updated_at").bind(at, deps.actorUserId, at, JSON.stringify(discord)));
+  if (discord.length) statements.push(db.prepare("INSERT INTO discord_calendar_operations (installation_id, meeting_id, generation, action, event_id, status, attempts, starts_at, next_attempt_at, actor_user_id, updated_at) SELECT 'primary', json_extract(value, '$.meetingId'), json_extract(value, '$.generation'), 'upsert', NULL, 'pending', 0, json_extract(value, '$.startsAt'), " + discordCalendarDueSql("json_extract(value, '$.startsAt')", "(SELECT d.event_id FROM discord_calendar_event_mappings d WHERE d.installation_id = 'primary' AND d.meeting_id = json_extract(value, '$.meetingId') AND d.generation = json_extract(value, '$.generation'))") + ", ?, ? FROM json_each(?) WHERE true ON CONFLICT(installation_id, meeting_id, generation, action) DO UPDATE SET revision = discord_calendar_operations.revision + 1, status = CASE WHEN discord_calendar_operations.status = 'processing' AND discord_calendar_operations.lease_expires_at > excluded.updated_at THEN 'processing' ELSE 'pending' END, next_attempt_at = CASE WHEN discord_calendar_operations.status = 'processing' AND discord_calendar_operations.lease_expires_at > excluded.updated_at THEN discord_calendar_operations.next_attempt_at ELSE excluded.next_attempt_at END, starts_at = excluded.starts_at, last_error = NULL, actor_user_id = COALESCE(excluded.actor_user_id, discord_calendar_operations.actor_user_id), updated_at = excluded.updated_at").bind(at, deps.actorUserId, at, JSON.stringify(discord)));
   const added = apply.filter((plan) => !plan.match).map((plan) => ids.get(plan)!); const updated = apply.filter((plan) => plan.match).map((plan) => ids.get(plan)!);
   statements.push(db.prepare("INSERT INTO audit_log (id, installation_id, actor_user_id, action, target_type, target_id, metadata_json, created_at) VALUES (?, 'primary', ?, 'meetings.imported', 'meeting', NULL, ?, ?)").bind(crypto.randomUUID(), deps.actorUserId, JSON.stringify({ ...summary, addedIds: added, updatedIds: updated, skippedNotices: skippedNotices.length, googleQueued: google.length, discordQueued: discord.length }), at));
   await db.batch(statements);

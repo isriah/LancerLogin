@@ -190,3 +190,44 @@ test.describe("browser clock repeats an hour", () => {
     expect(meeting.endsAt).toBe("2026-11-01T06:57:00.000Z");
   });
 });
+
+// A datetime-local field's segments and picker button live inside the input, so the page's active element is the input
+// for all of them. The accessibility tree names the one that has focus.
+async function focusedPart(page: Page) {
+  const client = await page.context().newCDPSession(page);
+  const { nodes } = await client.send("Accessibility.getFullAXTree"); await client.detach();
+  const focused = nodes.filter((node) => node.properties?.some((property) => property.name === "focused" && property.value.value === true)).at(-1);
+  const part = /Month|Day|Year|Hours|Minutes|AM\/PM|Show .*picker/.exec(String(focused?.name?.value ?? ""))?.[0] ?? String(focused?.role?.value ?? "none");
+  const field = await page.evaluate(() => document.activeElement?.closest("label")?.firstChild?.textContent?.trim() ?? document.activeElement?.tagName ?? "");
+  return `${field}: ${part}`;
+}
+
+test("Tab after a digit that completes a segment of the meeting's Starts and Ends stays on the segment typing moved to", async ({ page }) => {
+  await page.clock.setFixedTime(new Date("2026-10-25T12:00:00.000Z"));
+  const fixture = await attendanceSetup(page);
+  await expect(page.getByRole("heading", { level: 2, name: "First meeting" })).toBeVisible();
+  const press = async (key: string, expected: string) => { await page.keyboard.press(key); expect(await focusedPart(page), `after ${key}`).toBe(expected); };
+  await page.getByLabel("Meeting title").fill("Synthetic tab order meeting");
+  // 0 completes the month (after 1), 5 the day (after 2) and 9 the hour, so the field has moved on when each Tab arrives;
+  // the year waits for more digits, so Tab moves on from it.
+  await press("Tab", "Starts: Month"); await press("1", "Starts: Month"); await press("0", "Starts: Day"); await press("Tab", "Starts: Day");
+  await press("2", "Starts: Day"); await press("5", "Starts: Year"); await press("Tab", "Starts: Year"); await press("Tab", "Starts: Hours");
+  await press("9", "Starts: Minutes"); await press("Tab", "Starts: Minutes"); await press("3", "Starts: Minutes"); await press("0", "Starts: AM/PM"); await press("Tab", "Starts: AM/PM");
+  await press("a", "Starts: AM/PM");
+  await expect(page.getByLabel("Starts")).toHaveValue("2026-10-25T09:30");
+  await press("Tab", "Starts: Show local date and time picker"); await press("Tab", "Ends: Month");
+  // 2 to 9 complete a month and 4 to 9 a day on their own.
+  await press("9", "Ends: Day"); await press("Tab", "Ends: Day"); await press("4", "Ends: Year"); await press("Tab", "Ends: Year"); await press("Tab", "Ends: Hours");
+  await press("1", "Ends: Hours"); await press("1", "Ends: Minutes"); await press("Tab", "Ends: Minutes"); await press("1", "Ends: Minutes"); await press("5", "Ends: AM/PM"); await press("Tab", "Ends: AM/PM");
+  await press("a", "Ends: AM/PM");
+  await expect(page.getByLabel("Ends")).toHaveValue("2026-09-04T11:15");
+  // A digit that leaves its segment open, and Shift+Tab, keep the browser's own order.
+  await press("Shift+Tab", "Ends: Minutes"); await press("Shift+Tab", "Ends: Hours"); await press("Shift+Tab", "Ends: Year"); await press("Shift+Tab", "Ends: Day"); await press("Shift+Tab", "Ends: Month");
+  await press("1", "Ends: Month"); await press("Tab", "Ends: Day"); await press("2", "Ends: Day"); await press("Tab", "Ends: Year");
+  await expect(page.getByLabel("Ends")).toHaveValue("2026-01-02T11:15");
+  await press("Shift+Tab", "Ends: Day"); await press("Shift+Tab", "Ends: Month"); await press("1", "Ends: Month"); await press("0", "Ends: Day"); await press("Tab", "Ends: Day"); await press("2", "Ends: Day"); await press("5", "Ends: Year");
+  await expect(page.getByLabel("Ends")).toHaveValue("2026-10-25T11:15");
+  await page.getByRole("button", { name: "Save and continue" }).click();
+  await expect.poll(() => fixture.requests.filter((item) => item.path === "meeting").length).toBe(1);
+  expect(fixture.requests.find((item) => item.path === "meeting")!.body).toMatchObject({ title: "Synthetic tab order meeting", startsAt: "2026-10-25T09:30:00.000Z", endsAt: "2026-10-25T11:15:00.000Z" });
+});

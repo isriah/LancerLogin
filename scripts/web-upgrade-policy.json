@@ -505,6 +505,36 @@
       "name": "0101_pin_failure_report_ids.sql",
       "sha256": "58495cdcd23a308d630c027b006c8309ddb06a43d450b833cefb54fc939ea1ae",
       "forwardCompatible": true
+    },
+    {
+      "name": "0102_kiosk_storage_diagnostics.sql",
+      "sha256": "e0f249b354cbff545d510aff2f503ecba5715b718e81c5c5b570c15e76299fbb",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0103_calendar_queue.sql",
+      "sha256": "7c0f6d6d816d1bfb4a129b1315e821a75038f7f63ba2353db06dc85d7e992a46",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0104_retention_indexes.sql",
+      "sha256": "2a54270da7564f55f0e9afa380a5cd857bff986fffbb2b7d2753420aebe6d4e3",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0105_data_transfer_staging.sql",
+      "sha256": "a4022ee0bf7876c6ac46bf77d81028e4e60a940475bf537e12d3ae3cc295581a",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0106_drop_redundant_attendance_index.sql",
+      "sha256": "2c4dba66ebcac8201f1a45f35fbc9d7fe61ccba3e9312be8044d977b56bcfd25",
+      "forwardCompatible": true
+    },
+    {
+      "name": "0107_participation_start_correction.sql",
+      "sha256": "8a1d0a2481ccdab291199e97625ec8fea0289d0e501bfaaa4445966a4e9435df",
+      "forwardCompatible": true
     }
   ]
 }

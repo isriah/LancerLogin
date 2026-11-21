@@ -35,7 +35,9 @@ const formatScanTime = (value?: string) => value ? new Date(value).toLocaleStrin
 
 type Capabilities = { discord: { configured: boolean }; google_calendar?: { configured: boolean } };
 
-/** `readIntegrations` returns the app shell's shared capabilities read, which never rejects (unavailable means every integration is off), so this page does not request its own copy. */
+// What is still waiting, said only where it helps: always where the five-minute cron delivers the queue (a few events a pass), and for a long queue elsewhere.
+const calendarBacklogNote = (scheduler: string | undefined, queues: { label: string; waiting?: number; perPass?: number }[]) => queues.filter((queue) => queue.waiting && (scheduler === "cron" || queue.waiting > (queue.perPass ?? 5) * 4)).map((queue) => scheduler === "cron" ? ` ${queue.label} has ${queue.waiting} waiting, and this installation sends ${queue.perPass ?? "a few"} every five minutes.` : ` ${queue.label} has ${queue.waiting} waiting.`).join("");
+/** `readIntegrations` returns the app shell's shared capabilities read, which never rejects (a failed read gives the last known capabilities, or every integration off before any are known), so this page does not request its own copy. */
 export function AttendanceWorkspace({ meetingId, role, readIntegrations }: { meetingId: string; role: "admin" | "operator"; readIntegrations: () => Promise<Capabilities> }) {
   const { path, navigate } = usePath();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
@@ -156,11 +158,12 @@ export function AttendanceWorkspace({ meetingId, role, readIntegrations }: { mee
   }
   async function syncCalendars() {
     if (!meeting) return;
-    setCalendarBusy(true); setCalendarNotice("Syncing this meeting to configured calendars…"); setCalendarNoticeTone("neutral");
+    setCalendarBusy(true); setCalendarNotice("Queuing this meeting for the configured calendars…"); setCalendarNoticeTone("neutral");
     try {
-      const result = await api<{ providers: CalendarProviderResult[] }>("/calendars/sync", { method: "POST", body: JSON.stringify({ meetingId: meeting.id }) });
-      const labels = result.providers.map((provider) => `${provider.provider === "google_calendar" ? "Google Calendar" : "Discord"}: ${provider.synced} updated${provider.queued ? `, ${provider.queued} queued` : ""}${provider.skipped ? `, ${provider.skipped} skipped` : ""}${provider.failed ? `, ${provider.failed} need attention` : ""}`);
-      setCalendarNotice(labels.join(" · ")); setCalendarNoticeTone(result.providers.some((provider) => provider.failed) ? "error" : "success");
+      const result = await api<{ scheduler?: string; providers: (CalendarProviderResult & { waiting?: number; perPass?: number })[] }>("/calendars/sync", { method: "POST", body: JSON.stringify({ meetingId: meeting.id }) });
+      // The server queues the change and the background scheduler sends it, so a result is normally "queued", not "updated".
+      const labels = result.providers.map((provider) => `${provider.provider === "google_calendar" ? "Google Calendar" : "Discord"}: ${[provider.synced ? `${provider.synced} updated` : "", provider.queued ? `${provider.queued} queued` : "", provider.skipped ? `${provider.skipped} skipped` : "", provider.failed ? `${provider.failed} need attention` : ""].filter(Boolean).join(", ") || "nothing to send"}`);
+      setCalendarNotice(`${labels.join(" · ")}${result.providers.some((provider) => provider.queued) ? `. Queued changes are sent in the background, soonest meetings first.${calendarBacklogNote(result.scheduler, result.providers.map((provider) => ({ label: provider.provider === "google_calendar" ? "Google Calendar" : "Discord", waiting: provider.waiting, perPass: provider.perPass })))}` : ""}`); setCalendarNoticeTone(result.providers.some((provider) => provider.failed) ? "error" : "success");
     } catch (error) { setCalendarNotice((error as Error).message); setCalendarNoticeTone("error"); }
     finally { setCalendarBusy(false); }
   }

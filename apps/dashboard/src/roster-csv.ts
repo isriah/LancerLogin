@@ -54,3 +54,27 @@ export function parseRosterText(text: string): ParsedRoster {
   if (!hasHeader) recognised = rosterFields.slice(0, Math.min(rosterFields.length, Math.max(requiredRosterFields.length, ...parsed.map((row) => row.length))));
   return { hasHeader, recognised, ignored, errors, rows };
 }
+
+export const validDiscordUserId = (value: string | null | undefined) => /^\d{10,24}$/.test(value ?? "");
+
+/** The member a roster row sends to the server: an invalid Discord user ID is left out, so it is ignored. */
+export function importedRosterMember(member: RosterRecord): RosterRecord {
+  return { ...member, discordUserId: validDiscordUserId(member.discordUserId) ? member.discordUserId : undefined };
+}
+
+export type StoredRosterMember = { firstName: string; lastName: string; email?: string | null; discordUserId?: string | null; active: boolean | number };
+export type RosterImportStatus = "Add" | "Update" | "Unchanged";
+
+/**
+ * What importing one row stores, by the server's rule (POST /admin/members): names always come from the row; Email and
+ * Discord user ID change only to a value the row gives, so a missing column, a blank cell or an ignored Discord ID keeps
+ * the stored value. Emails are stored trimmed and lower-case. An inactive member is reactivated.
+ */
+export function rosterImportPreviewRow(current: StoredRosterMember | undefined, member: RosterRecord): RosterRecord & { status: RosterImportStatus } {
+  const email = member.email?.trim().toLowerCase() || current?.email || undefined;
+  const discordUserId = (validDiscordUserId(member.discordUserId) ? member.discordUserId : undefined) || current?.discordUserId || undefined;
+  const next = { memberId: member.memberId, firstName: member.firstName, lastName: member.lastName, email, discordUserId };
+  if (!current) return { ...next, status: "Add" };
+  const unchanged = current.firstName === next.firstName && current.lastName === next.lastName && (current.email ?? "") === (email ?? "") && (current.discordUserId ?? "") === (discordUserId ?? "") && Boolean(current.active);
+  return { ...next, status: unchanged ? "Unchanged" : "Update" };
+}

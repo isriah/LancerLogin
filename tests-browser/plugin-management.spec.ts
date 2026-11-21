@@ -14,7 +14,7 @@ const correctKey = derivePasswordKey("correct", new Uint8Array(16).fill(1)).then
 const version = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version as string;
 const workflowUrl = "https://github.example.test/private/actions/workflows/upgrade-web.yml";
 const source = "https://github.com/example/lancerlogin-carpool.git";
-const commit = "c".repeat(40); const next = "d".repeat(40); const selectionSha = "1".repeat(40);
+const commit = "c".repeat(40); const next = "d".repeat(40); const selectionSha = "1".repeat(40); const reviewToken = `1795190000000.${"t".repeat(43)}`;
 const stableRelease = { tag: "v1.0.0", kind: "stable", commit: "a".repeat(40), url: "https://github.com/example/lancerlogin-carpool/releases/tag/v1.0.0" };
 const nightlyRelease = { tag: "v1.1.0-nightly.20261025", kind: "nightly", commit: "b".repeat(40), url: null };
 const official = { id: "hour-tracking", source: "https://github.com/isriah/lancerlogin-outreach.git", commit: "e".repeat(40), official: true, selected: false, phase: "enabled" as const };
@@ -30,7 +30,7 @@ function pluginState(overrides: Partial<PluginState> = {}): PluginState {
     ...overrides,
   };
 }
-const review = { action: "add", id: "carpool", source, commit, previousCommit: null, official: false, selectionSha,
+const review = { action: "add", id: "carpool", source, commit, previousCommit: null, official: false, selectionSha, reviewToken,
   metadata: { state: "compatible", version: "1.0.0", contract: 1, core: ">=2.0.0-beta.11 <3.0.0", tablePrefix: "carpool_", migrations: ["0001_carpool.sql"] },
   declaredNote: "Routes, jobs and Discord commands are declared in the module's code. LancerLogin does not run module code to show them here.",
   trustStatement: "A module from a git repository runs inside this installation's Worker and dashboard with the same access as LancerLogin.", allowlist: "none" };
@@ -134,7 +134,7 @@ test("Admin adds a module from a git repository with review, trust confirmation 
   await expect(dialog.getByText(/Identity confirmed until/)).toBeVisible();
   await commitButton.click();
   await expect(dialog).toHaveCount(0);
-  expect(mock.posts.find((post) => post.path === "change")?.body).toEqual({ action: "add", id: "carpool", source, commit, track: "stable", selectionSha, trustConfirmed: true });
+  expect(mock.posts.find((post) => post.path === "change")?.body).toEqual({ action: "add", id: "carpool", source, commit, track: "stable", selectionSha, reviewToken, trustConfirmed: true });
   await expect(card.getByRole("status").filter({ hasText: "Added carpool in the private deployment repository. Select Apply changes to deploy it." })).toBeVisible();
   const pending = card.locator(".plugin-pending");
   await expect(pending.getByRole("heading", { name: /Pending changes/ })).toContainText("Not deployed");
@@ -196,7 +196,7 @@ test("a commit the Worker refuses as incompatible shows its reason in the dialog
   await expect(dialog.getByRole("alert")).toHaveText(refusal);
   // The dialog stays on the reviewed change, which is what was posted, and nothing is reported as added.
   await expect(dialog.getByRole("heading", { name: "Confirm carpool" })).toBeVisible();
-  expect(mock.posts.filter((post) => post.path === "change").map((post) => post.body)).toEqual([{ action: "add", id: "carpool", source, commit, track: "stable", selectionSha, trustConfirmed: true }]);
+  expect(mock.posts.filter((post) => post.path === "change").map((post) => post.body)).toEqual([{ action: "add", id: "carpool", source, commit, track: "stable", selectionSha, reviewToken, trustConfirmed: true }]);
   await expect(card.getByText("No pending changes.")).toBeVisible();
 });
 
@@ -296,7 +296,7 @@ test("Admin moves a module to the testing-only Nightly track, and Update offers 
   await dialog.getByRole("button", { name: "Confirm identity" }).click();
   await dialog.getByRole("button", { name: "Commit change" }).click();
   await expect(dialog).toHaveCount(0);
-  expect(mock.posts.find((post) => post.path === "change")?.body).toEqual({ action: "upgrade", id: "carpool", source, commit: nightlyRelease.commit, track: "nightly", selectionSha, trustConfirmed: true });
+  expect(mock.posts.find((post) => post.path === "change")?.body).toEqual({ action: "upgrade", id: "carpool", source, commit: nightlyRelease.commit, track: "nightly", selectionSha, reviewToken, trustConfirmed: true });
   await expect(card.getByRole("status").filter({ hasText: "Pinned carpool on the Nightly track (testing only)" })).toBeVisible();
   await expect(row.locator(".plugin-track-badge")).toHaveText("Nightly track · testing only");
   await expect(row.locator(".module-pending-badge")).toHaveText("Not deployed");
@@ -349,7 +349,7 @@ test("a release lookup that lands late cannot change the commit after the Admin 
   // What is committed is the request the review answered, field for field.
   const reviewed = mock.posts.filter((post) => post.path === "review").map((post) => post.body);
   expect(reviewed).toEqual([{ action: "upgrade", id: "carpool", source, commit: nightlyRelease.commit, track: "nightly" }]);
-  expect(mock.posts.find((post) => post.path === "change")?.body).toEqual({ ...reviewed[0] as object, selectionSha, trustConfirmed: true });
+  expect(mock.posts.find((post) => post.path === "change")?.body).toEqual({ ...reviewed[0] as object, selectionSha, reviewToken, trustConfirmed: true });
 });
 
 test("module rows show current and latest versions, accent Update when outdated, versioned pending changes and an unavailable state", async ({ page }) => {
@@ -642,4 +642,43 @@ test("Settings > Modules shows an unfinished module update on the module, with i
   await expect(attendance.getByRole("switch", { name: "Attendance", exact: true })).toBeVisible();
   await expect(attendance.locator(".module-update-failure")).toHaveCount(0);
   await expect(attendance.getByText("Update not finished")).toHaveCount(0);
+});
+
+test("an incompatible module can change release track or go back to the commit this build runs, but not newly pin an incompatible commit", async ({ page }) => {
+  // The selection pins carpool at `next`, not deployed yet; this build runs it at `commit`. Both are now incompatible.
+  const mock = await setup(page, pluginState({ installed: [official, { id: "carpool", source, commit, official: false, selected: true, phase: "enabled" }], selection: { sha: selectionSha, present: true, officialModules: true, modules: [{ id: "carpool", source, commit: next, phase: "enabled" }] }, pending: [{ kind: "upgrade", id: "carpool", source, commit: next, installedCommit: commit }] }));
+  const reason = "The module supports LancerLogin >=3.0.0.";
+  await page.route("**/admin/plugins/review", (route) => {
+    const body = route.request().postDataJSON() as { commit: string; track: string }; mock.posts.push({ path: "review", body });
+    return route.fulfill({ json: { ...review, action: "upgrade", commit: body.commit, previousCommit: next, track: body.track, previousTrack: "stable", metadata: { state: "incompatible", reason } } });
+  });
+  await page.goto("/settings/modules");
+  await moduleRow(page, "carpool").getByRole("button", { name: /^Update / }).click();
+  const dialog = page.getByRole("dialog", { name: "Update module" });
+  const commitButton = dialog.getByRole("button", { name: "Commit change" });
+  const reviewWith = async (sha: string, track?: "Stable" | "Nightly (testing only)") => {
+    if (track) { await dialog.getByLabel("Release track").selectOption({ label: track }); await expect(dialog.getByText(/^Newest .* release:/)).toBeVisible(); }
+    await dialog.getByLabel("Commit SHA").fill(sha);
+    await dialog.getByRole("button", { name: "Review change" }).click();
+    await expect(dialog).toContainText(`Incompatible with this installation. ${reason}`);
+    await dialog.getByRole("checkbox", { name: /I trust this source/ }).check();
+  };
+  await expect(dialog.getByText(/^Newest Stable release:/)).toBeVisible();
+  // Newly pinning an incompatible commit stays refused, with the reason shown.
+  await reviewWith("f".repeat(40));
+  await dialog.getByLabel("Your password").fill("correct");
+  await dialog.getByRole("button", { name: "Confirm identity" }).click();
+  await expect(dialog.getByText(/Identity confirmed until/)).toBeVisible();
+  await expect(commitButton).toBeDisabled();
+  // Keeping the selected commit on another release track is accepted by the Worker, so it can be committed.
+  await dialog.getByRole("button", { name: "Edit" }).click();
+  await reviewWith(next, "Nightly (testing only)");
+  await expect(commitButton).toBeEnabled();
+  // So is going back to the commit this build runs.
+  await dialog.getByRole("button", { name: "Edit" }).click();
+  await reviewWith(commit, "Stable");
+  await expect(commitButton).toBeEnabled();
+  await commitButton.click();
+  await expect(dialog).toHaveCount(0);
+  expect(mock.posts.filter((post) => post.path === "change").map((post) => post.body)).toEqual([{ action: "upgrade", id: "carpool", source, commit, track: "stable", selectionSha, reviewToken, trustConfirmed: true }]);
 });

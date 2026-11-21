@@ -46,13 +46,16 @@ async function fixture(t) {
 
 test("unpair archives installation state privately and retains the local PIN", async t => {
   const { root, pinPath } = await fixture(t);
+  // The PIN's backup copy (network-pin.mjs) stays with it.
+  await writeFile(`${pinPath}.backup`, "synthetic-local-pin-backup", { mode: 0o600 });
   const store = createUnpairingStore(root, { pinPath, statePaths: [join(root, "pairing.json")] });
   assert.deepEqual(await store.inspect(), { recoveryPending: false });
   const result = await store.unpair();
   assert.equal(result.readerTemplatesRetained, true);
   assert.equal(result.localPinRetained, true);
-  assert.deepEqual((await readdir(root)).sort(), ["network-pin.json", "reassociation"]);
+  assert.deepEqual((await readdir(root)).sort(), ["network-pin.json", "network-pin.json.backup", "reassociation"]);
   assert.equal(await readFile(pinPath, "utf8"), "synthetic-local-pin");
+  assert.equal(await readFile(`${pinPath}.backup`, "utf8"), "synthetic-local-pin-backup");
   const archive = join(root, "reassociation", result.archiveId);
   assert.equal(await readFile(join(archive, "slot-mappings.json"), "utf8"), "synthetic-old-mapping");
   assert.equal(await readFile(join(archive, "fingerprint-sync", "trust.json"), "utf8"), "synthetic-old-trust");
@@ -219,7 +222,7 @@ test("runtime unpair requires local authorization and confirmation, restarts, th
   const response = responses.find(response => response.status === 200);
   assert.equal(response.status, 200); assert.equal((await response.json()).readerTemplatesRetained, true);
   assert.equal((await exit)[0], 1);
-  assert.deepEqual((await readdir(root)).sort(), ["network-pin.json", "reassociation"]);
+  assert.deepEqual((await readdir(root)).sort(), ["network-pin.json", "network-pin.json.backup", "reassociation"]);
   const fresh = await start();
   const health = await (await fresh.request("/health")).json();
   assert.equal(health.paired, false); assert.equal(health.setupReady, true); assert.equal(health.pendingEvents, 0);

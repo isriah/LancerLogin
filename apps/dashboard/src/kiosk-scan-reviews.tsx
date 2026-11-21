@@ -21,6 +21,8 @@ export function KioskScanReviews({ uploadFailures = [] }: { uploadFailures?: str
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  // Neutral when nothing the Admin entered was saved: another Admin had already reviewed the scan.
+  const [noticeTone, setNoticeTone] = useState<"success" | "neutral">("success");
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
@@ -52,7 +54,7 @@ export function KioskScanReviews({ uploadFailures = [] }: { uploadFailures?: str
     try {
       const result = await api<{ reviewedCount: number; alreadyReviewedCount: number }>("/admin/kiosks/scan-reviews/review", { method: "POST", body: JSON.stringify({ records: selected, note }) });
       if (!Number.isSafeInteger(result.reviewedCount) || !Number.isSafeInteger(result.alreadyReviewedCount) || result.reviewedCount < 0 || result.alreadyReviewedCount < 0 || result.reviewedCount + result.alreadyReviewedCount !== selected.length) throw new Error("The server did not confirm every selected scan. Refresh before trying again.");
-      setNotice(`${result.reviewedCount} ${result.reviewedCount === 1 ? "scan" : "scans"} dismissed.${result.alreadyReviewedCount ? ` ${result.alreadyReviewedCount} ${result.alreadyReviewedCount === 1 ? "was" : "were"} already reviewed; existing notes were preserved.` : ""} Attendance was not changed.`);
+      setNoticeTone("success"); setNotice(`${result.reviewedCount} ${result.reviewedCount === 1 ? "scan" : "scans"} dismissed.${result.alreadyReviewedCount ? ` ${result.alreadyReviewedCount} ${result.alreadyReviewedCount === 1 ? "was" : "were"} already reviewed; existing notes were preserved.` : ""} Attendance was not changed.`);
       clearSelection(); setBulkNote(""); setOffsets([0]); setRevision(value => value + 1);
     } catch (cause) { setBulkError((cause as Error).message || "Could not dismiss scans. Your selection and note are preserved for retry."); }
     finally { mutation.current = false; setBusy(""); }
@@ -65,9 +67,11 @@ export function KioskScanReviews({ uploadFailures = [] }: { uploadFailures?: str
     if (!note || note.length > 500) { setRowErrors((current) => ({ ...current, [key]: "Enter a review note of 1 to 500 characters." })); return; }
     mutation.current = true; setBusy(key); setNotice(""); setRowErrors((current) => ({ ...current, [key]: "" }));
     try {
-      const result = await api<{ reviewed: boolean }>(`/admin/kiosks/${encodeURIComponent(record.kioskId)}/scan-reviews/${encodeURIComponent(record.eventId)}/review`, { method: "POST", body: JSON.stringify({ note }) });
+      const result = await api<{ reviewed: boolean; alreadyReviewed?: boolean }>(`/admin/kiosks/${encodeURIComponent(record.kioskId)}/scan-reviews/${encodeURIComponent(record.eventId)}/review`, { method: "POST", body: JSON.stringify({ note }) });
       if (!result.reviewed) throw new Error("The server did not confirm this review. Refresh and try again.");
-      setNotice("Scan marked reviewed. Attendance was not changed.");
+      // Reviewed first elsewhere, for example by another Admin in another tab: the Worker kept that review and its note.
+      if (result.alreadyReviewed === true) { setNoticeTone("neutral"); setNotice("This scan was already reviewed; its existing note was preserved and your note was not saved. Attendance was not changed."); }
+      else { setNoticeTone("success"); setNotice("Scan marked reviewed. Attendance was not changed."); }
       setNotes((current) => { const next = { ...current }; delete next[key]; return next; });
       clearSelection(); setOffsets([0]);
       setRevision((value) => value + 1);
@@ -84,7 +88,7 @@ export function KioskScanReviews({ uploadFailures = [] }: { uploadFailures?: str
       <label className="scan-review-status">Rejection reason<select className="ui-control ui-native-select" value={reasonCode} disabled={Boolean(busy)} onChange={event => { setReasonCode(event.target.value); changeFilter(); }}><option value="">All reasons</option>{[...new Set(filters.map(option => option.reasonCode))].sort().map(reason => <option key={reason} value={reason}>{scanRejectionReasonText(reason)}</option>)}</select></label>
     </div>
     <p>Check the event and member against your records, then use <RouteLink href="/meetings" currentPath={path} navigate={navigate}>Meetings and attendance</RouteLink> to make any correction. Marking a scan reviewed only records your review note.</p>
-    {notice && <p className="ui-status" data-tone="success" role="status">{notice}</p>}
+    {notice && <p className="ui-status" data-tone={noticeTone} role="status">{notice}</p>}
     {error && <p className="ui-status" data-tone="error" role="alert">{error}</p>}
     {loading && <p role="status">Loading rejected scans...</p>}
     {page && <p>{page.matchingCount ?? page.records.length} matching scans.</p>}

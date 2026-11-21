@@ -1,13 +1,16 @@
 import { timingSafeEqual } from "node:crypto";
+import { r503FallbackCapacity } from "./r503.mjs";
 
 // Reusable local storage kernel. Callers must authenticate the source and bind
 // installation, recipient, member and immutable template identity before calling.
 // Only metadata is journaled. All flash and mapping work shares the sensor lock.
-export function createFingerprintImporter({ journal, sensor, templates, mappings, isMemberActive, withSensor, capacity = 200, reuseExisting = false }) {
+export function createFingerprintImporter({ journal, sensor, templates, mappings, isMemberActive, withSensor, capacity: configuredCapacity, reuseExisting = false }) {
   return {
     async receive(context, template, envelopeDigest) {
       if (!(template instanceof Uint8Array) || template.length !== 1536 || !await isMemberActive(context.memberId, context.rosterId)) throw new Error("Fingerprint member is not active or its template is unavailable");
       return withSensor(async () => {
+        // The capacity the reader reports (r503.mjs), unless the caller fixed one.
+        const capacity = configuredCapacity ?? await sensor.capacity?.() ?? r503FallbackCapacity;
         const occupiedSlots = await sensor.occupiedSlots(), current = await mappings.read();
         let existingSlot;
         // Vault backfill can encounter a manually enrolled copy. Reuse only a

@@ -181,6 +181,29 @@ test("a queued scan the Worker refuses for want of a PIN never holds up the queu
   ]);
 });
 
+/**
+ * True when a saved kiosk file holds `pin`. The files also hold random ids (a queued scan's eventId and bootId, a
+ * wrong-try report's id) and clock readings, and a plain search for a four-digit PIN finds it in one of those about once
+ * in every few thousand runs. So ids and times are left out, and the PIN counts only as a whole run of digits in a
+ * name or a text value. A PIN is always text: the kiosk never handles one as a number.
+ */
+function holdsPin(text, pin) {
+  const whole = new RegExp(`(?<!\\d)${pin}(?!\\d)`);
+  const inText = value => whole.test(value.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<id>").replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g, "<time>"));
+  const found = value => typeof value === "string" ? inText(value) : value !== null && typeof value === "object" && Object.entries(value).some(([name, item]) => inText(name) || found(item));
+  // A file that is not one JSON document, such as a journal of lines, is searched as text.
+  try { return found(JSON.parse(text)); } catch { return inText(text); }
+}
+
+test("the saved-file PIN check finds a PIN and is not fooled by ids, times or longer numbers", () => {
+  assert.equal(holdsPin('{"members":{"1009":{"pin":"1111"}}}', "1111"), true);
+  assert.equal(holdsPin('{"note":"PIN 1111 entered"}', "1111"), true);
+  assert.equal(holdsPin('{"1111":{"unreported":1}}', "1111"), true, "a PIN used as a key is found too");
+  // What failed once: a report id with the wrong PIN's digits in it.
+  assert.equal(holdsPin('{"version":1,"members":{"1009":{"unreported":3,"lastAt":"2026-11-11T11:11:11.111Z","streak":0,"lockedUntil":null}},"report":{"id":"3f1111a2-7c1e-4b1d-9111-1c2d3e41111f","failures":[]}}', "1111"), false);
+  assert.equal(holdsPin('{"eventId":"a2468b00-0000-4000-8000-000000002468","clock":{"elapsedMs":124681,"bootId":"02468ace-2468-4246-8246-246802468ace"}}', "2468"), false);
+});
+
 // ---- The real kiosk service, with a synthetic Worker ----
 
 async function pinRuntime(t, { settings }) {
@@ -284,8 +307,8 @@ test("a Require PIN kiosk confirms, checks PINs online and offline, counts offli
   assert.equal((await kiosk.json("/identity", { method: "member_id", memberId: "1010", confirmed: true, pin: "1234" })).body.code, "pin_not_set");
   const queued = await kiosk.json("/identity", { method: "member_id", memberId: "1011", confirmed: true, pin: "2468" });
   assert.equal(queued.status, 202); assert.equal(queued.body.queued, true);
-  for (const name of await readdir(f.root)) if (name.startsWith("attendance-queue")) assert.equal((await readFile(join(f.root, name), "utf8").catch(() => "")).includes("2468"), false, `${name} never holds a PIN`);
-  assert.equal((await readFile(join(f.root, "pin-failures.json"), "utf8")).includes("1111"), false);
+  for (const name of await readdir(f.root)) if (name.startsWith("attendance-queue")) assert.equal(holdsPin(await readFile(join(f.root, name), "utf8").catch(() => ""), "2468"), false, `${name} never holds a PIN`);
+  assert.equal(holdsPin(await readFile(join(f.root, "pin-failures.json"), "utf8"), "1111"), false, "pin-failures.json never holds a PIN");
   if (process.platform !== "win32") assert.equal((await stat(join(f.root, "pin-failures.json"))).mode & 0o077, 0);
 
   // Back online after a restart: the queued scan syncs with pinCheck "offline" and the tries are reported.

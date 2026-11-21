@@ -100,7 +100,12 @@ function throttleUntilSql(firstParameter: number) {
  * already recorded, which is answered as a duplicate), and reads the kiosk's wait for the refusal. A refusal while the
  * kiosk was already waiting when it authenticated is no query at all.
  */
-export async function findDiscordKioskCode(db: D1Database, kiosk: DiscordCodeKiosk, input: { discordCode?: unknown; eventId: string }): Promise<{ memberId: string; codeHash: string } | { duplicate: string }> {
+/**
+ * A code found for a scan, with the kiosk's throttle as the lookup read it: its count of wrong codes and the time of the
+ * lookup. The kiosk had no wait running then, so a wait running past lookedUpAt started after the lookup.
+ */
+export type DiscordCodeLookup = { memberId: string; codeHash: string; failures: number; lookedUpAt: string };
+export async function findDiscordKioskCode(db: D1Database, kiosk: DiscordCodeKiosk, input: { discordCode?: unknown; eventId: string }): Promise<DiscordCodeLookup | { duplicate: string }> {
   if (!kiosk.discordCode) throw new HttpError(409, "This kiosk does not take Discord codes.", undefined, "code_not_enabled");
   const code = normalizeDiscordKioskCode(input.discordCode);
   if (!code) throw new HttpError(400, "A Discord code is 6 digits.", undefined, "invalid_code");
@@ -121,12 +126,13 @@ export async function findDiscordKioskCode(db: D1Database, kiosk: DiscordCodeKio
         AND NOT EXISTS (SELECT 1 FROM discord_kiosk_codes WHERE installation_id = 'primary' AND code_hash = ?4 AND used_at IS NULL AND expires_at > ?3)
         AND NOT EXISTS (SELECT 1 FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?5)
       RETURNING discord_code_throttle_until AS throttleUntil`).bind(kiosk.id, MAX_FAILURES, nowText, codeHash, input.eventId, ...waits),
-    db.prepare("SELECT discord_code_throttle_until AS throttleUntil, (SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?2) AS recorded FROM kiosks WHERE installation_id = 'primary' AND id = ?1").bind(kiosk.id, input.eventId),
+    db.prepare("SELECT discord_code_throttle_until AS throttleUntil, discord_code_failures AS failures, (SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?2) AS recorded FROM kiosks WHERE installation_id = 'primary' AND id = ?1").bind(kiosk.id, input.eventId),
   ]);
   const found = (results[0]?.results ?? []) as { memberId: string }[];
-  // /code never gives two members the same live code. If a race ever did, the code names no one.
-  if (found.length === 1) return { memberId: found[0]!.memberId, codeHash };
-  const state = results[2]?.results?.[0] as { throttleUntil?: string | null; recorded?: string | null } | undefined;
+  const state = results[2]?.results?.[0] as { throttleUntil?: string | null; failures?: number; recorded?: string | null } | undefined;
+  // /code never gives two members the same live code. If a race ever did, the code names no one. A found code counted
+  // nothing, so the last read is the kiosk's row as the lookup saw it.
+  if (found.length === 1) return { memberId: found[0]!.memberId, codeHash, failures: Number(state?.failures ?? 0), lookedUpAt: nowText };
   // A kiosk that lost the answer to a recorded scan sends it again, with a code that is now used.
   if (state?.recorded) return { duplicate: state.recorded };
   const counted = results[1]?.results?.[0] as { throttleUntil?: string | null } | undefined;
@@ -148,13 +154,15 @@ function discordCodeInvalid(retryAt: string | null, now: number) {
  *   event is recorded only while the code is still unused and unexpired. Two kiosks sending one code are two batches,
  *   one after the other, so exactly one records its scan.
  * - `statements` follow the INSERT: the code is marked used only if this scan's event was recorded, the kiosk's count of
- *   wrong codes starts over, and a last read says whether the event is there.
+ *   wrong codes starts over, and a last read says whether the event is there. Starting over clears only what the lookup
+ *   saw: a wrong code from the same kiosk counted after this scan's lookup, before this batch, keeps its count and its
+ *   wait, so a good code cannot wipe out the wait a wrong one sent alongside it started.
  * - `refused(results)` takes the results of `statements` when the INSERT changed nothing. It returns the refusal when
  *   another scan used the code first or it expired on the way, and undefined when the event is there after all (the
  *   same scan sent twice at once), which the attendance step answers as a duplicate.
  * A batch that fails changes nothing, so the code stays good for the kiosk's retry.
  */
-export function discordCodeAcceptance(db: D1Database, scan: { kioskId: string; codeHash: string; memberId: string; eventId: string }) {
+export function discordCodeAcceptance(db: D1Database, scan: { kioskId: string; codeHash: string; memberId: string; eventId: string; failures: number; lookedUpAt: string }) {
   const now = Date.now(); const nowText = new Date(now).toISOString();
   const recorded = "SELECT 1 FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ? AND member_id = ?";
   return {
@@ -162,7 +170,12 @@ export function discordCodeAcceptance(db: D1Database, scan: { kioskId: string; c
     liveValues: [scan.codeHash, scan.memberId, nowText] as unknown[],
     statements: [
       db.prepare(`UPDATE discord_kiosk_codes SET used_at = ? WHERE installation_id = 'primary' AND code_hash = ? AND member_id = ? AND used_at IS NULL AND EXISTS (${recorded})`).bind(nowText, scan.codeHash, scan.memberId, scan.eventId, scan.memberId),
-      db.prepare(`UPDATE kiosks SET discord_code_failures = 0, discord_code_throttle_until = NULL WHERE installation_id = 'primary' AND id = ? AND (discord_code_failures > 0 OR discord_code_throttle_until IS NOT NULL) AND EXISTS (${recorded})`).bind(scan.kioskId, scan.eventId, scan.memberId),
+      // The wrong codes counted since the lookup stay counted (fewer than the lookup saw means another good scan already
+      // started the count over, so the count is left as it is), and a wait that runs past the lookup started after it.
+      db.prepare(`UPDATE kiosks SET discord_code_failures = CASE WHEN discord_code_failures >= ?4 THEN discord_code_failures - ?4 ELSE discord_code_failures END,
+          discord_code_throttle_until = CASE WHEN discord_code_throttle_until > ?5 THEN discord_code_throttle_until ELSE NULL END
+        WHERE installation_id = 'primary' AND id = ?1 AND (discord_code_failures > 0 OR discord_code_throttle_until IS NOT NULL)
+          AND EXISTS (SELECT 1 FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?2 AND member_id = ?3)`).bind(scan.kioskId, scan.eventId, scan.memberId, Math.max(0, Math.trunc(scan.failures)), scan.lookedUpAt),
       db.prepare(`SELECT EXISTS (${recorded}) AS recorded`).bind(scan.eventId, scan.memberId),
     ],
     refused(results: readonly ({ results?: unknown[] } | undefined)[]): HttpError | undefined {

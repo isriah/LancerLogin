@@ -269,3 +269,34 @@ test("repeated failed appends, the first journal write and batched acknowledgeme
   assert.deepEqual([totals.pending, totals.saved], [0, 4], "every acknowledged scan is counted once");
   await assert.rejects(stat(`${f.journalPath}.damaged`), { code: "ENOENT" });
 });
+
+test("entries set aside are counted from the side file with the newest time, once each, until the file is removed", async t => {
+  const f = await fixture(t), damagedPath = `${f.journalPath}.damaged`, none = { count: 0, lastAt: null, file: damagedPath };
+  assert.deepEqual(await createFileQueue(f.path).setAside(), none);
+  const queue = createFileQueue(f.path);
+  for (const id of ["a", "b", "c"]) await queue.enqueue(scan(id));
+  const damage = async (index, keep) => { const lines = (await readFile(f.journalPath, "utf8")).split("\n"); lines[index] = lines[index].slice(0, keep); await writeFile(f.journalPath, lines.join("\n")); };
+  await damage(1, 25);
+  const first = createFileQueue(f.path, { log: () => undefined, now: () => Date.UTC(2026, 9, 2) });
+  assert.deepEqual(ids(await first.pending()), ["a", "c"]);
+  assert.deepEqual(await first.setAside(), { count: 1, lastAt: "2026-10-02T00:00:00.000Z", file: damagedPath });
+  // Later damage in the same queue adds to the count and moves the time on.
+  for (const id of ["d", "e"]) await first.enqueue(scan(id));
+  await damage(0, 30);
+  const second = createFileQueue(f.path, { log: () => undefined, now: () => Date.UTC(2026, 9, 5, 8) });
+  assert.deepEqual(ids(await second.pending()), ["a", "c", "e"]);
+  assert.deepEqual(await second.setAside(), { count: 2, lastAt: "2026-10-05T08:00:00.000Z", file: damagedPath });
+  // A crash after the side file was written but before the journal was rewritten sets the same line aside again at the
+  // next start: it counts once. A side-file entry cut short by a power cut counts only once written whole.
+  const [kept] = (await readFile(damagedPath, "utf8")).split("\n");
+  const again = JSON.stringify({ ...JSON.parse(kept), foundAt: "2026-10-06T00:00:00.000Z" });
+  await writeFile(damagedPath, `${await readFile(damagedPath, "utf8")}${again}\n{"foundAt":"2026-10-07T00:00:00.000Z","line":"synthetic-cut`);
+  assert.deepEqual(await second.setAside(), { count: 2, lastAt: "2026-10-06T00:00:00.000Z", file: damagedPath });
+  await writeFile(damagedPath, `${await readFile(damagedPath, "utf8")}${JSON.stringify({ foundAt: "2026-10-07T00:00:00.000Z", line: "synthetic-cut-whole" })}\n`);
+  assert.deepEqual(await second.setAside(), { count: 3, lastAt: "2026-10-07T00:00:00.000Z", file: damagedPath });
+  // The damaged lines are never parsed or replayed: the queue is unchanged.
+  assert.deepEqual(ids(await createFileQueue(f.path).pending()), ["a", "c", "e"]);
+  // The count lasts as long as the file. Removing it after recovering what it holds clears the count.
+  await rm(damagedPath);
+  assert.deepEqual(await second.setAside(), none);
+});

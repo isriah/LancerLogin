@@ -27,6 +27,16 @@ Supply `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` through protected proc
 
 The report groups every active database and emits `watch`, `warning` and `critical` at 50%, 75% and 90%. An installation-owned scheduler can run it periodically and notify on a threshold transition, rather than every successful check. An analytics access failure is an error, not zero usage. Analytics can lag and query-insight aggregates may not reconcile exactly with billing enforcement. Never collect raw attendance data to monitor usage.
 
+## Background writes and queries
+
+D1 Free also allows 100,000 rows written a day across the account, and once that is used every write fails, kiosk scans included. Work that repeats on a timer must therefore write only what changed:
+
+- **Two-way label checks** run every five minutes for each two-way label. A check that finds nothing changed writes two rows (the label's lease and its checked time), however many Discord users hold the role without being on the roster. The unmatched list is updated by difference: users who left it are deleted, new ones inserted, and the rest untouched.
+- **Kiosk heartbeats** do no Discord status work: a heartbeat costs the same queries with Discord configured as without, and the status message is the scheduler's channel job.
+- **Scheduler state** is one row; each slice or pass writes it once at its close (the cron fallback twice).
+
+The scheduler's per-invocation budget of D1 queries and provider requests is described in [Architecture](ARCHITECTURE.md#background-scheduler).
+
 Compare matched workloads and the same UTC time intervals before and after a release. Check query counts as well as row counts so a quiet hour is not mistaken for an efficiency improvement. Indexes also add write overhead; monitor both rows read and rows written.
 
 Cloudflare references: [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/), [indexes](https://developers.cloudflare.com/d1/best-practices/use-indexes/), and [metrics](https://developers.cloudflare.com/d1/observability/metrics-analytics/).

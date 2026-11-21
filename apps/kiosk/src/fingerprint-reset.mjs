@@ -48,6 +48,8 @@ export function createFingerprintReset({ directory, legacyDirectory, config, cli
   return {
     tick(metadata) { if (!running) running = run(metadata).finally(() => { running = undefined; }); return running; },
     resetEpoch: () => store.resetEpoch(),
+    // A reset has finished on this pairing and none is under way: every link from before it is gone.
+    resetCompleted: async () => (await store.resetEpoch()) !== null && !await store.pendingReset(),
     enrollmentAllowed: async () => !await store.pendingReset(),
     diagnostics: snapshot,
   };

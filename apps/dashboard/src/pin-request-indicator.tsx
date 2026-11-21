@@ -6,7 +6,8 @@ import { countPinRequests, pinRequestCountText, setPinRequestCounts, usePinReque
 import { visiblePoll } from "./visible-poll";
 
 type WaitingPinRequest = PinRequest & { kioskId: string; kioskName: string };
-type Notice = { message: string; tone: "success" | "error" };
+// `read`: the error is a failed read of the list, which the next read that succeeds clears.
+type Notice = { message: string; tone: "success" | "error"; read?: true };
 
 /**
  * The top bar's count of PIN requests waiting at any kiosk, for Admins and Operators, beside the Reviews count. It shows
@@ -14,7 +15,8 @@ type Notice = { message: string; tone: "success" | "error" };
  * itself until it is opened.
  *
  * Opening it lists every waiting request by kiosk, read from GET /admin/kiosks/pin-requests and again every 10 seconds while
- * the dialog is open, as Manage kiosk does. Approve and Decline are the ones on Manage kiosk.
+ * the dialog is open, as Manage kiosk does. Approve and Decline are the ones on Manage kiosk. A read that fails keeps the
+ * dialog open on the last list with the error; the next read that succeeds replaces both.
  */
 export function PinRequestIndicator({ enabled }: { enabled: boolean }) {
   const counts = usePinRequestCounts();
@@ -33,8 +35,8 @@ export function PinRequestIndicator({ enabled }: { enabled: boolean }) {
       const result = await api<{ requests: WaitingPinRequest[] }>("/admin/kiosks/pin-requests");
       if (!current) return;
       const waiting = result.requests ?? [];
-      setRequests(waiting); setNow(Date.now());
-    }, 10_000, (error) => { if (current) setNotice({ message: error.message, tone: "error" }); }, true);
+      setRequests(waiting); setNow(Date.now()); setNotice((notice) => notice?.read ? undefined : notice);
+    }, 10_000, (error) => { if (current) setNotice({ message: error.message, tone: "error", read: true }); }, true);
     return () => { current = false; stop(); };
   }, [open, enabled, reload]);
   const { busy, answer } = usePinRequestAnswers<WaitingPinRequest>((message, tone) => setNotice({ message, tone }), (request, answered) => {

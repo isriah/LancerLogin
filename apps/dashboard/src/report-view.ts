@@ -48,9 +48,10 @@ export const reportDatesRejectedError = "Report dates must be valid and in order
 /** What the Leaderboard shows if the API still rejects its dates. */
 export const reportDatesRejectedText = "These dates can't be used. Check that From is on or before To, then try again.";
 
-export function reportExportFilename(name: string, detail: boolean, date = new Date()): string {
+/** The CSV's file name, dated with today in the installation's time zone (the UTC date is a day ahead every evening in the Americas). */
+export function reportExportFilename(name: string, detail: boolean, timeZone: string, now = Date.now()): string {
   const label = name.normalize("NFKC").trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 64) || "report";
-  return `lancerlogin-${label}-${date.toISOString().slice(0, 10)}${detail ? "-detail" : ""}.csv`;
+  return `lancerlogin-${label}-${installationToday(timeZone, now)}${detail ? "-detail" : ""}.csv`;
 }
 
 type FilterOperator = "contains" | "minimum" | "equals" | "maximum" | "between" | "empty" | "not_empty";

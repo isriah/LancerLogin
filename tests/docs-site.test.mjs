@@ -178,7 +178,8 @@ test("operations guide matches the current navigation and recovery paths", async
   assert.match(operations, /spreadsheet formulas as text/);
   assert.match(operations, /id="discord-commands"/);
   assert.match(operations, /No manual HTTP request or command payload is required/);
-  assert.match(operations, /creates or updates exactly the guild-scoped <code>\/pair<\/code>, <code>\/attendance-report<\/code>, <code>\/code<\/code>, and <code>\/label<\/code> commands, plus the commands each installed plugin declares: Outreach adds <code>\/outreach-submit<\/code> and <code>\/outreach-correction<\/code>\./);
+  assert.match(operations, /creates or updates exactly the guild-scoped <code>\/pair<\/code>, <code>\/attendance-report<\/code>, <code>\/code<\/code>, and <code>\/label<\/code> commands, plus the commands each installed plugin declares: Outreach adds <code>\/outreach-submit<\/code>, <code>\/outreach-correction<\/code> and <code>\/outreach-report<\/code>\./);
+  assert.match(operations, /<code>\/outreach-report<\/code> likewise shows the member only their own Outreach participation\./);
   assert.match(operations, /<code>\/code<\/code> gives the member a one-time code to sign in at a kiosk that takes Discord codes\./);
   assert.doesNotMatch(operations, /POST \/applications|"name": "member-id"/);
   assert.match(operations, /ephemeral responses/);
@@ -260,4 +261,23 @@ test("privacy page describes current storage boundaries without retired features
   assert.match(privacy, /Portable dashboard backups exclude/);
   assert.match(privacy, /id="fingerprint-cloud-storage"/);
   assert.doesNotMatch(privacy, /templates exclusively inside/);
+});
+
+test("the docs say which workflows read the installation variables, and that the workflow upgrade needs none of them", async () => {
+  const three = ["LANCERLOGIN_INSTALLATION_SLUG", "LANCERLOGIN_DATABASE_ID", "LANCERLOGIN_API_URL"];
+  const varsOf = async (file) => [...(await readFile(`.github/workflows/${file}`, "utf8")).matchAll(/\bvars\.([A-Z_]+)/g)].map((match) => match[1]);
+  // Install or upgrade LancerLogin reads only the two optional variables; the dashboard update workflows read the three.
+  assert.deepEqual([...new Set(await varsOf("provision-template.yml"))].sort(), ["LANCERLOGIN_DATABASE_NAME", "LANCERLOGIN_WORKER_PLACEMENT_REGION"]);
+  for (const file of ["upgrade-web.yml", "refresh-web-update-credential.yml"]) for (const name of three) assert.ok((await varsOf(file)).includes(name), `${file} ${name}`);
+  const updates = await read("updates.html");
+  const manual = updates.slice(updates.indexOf('id="manual-update"'), updates.indexOf('id="kiosk-updates"'));
+  assert.doesNotMatch(manual, /The upgrade uses the <code>LANCERLOGIN_INSTALLATION_SLUG/);
+  assert.match(manual, /does not need the <a href="setup\.html#installation-variables">installation variables<\/a>.*so it works even if you never saved them/s);
+  assert.match(manual, /<code>LANCERLOGIN_DATABASE_NAME<\/code>.*<code>LANCERLOGIN_WORKER_PLACEMENT_REGION<\/code>/s);
+  const setup = await read("setup.html");
+  const variables = setup.slice(setup.indexOf('id="installation-variables"'), setup.indexOf('id="google-oauth"'));
+  assert.match(variables, /These variables are for <a href="updates\.html#web-update">one-click updates from the dashboard<\/a>/);
+  assert.match(variables, /does not use them and works without them/);
+  assert.match(updates, /id="web-update"/);
+  assert.match(await readFile("docs/WEB-UPDATES.md", "utf8"), /\*\*Install or upgrade LancerLogin\*\* \(`provision-template\.yml`\) reads none of the three/);
 });

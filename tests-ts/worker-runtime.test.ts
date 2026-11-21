@@ -14,6 +14,8 @@ import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
 import { defaultReportDefinition } from "../apps/api/src/report-builder.ts";
 import { FakeDatabase, request, seedInstallationBackupFoundation, sessionCookie, sessionSecret, sessionUserLookup, setupCode, setupCodeHash } from "./fixtures/worker-fake-database.ts";
 
+/** Every statement the fake ran: on its own, or inside a batch that writes. */
+const everyCall = (database: FakeDatabase) => [...database.calls, ...database.batches.flat()];
 function seedPolicy(database: FakeDatabase, options: {
   members?: Record<string, unknown>[]; meetings?: Record<string, unknown>[]; labels?: Record<string, unknown>[];
   changes?: Record<string, unknown>[]; targets?: Record<string, unknown>[]; rules?: Record<string, unknown>[]; audience?: Record<string, unknown>[];
@@ -34,6 +36,42 @@ function seedPolicy(database: FakeDatabase, options: {
 
 
 const calendarClock = (context: TestContext) => context.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-30T12:00:00Z") });
+// Meeting routes only queue calendar work; the scheduled jobs attendance.google-calendar and attendance.discord-calendar
+// deliver it. A cron pass runs every due job, so these tests stub fetch for the other Discord jobs too and assert only the
+// calendar requests (Discord's /scheduled-events, Google's calendar API).
+const isDiscordCalendarRequest = (url: string) => url.includes("/scheduled-events");
+/** One cron pass whose slot starts with this calendar job, the way the scheduler delivers queued calendar work. */
+async function calendarDeliveryPass(env: Env, jobId: "attendance.google-calendar" | "attendance.discord-calendar") {
+  const originalLog = console.log; console.log = () => {};
+  try { await worker.scheduled({ cron: "*/5 * * * *", scheduledTime: schedulerSlotFor(jobId) } as never, env); } finally { console.log = originalLog; }
+}
+/** A verified, enabled Discord integration, with the channel manager off so the pass's other Discord jobs stay quiet. */
+async function configureDiscordCalendar(database: FakeDatabase) {
+  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
+  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  database.rows.set("discord_channel_manager_enabled AS enabled", { enabled: 0 });
+}
+/**
+ * POST /discord/calendar for meeting-1: the route queues the meeting's Discord upsert in one batch and reports it queued,
+ * without any Discord calendar request (`calendarRequests` counts those made so far).
+ */
+async function queueDiscordCalendarSync(env: Env, database: FakeDatabase, calendarRequests: () => number) {
+  const before = calendarRequests();
+  const result = await worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
+  assert.equal(result.status, 200);
+  const body = await result.json() as { synced: number; queued: number; skipped: number; failed: number; outcomes: Array<{ meetingId: string; status: string }> };
+  assert.deepEqual({ synced: body.synced, queued: body.queued, skipped: body.skipped, failed: body.failed }, { synced: 0, queued: 1, skipped: 0, failed: 0 });
+  assert.deepEqual(body.outcomes.map(({ meetingId, status }) => ({ meetingId, status })), [{ meetingId: "meeting-1", status: "queued" }]);
+  assert.ok(database.batches.at(-1)?.some((call) => call.sql.startsWith("INSERT INTO discord_calendar_operations") && call.sql.includes("'upsert'") && call.values.includes('["meeting-1"]')), "the upsert is queued for the meeting");
+  assert.equal(calendarRequests(), before, "the route sends nothing to Discord");
+  return body;
+}
+/** What delivery recorded for each failed Discord calendar operation: markDiscordCalendarFailure's operation update binds the retry time and last_error. */
+const discordCalendarFailures = (database: FakeDatabase) => database.batches.flat()
+  .filter((call) => call.sql.startsWith("UPDATE discord_calendar_operations SET status = CASE WHEN revision = ? THEN 'failed'"))
+  .map((call) => ({ meetingId: call.values[9], retryAt: call.values[3], lastError: call.values[7] }));
+/** The claims of Discord calendar operations a delivery made (one UPDATE ... SET status = 'processing' each). */
+const discordCalendarClaims = (database: FakeDatabase) => database.calls.filter((call) => call.sql.startsWith("UPDATE discord_calendar_operations SET status = 'processing'"));
 const signedDiscordInteraction = (payload: unknown, privateKey: KeyObject, rawBody?: string) => {
   const body = rawBody ?? JSON.stringify(payload); const timestamp = String(Math.floor(Date.now() / 1000)); const signature = sign(null, Buffer.from(timestamp + body), privateKey).toString("hex");
   return new Request("https://api.example.test/discord/interactions", { method: "POST", headers: { "content-type": "application/json", "x-signature-ed25519": signature, "x-signature-timestamp": timestamp }, body });
@@ -147,7 +185,7 @@ test("scheduler controls are Admin-only, accept no fields, and work with or with
   const status = await worker.fetch(request("/admin/scheduler", undefined, { cookie: admin }), env);
   // Start pokes every job so work the Stop held goes out now; each status read re-arms a lost alarm.
   assert.equal(status.status, 200); assert.deepEqual(seen, ["POST /poke", "POST /watchdog", "POST /watchdog"]);
-  assert.ok(database.calls.some((call) => call.values.includes("scheduler.start")));
+  assert.ok(database.batches.flat().some((call) => call.values.includes("scheduler.start")), "the Start and its audit row are one batch");
 });
 
 test("Google-only bootstrap encrypts OAuth credentials before the first sign-in", async () => {
@@ -250,7 +288,7 @@ test("branding stores a bounded image asset in D1 and rejects remote logo URLs",
   const logoData = `data:image/png;base64,${Buffer.from("small-logo").toString("base64")}`;
   const saved = await worker.fetch(request("/admin/branding", { ...base, logoData }, { method: "PATCH", cookie }), env);
   assert.equal(saved.status, 200);
-  const update = database.calls.find((call) => call.sql.includes("UPDATE organization_settings SET"));
+  const update = database.batches.flat().find((call) => call.sql.includes("UPDATE organization_settings SET"));
   assert.ok(update?.sql.includes("logo_data"));
   assert.ok(update?.values.includes(logoData));
 });
@@ -264,8 +302,8 @@ test("Admin can set a dated attendance reporting baseline and it is returned wit
   assert.equal(invalid.status, 400);
   const saved = await worker.fetch(request("/admin/branding", { ...base, attendanceReportingStartsOn: "2026-08-26" }, { method: "PATCH", cookie }), env);
   assert.equal(saved.status, 200);
-  assert.ok(database.calls.some((call) => call.values.includes("2026-08-26")));
-  assert.ok(database.calls.some((call) => call.values.includes("branding.updated")));
+  assert.ok(database.batches.flat().some((call) => call.values.includes("2026-08-26")));
+  assert.ok(database.batches.flat().some((call) => call.values.includes("branding.updated")));
   const meetings = await worker.fetch(request("/meetings", undefined, { cookie: await sessionCookie("operator") }), env);
   assert.equal(meetings.status, 200);
   assert.ok(database.calls.some((call) => call.sql.includes("attendance_reporting_starts_on")));
@@ -280,10 +318,10 @@ test("Admin can configure bounded attendance anomaly thresholds with audit histo
   assert.equal((await worker.fetch(request("/admin/branding", { ...base, anomalyLateThresholdMinutes: 10, anomalyEarlyThresholdMinutes: 1441 }, { method: "PATCH", cookie }), env)).status, 400);
   const saved = await worker.fetch(request("/admin/branding", { ...base, anomalyLateThresholdMinutes: 12, anomalyEarlyThresholdMinutes: 18 }, { method: "PATCH", cookie }), env);
   assert.equal(saved.status, 200);
-  const update = database.calls.find((call) => call.sql.includes("anomaly_late_threshold_minutes = COALESCE"));
+  const update = database.batches.flat().find((call) => call.sql.includes("anomaly_late_threshold_minutes = COALESCE"));
   assert.ok(update?.values.includes(12));
   assert.ok(update?.values.includes(18));
-  const audit = database.calls.find((call) => call.values.includes("branding.updated"));
+  const audit = database.batches.flat().find((call) => call.values.includes("branding.updated"));
   assert.match(String(audit?.values.find((value) => typeof value === "string" && value.includes("anomalyLateThresholdMinutes"))), /"anomalyLateThresholdMinutes":12/);
 });
 
@@ -480,7 +518,7 @@ test("kiosk authentication configuration is Admin-only, validated, audited, and 
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const status = await worker.fetch(request("/admin/kiosks", undefined, { cookie: await sessionCookie("admin") }), env);
   assert.equal(status.status, 200);
-  assert.deepEqual(await status.json(), { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, authenticationMethod: "fingerprint", configuredAuthenticationMethod: "qr", pairedAt: "2026-09-01T00:00:00.000Z", requirePin: false, discordCode: false, discordCodeBackup: "offline" }] });
+  assert.deepEqual(await status.json(), { kiosks: [{ id: "kiosk-1", name: "Front desk", active: 1, authenticationMethod: "fingerprint", configuredAuthenticationMethod: "qr", pairedAt: "2026-09-01T00:00:00.000Z", storageDiagnostics: null, requirePin: false, discordCode: false, discordCodeBackup: "offline" }] });
   assert.equal((await worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", { authenticationMethod: "nfc" }, { method: "PATCH", cookie: await sessionCookie("operator") }), env)).status, 403);
   assert.equal((await worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", { authenticationMethod: "camera" }, { method: "PATCH", cookie: await sessionCookie("admin") }), env)).status, 400);
   const updated = await worker.fetch(request("/admin/kiosks/kiosk-1/authentication-method", { authenticationMethod: "nfc" }, { method: "PATCH", cookie: await sessionCookie("admin") }), env);
@@ -738,13 +776,13 @@ test("kiosk heartbeat hashes bearer credentials before D1 lookup", async () => {
   assert.notEqual(lookup.values[0], "very-secret");
   assert.ok(database.calls.some((call) => call.sql.includes("UPDATE kiosks SET last_seen_at")));
   assert.equal(database.calls.some((call) => call.values.includes("must-not-store")), false);
-  const healthUpdate = database.calls.find((call) => call.sql.includes("reader_online"));
+  const healthUpdate = database.calls.find((call) => call.sql.includes("reader_online = ?"));
   assert.deepEqual(healthUpdate?.values.slice(1, 4), [1, "rfid", "0.1.0"]);
   const invalid = new Request("https://api.example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, authenticationMethod: "camera", releaseVersion: "0.1.0" }) });
   assert.equal((await worker.fetch(invalid, env)).status, 400);
 });
 
-test("kiosk heartbeats maintain one multi-device Discord status message and scheduled reconciliation marks devices offline", async () => {
+test("the scheduler maintains one multi-device Discord status message, heartbeats do no status work, and reconciliation marks devices offline", async () => {
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
   database.rows.set("FROM kiosks", { id: "kiosk-1", name: "Front desk", lastSeenAt: new Date().toISOString(), readerOnline: 1, releaseVersion: "0.1.3" });
@@ -761,23 +799,30 @@ test("kiosk heartbeats maintain one multi-device Discord status message and sche
     const heartbeat = new Request("https://api.example.test/kiosk/heartbeat", { method: "POST", headers: { authorization: "Bearer very-secret", "content-type": "application/json" }, body: JSON.stringify({ readerOnline: true, releaseVersion: "0.1.3", pendingEvents: 0, lastSyncAt: "2026-09-01T20:00:00.000Z", errorCategory: null }) });
     const result = await worker.fetch(heartbeat, env, { waitUntil: (promise) => background.push(promise) });
     assert.equal(result.status, 200);
-    assert.equal(background.length, 2, "the isolate's first module check and the Discord status update");
+    assert.equal(background.length, 1, "the isolate's first module check only: a heartbeat starts no Discord status update");
     await Promise.all(background);
+    assert.equal(outbound.length, 0, "a heartbeat sends nothing to Discord");
+    assert.equal(database.calls.some((call) => /integration_state|encrypted_integrations|platform_scheduler_state/.test(call.sql)), false, "and reads nothing for the status message");
+    // The channel job posts the message on the scheduler's next pass.
+    await worker.scheduled({ cron: "*/5 * * * *" }, env);
     assert.equal(outbound.length, 1);
     assert.match(outbound[0].input, /channels\/223456789012345678\/messages$/);
     assert.equal(outbound[0].init?.method, "POST");
     assert.match(String(outbound[0].init?.body), /2 of 2 online.*Front desk.*online.*Workshop.*online/s);
     assert.deepEqual(JSON.parse(String(outbound[0].init?.body)).allowed_mentions, { parse: [] });
-    const stateWrite = database.calls.find((call) => call.sql.includes("INSERT INTO integration_state") && call.values.includes("message-1"));
+    assert.equal(JSON.parse(String(outbound[0].init?.body)).enforce_nonce, true, "a repeated post of the same status is the same message to Discord");
+    const stateWrite = everyCall(database).find((call) => call.sql.includes("INSERT INTO integration_state") && call.values.includes("message-1"));
     assert.ok(stateWrite);
 
-    database.rows.set("FROM integration_state", { externalId: "message-1", contentHash: stateWrite.values[1] });
+    // The tracked row as that write left it; the fake keeps no rows of its own.
+    database.rows.set("FROM integration_state", { externalId: "message-1", contentHash: stateWrite.values[2], updatedAt: new Date().toISOString() });
     const manual = await worker.fetch(request("/discord/kiosk-status", {}, { cookie: await sessionCookie("operator") }), env);
     assert.equal(manual.status, 200);
     assert.deepEqual(await manual.json(), { changed: false, messageId: "message-1", online: true, messageUrl: "https://discord.com/channels/123456789012345678/223456789012345678/message-1" });
     assert.ok(database.calls.some((call) => call.values.includes("discord.kiosk_status_updated")));
+    const beforeIdlePass = outbound.length;
     await worker.scheduled({ cron: "*/5 * * * *" }, env);
-    assert.equal(outbound.filter(call => call.init?.method !== "GET").length, 1, "unchanged online state should not edit Discord");
+    assert.equal(outbound.length, beforeIdlePass, "an unchanged status checked within the hour sends nothing to Discord");
 
     database.lists.set("FROM kiosks WHERE installation_id", [
       { id: "kiosk-1", name: "Front desk", lastSeenAt: "2026-08-29T00:00:00Z", readerOnline: 1, releaseVersion: "0.1.3" },
@@ -816,9 +861,9 @@ test("missing tracked Discord kiosk status messages are replaced and the new map
     assert.equal(outbound[1].init?.method, "POST");
     assert.deepEqual(JSON.parse(String(outbound[1].init?.body)).allowed_mentions, { parse: [] });
 
-    const replacementWrite = database.calls.find((call) => call.sql.includes("INSERT INTO integration_state") && call.values.includes("replacement-message-1"));
+    const replacementWrite = everyCall(database).find((call) => call.sql.includes("INSERT INTO integration_state") && call.values.includes("replacement-message-1"));
     assert.ok(replacementWrite);
-    database.rows.set("FROM integration_state", { externalId: "replacement-message-1", contentHash: replacementWrite.values[1] });
+    database.rows.set("FROM integration_state", { externalId: "replacement-message-1", contentHash: replacementWrite.values[2], updatedAt: new Date().toISOString() });
     const unchanged = await worker.fetch(request("/discord/kiosk-status", {}, { cookie: await sessionCookie("operator") }), env);
     assert.equal(unchanged.status, 200);
     assert.deepEqual(await unchanged.json(), { changed: false, messageId: "replacement-message-1", online: false, messageUrl: "https://discord.com/channels/123456789012345678/223456789012345678/replacement-message-1" });
@@ -830,7 +875,7 @@ test("missing tracked Discord kiosk status messages are replaced and the new map
     assert.equal(outbound.length, 5, "scheduled reconciliation should also replace one missing tracked message");
     assert.equal(outbound[3].init?.method, "PATCH");
     assert.equal(outbound[4].init?.method, "POST");
-    assert.ok(database.calls.some((call) => call.sql.includes("INSERT INTO integration_state") && call.values.includes("replacement-message-2")));
+    assert.ok(everyCall(database).some((call) => call.sql.includes("INSERT INTO integration_state") && call.values.includes("replacement-message-2")));
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -874,8 +919,9 @@ test("category edits and retirement do not rewrite historical meeting snapshots"
   const database = new FakeDatabase(); database.rows.set("SELECT id, name, weight, minimum_duration_minutes AS minimumDurationMinutes, position, active FROM meeting_weight_categories", { id: "weight-2", name: "Long", weight: 2, minimumDurationMinutes: 180, position: 0, active: 1 });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const admin = await sessionCookie("admin");
   const edited = await worker.fetch(request("/admin/meeting-weight-categories/weight-2", { name: "Extended", weight: 3, minimumDurationMinutes: 240 }, { method: "PATCH", cookie: admin }), env); assert.equal(edited.status, 200);
-  const update = database.calls.find((call) => call.sql.includes("UPDATE meeting_weight_categories SET name")); assert.deepEqual(update?.values.slice(0, 3), ["Extended", 3, 240]); assert.equal(database.calls.some((call) => call.sql.includes("UPDATE meetings")), false);
-  const retired = await worker.fetch(request("/admin/meeting-weight-categories/weight-2", { active: false }, { method: "PATCH", cookie: admin }), env); assert.equal(retired.status, 200); assert.ok(database.calls.some((call) => call.values.includes("meeting_weight_category.retired"))); assert.equal(database.calls.some((call) => call.sql.includes("UPDATE meetings")), false);
+  const writes = () => [...database.calls, ...database.batches.flat()];
+  const update = writes().find((call) => call.sql.includes("UPDATE meeting_weight_categories SET name")); assert.deepEqual(update?.values.slice(0, 3), ["Extended", 3, 240]); assert.equal(writes().some((call) => call.sql.includes("UPDATE meetings")), false);
+  const retired = await worker.fetch(request("/admin/meeting-weight-categories/weight-2", { active: false }, { method: "PATCH", cookie: admin }), env); assert.equal(retired.status, 200); assert.ok(writes().some((call) => call.values.includes("meeting_weight_category.retired"))); assert.equal(writes().some((call) => call.sql.includes("UPDATE meetings")), false);
 });
 
 test("meeting creation uses the first matching weight rule and permits an explicit default", async () => {
@@ -1219,22 +1265,28 @@ test("Operator can update only an occurrence or this and future series occurrenc
 test("Operator can hide one meeting or this and future series occurrences", async () => {
   const single = new FakeDatabase();
   single.rows.set("series_id AS seriesId", { id: "meeting-1", seriesId: null, startsAt: "2026-09-01T20:00:00.000Z" });
-  single.rows.set("SELECT event_id AS eventId", { eventId: "ll0123456789abcdef0123456789abcdef0123456789abcdef" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: single } as unknown as Env;
   const occurrence = await worker.fetch(request("/meetings/meeting-1", { scope: "occurrence" }, { method: "DELETE", cookie: await sessionCookie("operator") }), env);
   assert.equal(occurrence.status, 200);
-  assert.ok(single.calls.some((call) => call.sql.includes("UPDATE meetings SET deleted_at") && call.values.includes("meeting-1")));
+  // The soft delete opens the batch that queues both calendars' deletes for the meetings it deleted at that time.
+  const hidden = single.batches.find((batch) => batch[0]?.sql.startsWith("UPDATE meetings SET deleted_at"));
+  assert.ok(hidden && hidden[0]!.values.includes("meeting-1"));
+  assert.ok(hidden.some((call) => call.sql.startsWith("INSERT INTO google_calendar_operations") && call.sql.includes("'delete'") && call.values.includes('["meeting-1"]')));
+  assert.ok(hidden.some((call) => call.sql.startsWith("INSERT INTO discord_calendar_operations") && call.sql.includes("'delete'") && call.values.includes('["meeting-1"]')));
   assert.ok(single.calls.some((call) => call.values.includes("meeting.deleted")));
   assert.deepEqual((await occurrence.json() as { calendarSync: unknown }).calendarSync, { synced: 0, queued: 1, failed: 0 });
-  assert.ok(single.batches.some((batch) => batch.some((call) => call.sql.includes("google_calendar_operations") && call.sql.includes("'delete'"))));
 
   const future = new FakeDatabase();
   future.rows.set("series_id AS seriesId", { id: "meeting-3", seriesId: "series-1", startsAt: "2026-09-15T20:00:00.000Z" });
   future.lists.set("UPDATE meetings SET deleted_at", [{ id: "meeting-3" }]);
   const futureResult = await worker.fetch(request("/meetings/meeting-3", { scope: "future" }, { method: "DELETE", cookie: await sessionCookie("operator") }), { ...env, DB: future } as unknown as Env);
   assert.equal(futureResult.status, 200, await futureResult.clone().text());
-  assert.ok(future.calls.some((call) => call.sql.includes("series_id = ?") && call.sql.includes("starts_at >= ?") && call.values.includes("series-1")));
+  const series = future.batches.find((batch) => batch[0]?.sql.startsWith("UPDATE meetings SET deleted_at"));
+  assert.ok(series && series[0]!.sql.includes("series_id = ?") && series[0]!.sql.includes("starts_at >= ?") && series[0]!.sql.includes("RETURNING id") && series[0]!.values.includes("series-1"));
+  // The series' calendar deletes target the occurrences that carry this deletion time.
+  assert.ok(series.some((call) => call.sql.startsWith("INSERT INTO google_calendar_operations") && call.sql.includes("series_id = ? AND deleted_at = ?") && call.values.includes("series-1")));
   assert.ok(future.calls.some((call) => call.values.includes("meeting.series_deleted")));
+  assert.deepEqual((await futureResult.json() as { deleted: number; deletion: { meetingIds: string[] } }).deletion.meetingIds, ["meeting-3"]);
 });
 
 test("Operator can immediately restore a soft-deleted meeting or future series occurrences", async () => {
@@ -2053,10 +2105,13 @@ test("Google Calendar rechecks module authority before token and provider delive
   const originalFetch = globalThis.fetch; let outbound = 0;
   globalThis.fetch = async () => { outbound += 1; return Response.json({ access_token: "must-not-use" }); };
   try {
+    // Retry only makes the failed work due again; the scheduled job delivers, and it is refused before any token request.
     const result = await worker.fetch(request("/admin/integrations/google-calendar/retry", {}, { cookie: await sessionCookie("admin") }), env);
     assert.equal(result.status, 200);
+    assert.deepEqual(await result.json(), { synced: 0, queued: 2, failed: 0, waiting: 0, scheduler: "cron", perPass: 5 });
+    await calendarDeliveryPass(env, "attendance.google-calendar");
     assert.equal(outbound, 0);
-    assert.equal((await result.json() as { failed: number }).failed, 1);
+    assert.ok(database.batches.some((batch) => batch.some((call) => call.sql.startsWith("UPDATE google_calendar_operations SET status = 'failed'"))), "the operation is recorded as failed");
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -2221,17 +2276,22 @@ test("Google Calendar enablement is independently audited", async () => {
   const enabled = await worker.fetch(request("/admin/integrations/google-calendar", { enabled: true }, { method: "PATCH", cookie: await sessionCookie("admin") }), env);
   assert.equal(enabled.status, 200);
   assert.deepEqual(await enabled.json(), { provider: "google_calendar", enabled: true });
-  assert.ok(database.calls.some((call) => call.sql.includes("google_calendar_enabled = ?") && call.values[0] === 1));
+  // Enabling queues what Sync all would in the same batch, for changes made while Google Calendar was off.
+  const batch = database.batches.find((item) => item.some((call) => call.sql.includes("google_calendar_enabled = ?") && call.values[0] === 1));
+  assert.ok(batch); assert.ok(batch.some((call) => call.sql.startsWith("INSERT INTO google_calendar_operations") && call.sql.includes("'upsert'")));
   assert.ok(database.calls.some((call) => call.values.includes("google_calendar.enabled")));
 });
 
-test("meeting creation sends dashboard titles and notes to Google Calendar", async () => {
+test("meeting creation queues dashboard titles and notes for Google Calendar, and the scheduled job sends them", async () => {
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ clientId: "calendar-client", clientSecret: "calendar-secret", refreshToken: "calendar-refresh", calendarId: "calendar@example.test", calendarLabel: "Operations" }, sessionSecret);
   database.rows.set("google_calendar_enabled AS enabled", { ...encrypted, enabled: 1, authorizedAt: "2026-09-05T00:00:00.000Z", verifiedAt: "2026-09-05T00:00:00.000Z" });
   database.rows.set("SELECT id, starts_at AS startsAt", (_sql, values) => ({ id: String(values[0]), startsAt: "2026-09-10T20:00:00.000Z", endsAt: "2026-09-10T22:00:00.000Z" }));
   database.rows.set("SELECT title, notes, required, attendance_weight AS attendanceWeight FROM meetings", { title: "Build planning", notes: "Bring supplies", required: 1, attendanceWeight: 1 });
-  database.lists.set("FROM google_calendar_operations o", ((_sql: string, values: unknown[]) => [{ meetingId: String(database.batches[0].find((call) => call.sql.includes("INSERT INTO meetings"))?.values[0]), eventId: String(values[0]), action: "upsert", startsAt: "2026-09-10T20:00:00.000Z", endsAt: "2026-09-10T22:00:00.000Z", status: "pending", attempts: 0, generation: 1 }]) as unknown as unknown[]);
+  // The event id the queue gave the meeting's mapping (`ll` and 48 hex digits, generated in SQL), as delivery reads it back.
+  const queuedEventId = `ll${"0123456789abcdef".repeat(3)}`; const queuedAt = "2026-09-09T12:00:00.000Z";
+  const meetingBatch = () => database.batches.find((batch) => batch.some((call) => call.sql.startsWith("INSERT INTO meetings")));
+  database.lists.set("FROM google_calendar_operations o", (() => [{ meetingId: String(meetingBatch()?.find((call) => call.sql.startsWith("INSERT INTO meetings"))?.values[0]), eventId: queuedEventId, action: "upsert", startsAt: "2026-09-10T20:00:00.000Z", endsAt: "2026-09-10T22:00:00.000Z", status: "pending", attempts: 0, updatedAt: queuedAt, syncedAt: null, generation: 1 }]) as unknown as unknown[]);
   const providerCalls: Array<{ url: string; body?: Record<string, unknown> }> = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -2243,14 +2303,24 @@ test("meeting creation sends dashboard titles and notes to Google Calendar", asy
     const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
     const result = await worker.fetch(request("/meetings", { title: "Build planning", notes: "Bring supplies", startsAt: "2026-09-10T20:00:00.000Z", endsAt: "2026-09-10T22:00:00.000Z", required: true }, { cookie: await sessionCookie("operator") }), env);
     assert.equal(result.status, 201);
-    assert.deepEqual((await result.json() as { calendarSync: unknown }).calendarSync, { synced: 1, queued: 0, failed: 0 });
+    // The route queues the meeting's Google event in the batch that creates the meeting, and sends nothing to Google.
+    assert.deepEqual((await result.json() as { calendarSync: unknown }).calendarSync, { synced: 0, queued: 1, failed: 0 });
+    assert.deepEqual(providerCalls, []);
+    const created = meetingBatch(); const meetingId = String(created?.find((call) => call.sql.startsWith("INSERT INTO meetings"))?.values[0]);
+    assert.ok(created?.some((call) => call.sql.startsWith("INSERT OR IGNORE INTO google_calendar_event_mappings") && call.sql.includes("'ll' || lower(hex(randomblob(24)))") && call.values.includes(JSON.stringify([meetingId]))));
+    assert.ok(created?.some((call) => call.sql.startsWith("INSERT INTO google_calendar_operations") && call.sql.includes("'upsert'") && call.values.includes(JSON.stringify([meetingId]))));
+
+    // The scheduled job sends the meeting's dashboard title and notes under the queued event id.
+    await calendarDeliveryPass(env, "attendance.google-calendar");
     const calendarCall = providerCalls.find((call) => call.url.startsWith("https://www.googleapis.com/calendar/v3/calendars/"));
     assert.ok(calendarCall);
     assert.deepEqual(Object.keys(calendarCall.body ?? {}).sort(), ["description", "end", "id", "start", "summary"]);
     assert.equal(calendarCall.body?.summary, "Build planning");
     assert.equal(calendarCall.body?.description, "Audience: All\nAttendance: Required (weight 1)\n\nBring supplies");
     assert.match(String(calendarCall.body?.id), /^ll[0-9a-f]{48}$/);
-
+    assert.equal(calendarCall.body?.id, queuedEventId);
+    // Delivery settles only the operation it read: the update names the updated_at it saw.
+    assert.ok(database.batches.flat().some((call) => call.sql.startsWith("UPDATE google_calendar_operations SET status = 'delivered'") && call.values.includes(queuedEventId) && call.values.at(-1) === queuedAt));
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -2311,8 +2381,8 @@ test("enabled Discord channel manager creates status before guidance and pins on
     assert.deepEqual(posts[1].payload?.components, [{ type: 1, components: [{ type: 2, style: 1, label: "View my attendance report", custom_id: "lancerlogin-attendance-report" }] }]);
     assert.equal(JSON.stringify(posts[1].payload).match(/lancerlogin-attendance-report/g)?.length, 1);
     assert.deepEqual(outbound.filter((call) => call.method === "PUT").map((call) => call.url), ["https://discord.com/api/v10/channels/223456789012345678/messages/pins/managed-1"]);
-    assert.ok(database.calls.some((call) => call.values[0] === "kiosk-status" && call.values[1] === "managed-1"));
-    assert.ok(database.calls.some((call) => call.values[0] === "channel-manager-howto" && call.values[1] === "managed-2"));
+    assert.ok(everyCall(database).some((call) => call.values[0] === "kiosk-status" && call.values[1] === "managed-1"));
+    assert.ok(everyCall(database).some((call) => call.values[0] === "channel-manager-howto" && call.values[1] === "managed-2"));
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -2396,8 +2466,8 @@ test("channel manager recreates deleted tracked messages with exactly one report
     assert.equal(JSON.stringify(recreatedGuide).match(/lancerlogin-attendance-report/g)?.length, 1);
     assert.deepEqual(outbound.filter((call) => call.method === "PUT").map((call) => call.url), ["https://discord.com/api/v10/channels/223456789012345678/messages/pins/replacement-1"]);
     assert.equal(outbound.some((call) => call.method === "DELETE" || call.url.includes("unrelated")), false);
-    assert.ok(database.calls.some((call) => call.values[0] === "kiosk-status" && call.values[1] === "replacement-1"));
-    assert.ok(database.calls.some((call) => call.values[0] === "channel-manager-howto" && call.values[1] === "replacement-2"));
+    assert.ok(everyCall(database).some((call) => call.values[0] === "kiosk-status" && call.values[1] === "replacement-1"));
+    assert.ok(everyCall(database).some((call) => call.values[0] === "channel-manager-howto" && call.values[1] === "replacement-2"));
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -2625,25 +2695,30 @@ test("scheduled attendance thread retry recovers an already created thread", asy
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("Discord calendar sync explains missing scheduled-event permission without exposing credentials", async (context) => {
+test("Discord calendar delivery explains missing scheduled-event permission without exposing credentials", async (context) => {
   calendarClock(context);
-  const database = new FakeDatabase();
-  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
-  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  const database = new FakeDatabase(); await configureDiscordCalendar(database);
   database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null });
   database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", { eventId: null, active: 1 });
-  database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, actorUserId: "operator-1" }]);
+  database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, revision: 1, actorUserId: "operator-1" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(JSON.stringify({ message: "Missing Permissions" }), { status: 403, headers: { "content-type": "application/json" } });
+  const originalFetch = globalThis.fetch; let calendarCalls = 0;
+  globalThis.fetch = async (input) => {
+    if (!isDiscordCalendarRequest(String(input))) return Response.json({ id: "message-1" });
+    calendarCalls += 1; return new Response(JSON.stringify({ message: "Missing Permissions" }), { status: 403, headers: { "content-type": "application/json" } });
+  };
   try {
-    const result = await worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
-    assert.equal(result.status, 200);
-    const body = await result.json() as { failed: number; outcomes: Array<{ reason?: string }> };
-    assert.equal(body.failed, 1);
-    assert.match(body.outcomes[0].reason ?? "", /Create Events permission/);
-    assert.doesNotMatch(JSON.stringify(body), /discord-secret/);
-    assert.ok(database.batches.some((batch) => batch.some((call) => call.sql.includes("discord_calendar_operations SET status = 'failed'") && call.values.includes(null))));
+    const queued = await queueDiscordCalendarSync(env, database, () => calendarCalls);
+    assert.doesNotMatch(JSON.stringify(queued), /discord-secret/);
+    await calendarDeliveryPass(env, "attendance.discord-calendar");
+    assert.equal(calendarCalls, 1);
+    // Delivery records the explanation as the operation's last error, with no automatic retry for a missing permission.
+    const failures = discordCalendarFailures(database);
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0]!.meetingId, "meeting-1");
+    assert.match(String(failures[0]!.lastError), /Create Events permission/);
+    assert.equal(failures[0]!.retryAt, null);
+    assert.doesNotMatch(JSON.stringify([...database.calls, ...database.batches.flat()].map((call) => call.values)), /discord-secret/);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -2662,94 +2737,102 @@ test("individual Discord calendar sync stops after the scheduled meeting end", a
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("bulk Discord calendar sync stops after a permission failure instead of repeating denied requests", async (context) => {
+test("bulk Discord calendar sync queues every meeting, and delivery stops after a permission failure instead of repeating denied requests", async (context) => {
   calendarClock(context);
-  const database = new FakeDatabase();
-  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
-  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  const database = new FakeDatabase(); await configureDiscordCalendar(database);
+  // Before the meeting row: the count's subquery also reads FROM meetings WHERE.
+  database.rows.set("SELECT COUNT(*) AS selected", { selected: 2, deferred: 0 });
   database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null });
   database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", { eventId: null, active: 1 });
-  database.lists.set("SELECT id FROM meetings", [{ id: "meeting-1" }, { id: "meeting-2" }]);
+  database.runChangeHandler = (sql) => sql.includes("FROM meetings pm JOIN discord_calendar_event_mappings pd") || sql.includes("action = 'delete' AND status = 'failed'") ? 0 : sql.startsWith("INSERT INTO discord_calendar_operations") && sql.includes("'upsert'") ? 2 : sql.startsWith("INSERT INTO discord_calendar_operations") ? 0 : 1;
   database.lists.set("FROM discord_calendar_operations o", [
-    { meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, actorUserId: "operator-1" },
-    { meetingId: "meeting-2", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, actorUserId: "operator-1" },
+    { meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, revision: 1, actorUserId: "operator-1" },
+    { meetingId: "meeting-2", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, revision: 1, actorUserId: "operator-1" },
   ]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const originalFetch = globalThis.fetch; let calls = 0;
-  globalThis.fetch = async () => { calls += 1; return new Response(JSON.stringify({ message: "Missing Permissions" }), { status: 403, headers: { "content-type": "application/json" } }); };
+  globalThis.fetch = async (input) => {
+    if (!isDiscordCalendarRequest(String(input))) return Response.json({ id: "message-1" });
+    calls += 1; return new Response(JSON.stringify({ message: "Missing Permissions" }), { status: 403, headers: { "content-type": "application/json" } });
+  };
   try {
     const result = await worker.fetch(request("/discord/calendar", { all: true }, { cookie: await sessionCookie("operator") }), env);
+    assert.equal(result.status, 200);
+    const { rule, ...queued } = await result.json() as Record<string, unknown>;
+    assert.deepEqual(queued, { synced: 0, queued: 2, skipped: 0, failed: 0, outcomes: [], selected: 2, deferred: 0, deletesQueued: 0, remaining: 0, waiting: 0, perPass: 3, scheduler: "cron" });
+    assert.match(String(rule), /current and upcoming/);
+    assert.equal(calls, 0, "the route sends nothing to Discord");
+
+    await calendarDeliveryPass(env, "attendance.discord-calendar");
     assert.equal(calls, 1);
-    assert.deepEqual(await result.json(), {
-      synced: 0,
-      queued: 1,
-      skipped: 0,
-      failed: 1,
-      outcomes: [
-        { meetingId: "meeting-1", title: "Studio", status: "failed", reason: "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has the Create Events permission, which Discord requires to create scheduled events, before syncing the calendar." },
-      ],
-    });
+    assert.deepEqual(discordCalendarFailures(database), [{ meetingId: "meeting-1", retryAt: null, lastError: "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has the Create Events permission, which Discord requires to create scheduled events, before syncing the calendar." }]);
+    // The second meeting is never claimed: it stays queued for a later pass.
+    assert.deepEqual(discordCalendarClaims(database).map((call) => call.values[3]), ["meeting-1"]);
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("Discord calendar sync retries a rate limit only after Discord's retry delay", async (context) => {
+test("Discord calendar delivery retries a rate limit only after Discord's retry delay", async (context) => {
   calendarClock(context);
-  const database = new FakeDatabase();
-  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
-  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  const database = new FakeDatabase(); await configureDiscordCalendar(database);
   database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null });
   database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", { eventId: null, active: 1 });
-  database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, actorUserId: "operator-1" }]);
+  database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, revision: 1, actorUserId: "operator-1" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const originalFetch = globalThis.fetch; const originalSetTimeout = globalThis.setTimeout; let calls = 0; let waited: number | undefined;
-  globalThis.setTimeout = ((callback: () => void, milliseconds?: number) => { waited = milliseconds; callback(); return 0; }) as typeof setTimeout;
-  globalThis.fetch = async () => {
+  const originalFetch = globalThis.fetch; const originalSetTimeout = globalThis.setTimeout; let calls = 0; const waits: unknown[] = [];
+  globalThis.fetch = async (input) => {
+    if (!isDiscordCalendarRequest(String(input))) return Response.json({ id: "message-1" });
     calls += 1;
     return calls === 1
       ? new Response(JSON.stringify({ retry_after: 1.25 }), { status: 429, headers: { "content-type": "application/json", "retry-after": "10" } })
       : new Response(JSON.stringify({ id: "event-1" }), { headers: { "content-type": "application/json" } });
   };
   try {
-    const result = await worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
-    assert.equal(result.status, 200);
+    await queueDiscordCalendarSync(env, database, () => calls);
+    globalThis.setTimeout = ((callback: () => void, milliseconds?: number) => { waits.push(milliseconds); callback(); return 0; }) as typeof setTimeout;
+    try { await calendarDeliveryPass(env, "attendance.discord-calendar"); } finally { globalThis.setTimeout = originalSetTimeout; }
     assert.equal(calls, 2);
-    assert.equal(waited, 1_250);
-    assert.deepEqual(await result.json(), { synced: 1, queued: 0, skipped: 0, failed: 0, outcomes: [{ meetingId: "meeting-1", title: "Studio", status: "synced" }] });
+    assert.ok(waits.includes(1_250), `waited ${JSON.stringify(waits)}`);
+    assert.equal(waits.includes(10_000), false, "the body's precise retry_after wins over the rounded header");
+    // The retried create was delivered: the mapping takes the event and nothing is recorded as failed.
+    assert.ok(database.batches.flat().some((call) => call.sql.startsWith("UPDATE discord_calendar_event_mappings SET event_id = ?") && call.values[0] === "event-1"));
+    assert.deepEqual(discordCalendarFailures(database), []);
   } finally { globalThis.fetch = originalFetch; globalThis.setTimeout = originalSetTimeout; }
 });
 
-test("a long Discord calendar rate limit is reported as calendar sync, not role sync, and is not retried in place", async (context) => {
+test("a long Discord calendar rate limit is recorded as calendar sync, not role sync, and is retried later rather than in place", async (context) => {
   calendarClock(context);
-  const database = new FakeDatabase();
-  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
-  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  const database = new FakeDatabase(); await configureDiscordCalendar(database);
   database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null });
   database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", { eventId: null, active: 1 });
-  database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, actorUserId: "operator-1" }]);
+  database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, revision: 1, actorUserId: "operator-1" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const originalFetch = globalThis.fetch; let calls = 0;
-  globalThis.fetch = async () => { calls += 1; return new Response(JSON.stringify({ retry_after: 9.2 }), { status: 429, headers: { "content-type": "application/json" } }); };
+  globalThis.fetch = async (input) => {
+    if (!isDiscordCalendarRequest(String(input))) return Response.json({ id: "message-1" });
+    calls += 1; return new Response(JSON.stringify({ retry_after: 9.2 }), { status: 429, headers: { "content-type": "application/json" } });
+  };
   try {
-    const result = await worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
-    assert.equal(result.status, 200);
+    await queueDiscordCalendarSync(env, database, () => calls);
+    await calendarDeliveryPass(env, "attendance.discord-calendar");
     assert.equal(calls, 1);
     const reason = "Discord is rate limiting calendar sync. Try again in a few seconds.";
-    assert.deepEqual(await result.json(), { synced: 0, queued: 0, skipped: 0, failed: 1, outcomes: [{ meetingId: "meeting-1", title: "Studio", status: "failed", reason }] });
-    assert.ok(database.batches.flat().some((call) => call.sql.includes("UPDATE discord_calendar_operations SET status = 'failed'") && call.values.includes(reason)));
+    const failures = discordCalendarFailures(database);
+    assert.deepEqual(failures.map(({ meetingId, lastError }) => ({ meetingId, lastError })), [{ meetingId: "meeting-1", lastError: reason }]);
+    // The operation falls due again no sooner than Discord asked.
+    assert.ok(Date.parse(String(failures[0]!.retryAt)) >= Date.now() + 9_200, `retry at ${String(failures[0]!.retryAt)}`);
   } finally { globalThis.fetch = originalFetch; }
 });
 
 test("Discord calendar recovery reconciles an ambiguously created event without another POST", async (context) => {
   calendarClock(context);
-  const database = new FakeDatabase();
-  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
-  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  const database = new FakeDatabase(); await configureDiscordCalendar(database);
   database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null });
   database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", { eventId: null, active: 1 });
   database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "processing", attempts: 0, revision: 2, actorUserId: "operator-1" }]);
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const originalFetch = globalThis.fetch; let posts = 0; let patches = 0; let correlationLocation = "";
-  globalThis.fetch = async (_input, init) => {
+  globalThis.fetch = async (input, init) => {
+    if (!isDiscordCalendarRequest(String(input))) return Response.json({ id: "message-1" });
     if (init?.method === "GET") return new Response(JSON.stringify([{ id: "ambiguous-event-1", entity_metadata: { location: correlationLocation } }]), { headers: { "content-type": "application/json" } });
     const body = JSON.parse(String(init?.body)) as { entity_metadata?: { location?: string } };
     correlationLocation ||= body.entity_metadata?.location ?? "";
@@ -2758,83 +2841,128 @@ test("Discord calendar recovery reconciles an ambiguously created event without 
     return new Response(JSON.stringify({ id: "ambiguous-event-1" }), { headers: { "content-type": "application/json" } });
   };
   try {
-    // This models a prior successful provider create whose response or D1 persistence was lost.
+    // This models a prior successful provider create whose response or D1 persistence was lost: the operation was left
+    // in delivery, and the scheduled job picks it up again once its lease has expired.
     correlationLocation = `LancerLogin · ${(await createHash("sha256").update("discord-calendar:primary:meeting-1:1").digest("base64url")).slice(0, 24)}`;
-    const result = await worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
-    assert.equal(result.status, 200);
+    await calendarDeliveryPass(env, "attendance.discord-calendar");
     assert.equal(posts, 0);
     assert.equal(patches, 1);
     assert.ok(database.batches.some((batch) => batch.some((call) => call.sql.includes("SET event_id = ?") && call.values.includes("ambiguous-event-1"))));
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("concurrent Discord calendar processors claim one create operation", async (context) => {
+test("concurrent Discord calendar delivery passes claim one create operation", async (context) => {
   calendarClock(context);
-  const database = new FakeDatabase();
-  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
-  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, updatedAt: "2026-08-30T00:00:00Z", verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  const database = new FakeDatabase(); await configureDiscordCalendar(database);
   database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null });
   database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", { eventId: null, active: 1 });
   database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, revision: 1, actorUserId: "operator-1" }]);
   let claimed = false;
   database.runChangeHandler = (sql) => {
-    if (!sql.includes("SET status = 'processing'")) return 1;
+    if (sql.includes("FROM meetings pm JOIN discord_calendar_event_mappings pd") || sql.includes("action = 'delete' AND status = 'failed'")) return 0;
+    if (!sql.startsWith("UPDATE discord_calendar_operations SET status = 'processing'")) return 1;
     if (claimed) return 0;
     claimed = true;
     return 1;
   };
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const originalFetch = globalThis.fetch; let posts = 0;
-  globalThis.fetch = async (_input, init) => { if (init?.method === "POST") posts += 1; return new Response(JSON.stringify({ id: "event-1" }), { headers: { "content-type": "application/json" } }); };
+  const originalFetch = globalThis.fetch; let posts = 0; let calendarCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    if (!isDiscordCalendarRequest(String(input))) return Response.json({ id: "message-1" });
+    calendarCalls += 1; if (init?.method === "POST") posts += 1;
+    return new Response(JSON.stringify({ id: "event-1" }), { headers: { "content-type": "application/json" } });
+  };
   try {
-    const calls = await Promise.all([
-      worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env),
-      worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env),
-    ]);
-    assert.deepEqual(calls.map((result) => result.status), [200, 200]);
+    // Two Sync requests only queue the one operation; neither creates the event itself.
+    await Promise.all([queueDiscordCalendarSync(env, database, () => calendarCalls), queueDiscordCalendarSync(env, database, () => calendarCalls)]);
+    assert.equal(calendarCalls, 0);
+    // Two delivery passes running at once both read the due operation; only the one whose claim lands creates the event.
+    await Promise.all([calendarDeliveryPass(env, "attendance.discord-calendar"), calendarDeliveryPass(env, "attendance.discord-calendar")]);
     assert.equal(posts, 1);
-    assert.equal(database.calls.filter((call) => call.sql.includes("SET status = 'processing'")).length, 2);
+    assert.equal(discordCalendarClaims(database).length, 2);
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("meeting deletion and restore retain tracked Discord delete work and create a new generation", async () => {
+test("meeting deletion and restore retain tracked Discord delete work and create a new generation", async (context) => {
+  calendarClock(context);
   const deleted = new FakeDatabase();
   deleted.rows.set("FROM meetings WHERE", { id: "meeting-1", seriesId: null, startsAt: "2026-10-01T20:00:00Z" });
-  deleted.rows.set("SELECT event_id AS eventId, generation FROM discord_calendar_event_mappings", { eventId: "tracked-event-1", generation: 1 });
-  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: deleted } as unknown as Env;
+  const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: deleted } as unknown as Env;
   const deletion = await worker.fetch(request("/meetings/meeting-1", { scope: "occurrence" }, { method: "DELETE", cookie: await sessionCookie("operator") }), env);
   assert.equal(deletion.status, 200);
   assert.deepEqual((await deletion.json() as { calendarDelivery: { discord: unknown } }).calendarDelivery.discord, { synced: 0, queued: 1, skipped: 0, failed: 0, outcomes: [] });
-  assert.ok(deleted.calls.some((call) => call.sql.includes("discord_calendar_operations") && call.sql.includes("'delete'") && call.values.includes("tracked-event-1")));
-  assert.equal(deleted.calls.some((call) => call.sql.includes("DELETE FROM integration_state")), false);
+  // The delete takes the tracked event id from the meeting's mapping, which the batch keeps: it only marks the mapping
+  // inactive, and the event's tracking is dropped only once delivery has deleted the event.
+  const deleteBatch = deleted.batches.find((batch) => batch[0]?.sql.startsWith("UPDATE meetings SET deleted_at"));
+  assert.ok(deleteBatch?.some((call) => call.sql.startsWith("INSERT INTO discord_calendar_operations") && call.sql.includes("'delete', d.event_id") && call.sql.includes("d.event_id IS NOT NULL") && call.values.includes('["meeting-1"]')));
+  assert.ok(deleteBatch?.some((call) => call.sql.startsWith("UPDATE discord_calendar_event_mappings SET active = 0")));
+  const deletionWrites = [...deleted.calls, ...deleted.batches.flat()];
+  assert.equal(deletionWrites.some((call) => call.sql.includes("DELETE FROM integration_state")), false);
+  assert.equal(deletionWrites.some((call) => call.sql.includes("discord_calendar_event_mappings SET event_id = NULL")), false);
 
   const restored = new FakeDatabase();
-  restored.rows.set("deleted_at IS NOT NULL", { id: "meeting-1", seriesId: null, startsAt: "2026-10-01T20:00:00Z" });
-  restored.rows.set("SELECT event_id AS eventId, generation FROM discord_calendar_event_mappings", { eventId: "tracked-event-1", generation: 1 });
-  const restoration = await worker.fetch(request("/meetings/meeting-1/restore", { scope: "occurrence", deletion: { meetingIds: ["meeting-1"], deletedAt: "2026-10-01T12:00:00.000Z" } }, { method: "POST", cookie: await sessionCookie("operator") }), { ...env, DB: restored } as unknown as Env);
+  const restoredEnv = { ...env, DB: restored } as unknown as Env;
+  const restoration = await worker.fetch(request("/meetings/meeting-1/restore", { scope: "occurrence", deletion: { meetingIds: ["meeting-1"], deletedAt: "2026-10-01T12:00:00.000Z" } }, { method: "POST", cookie: await sessionCookie("operator") }), restoredEnv);
   assert.equal(restoration.status, 200);
-  assert.ok(restored.batches.some((batch) => batch.some((call) => call.sql.includes("generation = ?") && call.values[0] === 2)));
-  assert.ok(restored.batches.some((batch) => batch.some((call) => call.sql.includes("discord_calendar_operations") && call.sql.includes("'upsert'") && call.values.includes(2))));
-  assert.ok(restored.calls.some((call) => call.sql.includes("discord_calendar_operations") && call.sql.includes("'delete'") && call.values.includes("tracked-event-1")));
+  assert.equal((await restoration.json() as { calendarDelivery: { discord: { queued: number } } }).calendarDelivery.discord.queued, 1);
+  // In the restore's batch: the tracked event of the inactive mapping keeps its delete on the old generation, then the
+  // mapping moves to a new generation with no event, then the upsert for that generation is queued.
+  const restoreBatch = restored.batches.find((batch) => batch.some((call) => call.sql.includes("SET deleted_at = NULL")));
+  assert.ok(restoreBatch);
+  const position = (matches: (sql: string) => boolean) => restoreBatch.findIndex((call) => matches(call.sql));
+  const keptDelete = position((sql) => sql.startsWith("INSERT INTO discord_calendar_operations") && sql.includes("'delete', event_id") && sql.includes("active = 0 AND event_id IS NOT NULL"));
+  const newGeneration = position((sql) => sql.startsWith("UPDATE discord_calendar_event_mappings SET event_id = NULL, generation = generation + 1, active = 1"));
+  const upsert = position((sql) => sql.startsWith("INSERT INTO discord_calendar_operations") && sql.includes("'upsert'"));
+  assert.ok(keptDelete > 0 && keptDelete < newGeneration && newGeneration < upsert, JSON.stringify({ keptDelete, newGeneration, upsert }));
+
+  // The scheduled job then deletes the tracked event and creates the new generation's event.
+  await configureDiscordCalendar(restored);
+  restored.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null });
+  restored.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", { eventId: null, active: 1 });
+  restored.lists.set("FROM discord_calendar_operations o", [
+    { meetingId: "meeting-1", generation: 1, action: "delete", eventId: "tracked-event-1", status: "pending", attempts: 0, revision: 1, actorUserId: "operator-1" },
+    { meetingId: "meeting-1", generation: 2, action: "upsert", eventId: null, status: "pending", attempts: 0, revision: 1, actorUserId: "operator-1" },
+  ]);
+  const originalFetch = globalThis.fetch; const calendar: Array<{ request: string; body?: { entity_metadata?: { location?: string } } }> = [];
+  globalThis.fetch = async (input, init) => {
+    const url = String(input); if (!isDiscordCalendarRequest(url)) return Response.json({ id: "message-1" });
+    calendar.push({ request: `${init?.method} ${url.replace("https://discord.com/api/v10/guilds/123456789012345678", "")}`, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    return init?.method === "DELETE" ? new Response(null, { status: 204 }) : Response.json({ id: "new-event-1" });
+  };
+  try { await calendarDeliveryPass(restoredEnv, "attendance.discord-calendar"); } finally { globalThis.fetch = originalFetch; }
+  assert.deepEqual(calendar.map((call) => call.request), ["DELETE /scheduled-events/tracked-event-1", "POST /scheduled-events"]);
+  assert.equal(calendar[1]!.body?.entity_metadata?.location, `LancerLogin · ${createHash("sha256").update("discord-calendar:primary:meeting-1:2").digest("base64url").slice(0, 24)}`);
+  const settled = restored.batches.flat();
+  assert.ok(settled.some((call) => call.sql.startsWith("UPDATE discord_calendar_event_mappings SET event_id = NULL") && call.values[3] === 1), "the old generation drops its event once Discord deleted it");
+  assert.ok(settled.some((call) => call.sql.startsWith("UPDATE discord_calendar_event_mappings SET event_id = ?") && call.values[0] === "new-event-1" && call.values[4] === 2), "the new generation takes the new event");
 });
 
-test("one meeting calendar action reports configured providers separately and preserves Discord fields", async (context) => {
+test("one meeting calendar action queues for configured providers separately, and delivery preserves Discord fields", async (context) => {
   calendarClock(context);
-  const database = new FakeDatabase();
-  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
-  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+  const database = new FakeDatabase(); await configureDiscordCalendar(database);
   database.rows.set("SELECT id FROM meetings", { id: "meeting-1" });
   database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Studio night", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: "Bring tools" });
   database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", { eventId: null, active: 1 });
-  database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, actorUserId: "operator-1" }]);
+  database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", eventId: null, status: "pending", attempts: 0, revision: 1, actorUserId: "operator-1" }]);
   const providerBodies: Record<string, unknown>[] = []; const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input, init) => { assert.match(String(input), /^https:\/\/discord\.com\/api\/v10\/guilds\//); providerBodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify({ id: "event-1" }), { headers: { "content-type": "application/json" } }); };
+  globalThis.fetch = async (input, init) => {
+    if (!isDiscordCalendarRequest(String(input))) return Response.json({ id: "message-1" });
+    assert.match(String(input), /^https:\/\/discord\.com\/api\/v10\/guilds\//); providerBodies.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify({ id: "event-1" }), { headers: { "content-type": "application/json" } });
+  };
   try {
     const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
     const result = await worker.fetch(request("/calendars/sync", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
     assert.equal(result.status, 200);
-    const body = await result.json() as { providers: Array<{ provider: string; synced: number }> };
-    assert.deepEqual(body.providers.map(({ provider, synced }) => ({ provider, synced })), [{ provider: "discord", synced: 1 }]);
+    // Only Discord is configured, so only Discord is reported; the request queues and sends nothing.
+    const body = await result.json() as { providers: Array<{ provider: string; synced: number; queued: number }> };
+    assert.deepEqual(body.providers.map(({ provider, synced, queued }) => ({ provider, synced, queued })), [{ provider: "discord", synced: 0, queued: 1 }]);
+    assert.deepEqual(providerBodies, []);
+    const queuedBatch = database.batches.at(-1);
+    assert.ok(queuedBatch?.some((call) => call.sql.startsWith("INSERT INTO discord_calendar_operations") && call.sql.includes("'upsert'") && call.values.includes('["meeting-1"]')));
+    assert.ok(queuedBatch?.some((call) => call.sql.includes("'calendar.meeting_sync_requested'") && call.values.includes(JSON.stringify({ providers: ["discord"] }))));
+
+    await calendarDeliveryPass(env, "attendance.discord-calendar");
+    assert.equal(providerBodies.length, 1);
     const location = (providerBodies[0].entity_metadata as { location: string }).location;
     assert.match(location, /^LancerLogin · [A-Za-z0-9_-]{24}$/);
     assert.deepEqual(providerBodies[0], { name: "Studio night", description: "Audience: All\nAttendance: Optional\n\nBring tools", privacy_level: 2, entity_type: 3, scheduled_start_time: "2026-10-01T20:00:00Z", scheduled_end_time: "2026-10-01T21:00:00Z", entity_metadata: { location } });
@@ -2849,45 +2977,32 @@ test("provider sync-all controls are Admin-only and unverified calendars cannot 
   assert.equal((await worker.fetch(request("/calendars/sync", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env)).status, 409);
 });
 
-test("Discord sync-all pages a large meeting set across bounded provider batches", async (context) => {
+test("Discord sync-all queues a large meeting set in one set-based batch without contacting Discord", async (context) => {
   calendarClock(context);
-  const database = new FakeDatabase();
-  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
-  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
-  database.rows.set("SELECT generation, active FROM discord_calendar_event_mappings", { generation: 1, active: 1 });
-  database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", (_sql: string, values: unknown[]) => ({ eventId: `event-${values[0]}`, active: 1 }));
-  database.rows.set("FROM meetings WHERE", (_sql: string, values: unknown[]) => ({ id: String(values[0]), title: `Meeting ${values[0]}`, startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", notes: null }));
-  const meetings = Array.from({ length: 23 }, (_, index) => ({ id: `meeting-${String(index + 1).padStart(2, "0")}`, startsAt: `2026-10-${String(index + 1).padStart(2, "0")}T20:00:00Z` }));
-  database.lists.set("SELECT id, starts_at AS startsAt FROM meetings", (_sql: string, values: unknown[]) => {
-    const afterId = typeof values[3] === "string" ? values[3] : undefined;
-    const start = afterId ? meetings.findIndex((meeting) => meeting.id === afterId) + 1 : 0;
-    return meetings.slice(start, start + Number(values[4]));
-  });
-  // The bound values are the requested meeting IDs, then the lease cutoff and the 60-day horizon.
-  database.lists.set("FROM discord_calendar_operations o", (_sql: string, values: unknown[]) => values.slice(0, -2).map((meetingId) => ({ meetingId, generation: 1, action: "upsert", eventId: `event-${meetingId}`, status: "pending", attempts: 0, revision: 1, actorUserId: "admin-1" })));
+  const database = new FakeDatabase(); await configureDiscordCalendar(database);
+  // 23 current and upcoming meetings, 3 of them beyond the 60-day horizon; 2 deleted meetings still mapped to live events.
+  database.rows.set("SELECT COUNT(*) AS selected", { selected: 23, deferred: 3 });
+  database.runChangeHandler = (sql) => sql.includes("FROM meetings pm JOIN discord_calendar_event_mappings pd") || sql.includes("action = 'delete' AND status = 'failed'") ? 0 : !sql.startsWith("INSERT INTO discord_calendar_operations") ? 1 : sql.includes("'upsert'") ? 23 : sql.includes("'delete', d.event_id") ? 2 : 0;
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
   const originalFetch = globalThis.fetch; let providerCalls = 0;
   globalThis.fetch = async () => { providerCalls += 1; return new Response(JSON.stringify({ id: "event" }), { headers: { "content-type": "application/json" } }); };
   try {
-    const pageSizes: number[] = []; const providerBatchSizes: number[] = []; const seen = new Set<string>(); let cursor: string | null | undefined; let selected = 0; let synced = 0;
-    do {
-      const before = providerCalls;
-      const result = await worker.fetch(request(`/admin/integrations/discord/calendar/sync-all${cursor ? `?after=${encodeURIComponent(cursor)}` : ""}`, {}, { cookie: await sessionCookie("admin") }), env);
-      assert.equal(result.status, 200);
-      const body = await result.json() as { selected: number; synced: number; nextCursor?: string | null; batchLimit: number; limit: number };
-      assert.equal(body.batchLimit, 3);
-      assert.equal(body.limit, 100);
-      pageSizes.push(body.selected); providerBatchSizes.push(providerCalls - before); selected += body.selected; synced += body.synced;
-      if (body.nextCursor) assert.equal(seen.has(body.nextCursor), false);
-      if (body.nextCursor) seen.add(body.nextCursor);
-      cursor = body.nextCursor;
-    } while (cursor);
-    // Each page fits one Free-plan invocation: three meetings, one Discord request each.
-    assert.deepEqual(pageSizes, [3, 3, 3, 3, 3, 3, 3, 2]);
-    assert.deepEqual(providerBatchSizes, [3, 3, 3, 3, 3, 3, 3, 2]);
-    assert.equal(selected, 23);
-    assert.equal(synced, 23);
-    assert.ok(database.calls.filter((call) => call.sql.includes("FROM discord_calendar_operations o")).every((call) => call.sql.includes("LIMIT 3")));
+    const before = database.batches.length;
+    const result = await worker.fetch(request("/admin/integrations/discord/calendar/sync-all", {}, { cookie: await sessionCookie("admin") }), env);
+    assert.equal(result.status, 200);
+    const { rule, ...body } = await result.json() as Record<string, unknown>;
+    // One request covers every meeting: no page, cursor or limit to follow.
+    assert.deepEqual(body, { synced: 0, queued: 23, skipped: 0, failed: 0, outcomes: [], selected: 23, deferred: 3, deletesQueued: 2, remaining: 0, waiting: 0, perPass: 3, scheduler: "cron", nextCursor: null });
+    assert.match(String(rule), /in one request with no limit/);
+    assert.equal(providerCalls, 0);
+    // One write batch: the repair of deleted meetings still mapped, the upserts for every current and upcoming meeting, and the count.
+    assert.equal(database.batches.length, before + 1);
+    const batch = database.batches.at(-1)!;
+    assert.ok(batch.some((call) => call.sql.startsWith("INSERT INTO discord_calendar_operations") && call.sql.includes("'delete', d.event_id") && call.sql.includes("xm.deleted_at IS NOT NULL")));
+    assert.ok(batch.some((call) => call.sql.startsWith("INSERT INTO discord_calendar_operations") && call.sql.includes("'upsert'") && call.sql.includes("julianday(ends_at) >= julianday(?)")));
+    assert.ok(batch.at(-1)!.sql.startsWith("SELECT COUNT(*) AS selected"));
+    assert.equal([...database.calls, ...database.batches.flat()].some((call) => call.sql.includes("FROM discord_calendar_operations o")), false, "nothing is delivered by the request");
+    assert.ok(database.calls.some((call) => call.values.includes("discord.calendar_sync_all_requested")));
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -2916,44 +3031,73 @@ test("a scheduled Discord calendar pass handles three operations and lists sched
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("Google Calendar sync-all delivers one bounded batch and leaves the rest queued", async () => {
+test("Google Calendar sync-all queues every meeting in one batch, and each scheduled pass delivers one bounded batch", async () => {
   const database = new FakeDatabase();
   const encrypted = await encryptIntegration({ clientId: "calendar-client", clientSecret: "calendar-secret", refreshToken: "calendar-refresh", calendarId: "calendar@example.test" }, sessionSecret);
   database.rows.set("google_calendar_enabled AS enabled", { ...encrypted, enabled: 1, authorizedAt: "2026-09-05", verifiedAt: "2026-09-05" });
-  const meetings = Array.from({ length: 7 }, (_, index) => ({ id: `meeting-${index + 1}` }));
-  database.lists.set("SELECT id FROM meetings WHERE installation_id = 'primary' AND deleted_at IS NULL ORDER BY starts_at ASC LIMIT 100", meetings);
-  database.rows.set("SELECT active FROM google_calendar_event_mappings", { active: 1 });
-  database.rows.set("SELECT m.event_id AS eventId, mt.starts_at AS startsAt", (_sql: string, values: unknown[]) => ({ eventId: `event-${values[0]}`, startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z" }));
   database.rows.set("SELECT title, notes, required, attendance_weight AS attendanceWeight FROM meetings", { title: "Studio", notes: null, required: 1, attendanceWeight: 1 });
+  // Seven current and upcoming meetings, each queued as one upsert; no deleted meeting is still mapped.
+  database.rows.set("SELECT COUNT(*) AS selected", { selected: 7 });
+  database.runChangeHandler = (sql) => sql.includes("FROM meetings pm JOIN discord_calendar_event_mappings pd") || sql.includes("action = 'delete' AND status = 'failed'") ? 0 : !sql.startsWith("INSERT INTO google_calendar_operations") ? 1 : sql.includes("'upsert'") ? 7 : 0;
+  const operations = Array.from({ length: 7 }, (_, index) => ({ meetingId: `meeting-${index + 1}`, eventId: `event-meeting-${index + 1}`, action: "upsert", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", status: "pending", attempts: 0, updatedAt: "2026-09-06T00:00:00.000Z", syncedAt: "2026-09-06", generation: 1 }));
   // The fake returns rows whatever the LIMIT says, so it hands back the five rows the query's LIMIT allows.
-  database.lists.set("FROM google_calendar_operations o", (_sql: string, values: unknown[]) => values.slice(0, 5).map((eventId) => ({ meetingId: String(eventId).slice(6), eventId, action: "upsert", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", status: "pending", attempts: 0, syncedAt: "2026-09-06", generation: 1 })));
+  database.lists.set("FROM google_calendar_operations o", operations.slice(0, 5));
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const originalFetch = globalThis.fetch; const patches: string[] = [];
+  const originalFetch = globalThis.fetch; const patches: string[] = []; const outbound: string[] = [];
   globalThis.fetch = async (input, init) => {
-    const url = String(input);
+    const url = String(input); outbound.push(url);
     if (url.includes("oauth2")) return Response.json({ access_token: "calendar-access", expires_in: 3600 });
     if (init?.method === "PATCH") patches.push(url);
     return Response.json({ id: "event" });
   };
   try {
+    const before = database.batches.length;
     const result = await worker.fetch(request("/admin/integrations/google-calendar/sync-all", {}, { cookie: await sessionCookie("admin") }), env);
     assert.equal(result.status, 200, await result.clone().text());
-    const body = await result.json() as { selected: number; synced: number; queued: number; failed: number };
-    assert.deepEqual({ selected: body.selected, synced: body.synced, queued: body.queued, failed: body.failed }, { selected: 7, synced: 5, queued: 2, failed: 0 });
+    const { rule, ...body } = await result.json() as Record<string, unknown>;
+    assert.deepEqual(body, { selected: 7, synced: 0, queued: 7, failed: 0, deletesQueued: 0, remaining: 0, waiting: 0, scheduler: "cron", perPass: 5 });
+    assert.match(String(rule), /in one request with no limit/);
+    assert.deepEqual(outbound, [], "the request sends nothing to Google, not even a token refresh");
+    assert.equal(database.batches.length, before + 1);
+    const batch = database.batches.at(-1)!;
+    assert.ok(batch.some((call) => call.sql.startsWith("INSERT INTO google_calendar_operations") && call.sql.includes("'delete'") && call.sql.includes("xm.deleted_at IS NOT NULL")));
+    assert.ok(batch.some((call) => call.sql.startsWith("INSERT INTO google_calendar_operations") && call.sql.includes("'upsert'") && call.sql.includes("julianday(ends_at) >= julianday(?)")));
+    assert.ok(database.calls.some((call) => call.values.includes("google_calendar.sync_all_requested")));
+
+    // A scheduled pass delivers at most five operations and leaves the rest queued for the next one.
+    await calendarDeliveryPass(env, "attendance.google-calendar");
     assert.equal(patches.length, 5);
-    assert.ok(database.calls.filter((call) => call.sql.includes("FROM google_calendar_operations o")).every((call) => call.sql.includes("LIMIT 5")));
+    const reads = database.calls.filter((call) => call.sql.includes("FROM google_calendar_operations o"));
+    assert.ok(reads.length > 0 && reads.every((call) => call.sql.includes("LIMIT 5")));
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("Discord sync-all rejects a malformed continuation cursor before provider work", async () => {
+test("Discord sync-all ignores a continuation cursor, even a malformed one, and needs a verified Discord integration", async (context) => {
+  calendarClock(context);
   const database = new FakeDatabase();
-  const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678", publicKey: "a".repeat(64) }, sessionSecret);
-  database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
-  const result = await worker.fetch(request("/admin/integrations/discord/calendar/sync-all?after=not-a-cursor", {}, { cookie: await sessionCookie("admin") }), env);
-  assert.equal(result.status, 400);
-  assert.deepEqual(await result.json(), { error: "Discord calendar sync cursor is invalid" });
-  assert.equal(database.calls.some((call) => call.sql.includes("FROM discord_calendar_operations o")), false);
+  const originalFetch = globalThis.fetch; let providerCalls = 0;
+  globalThis.fetch = async () => { providerCalls += 1; return Response.json({ id: "event" }); };
+  try {
+    const syncAll = async (path: string) => worker.fetch(request(path, {}, { cookie: await sessionCookie("admin") }), env);
+    const unconfigured = await syncAll("/admin/integrations/discord/calendar/sync-all");
+    assert.equal(unconfigured.status, 409);
+    assert.deepEqual(await unconfigured.json(), { error: "Discord must be enabled and verified" });
+    assert.equal(database.batches.length, 0, "nothing is queued without the integration");
+
+    await configureDiscordCalendar(database);
+    const plain = await syncAll("/admin/integrations/discord/calendar/sync-all");
+    const plainBatch = database.batches.at(-1)!;
+    const cursor = await syncAll("/admin/integrations/discord/calendar/sync-all?after=not-a-cursor");
+    const cursorBatch = database.batches.at(-1)!;
+    assert.deepEqual([plain.status, cursor.status], [200, 200]);
+    assert.notEqual(cursorBatch, plainBatch);
+    // The cursor changes nothing: the same statements over the same meetings, and no cursor to follow.
+    assert.deepEqual(cursorBatch.map((call) => [call.sql, call.values]), plainBatch.map((call) => [call.sql, call.values]));
+    for (const body of [await plain.json(), await cursor.json()] as Array<{ remaining: number; nextCursor: unknown }>) assert.deepEqual({ remaining: body.remaining, nextCursor: body.nextCursor }, { remaining: 0, nextCursor: null });
+    assert.equal(providerCalls, 0);
+    assert.equal(database.calls.some((call) => call.sql.includes("FROM discord_calendar_operations o")), false);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("Operators and Admins can list contest lifetime counts and raw partial, no-scan, and complete context", async () => {
@@ -3539,9 +3683,11 @@ for (const scenario of ["update", "conflict", "retry"] as const) {
     }) as typeof fetch;
     try {
       const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
+      // Retry makes the failed operation due again without sending anything; the scheduled job then sends it.
       const result = await worker.fetch(request("/admin/integrations/google-calendar/retry", {}, { cookie: await sessionCookie("admin") }), env);
       assert.equal(result.status, 200);
-      assert.equal((await result.json() as { synced: number }).synced, 1);
+      assert.equal((await result.json() as { synced: number }).synced, 0); assert.deepEqual(calls, []);
+      await calendarDeliveryPass(env, "attendance.google-calendar");
       assert.deepEqual(calls.map(call => call.method), scenario === "conflict" ? ["POST", "PATCH"] : [scenario === "update" ? "PATCH" : "POST"]);
       for (const call of calls) {
         assert.equal(call.body.summary, "Renamed build meeting");
@@ -3576,16 +3722,15 @@ test("unchanged but deleted Discord status is recreated only after verifying its
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("Discord calendar explains an unsynced started meeting and updates a tracked active event without changing its start", async () => {
+test("Discord calendar delivery skips an unsynced started meeting without creating an event and updates a tracked active event without changing its start", async () => {
   for (const eventId of [null, "event-1"]) {
-    const database = new FakeDatabase();
-    const encrypted = await encryptIntegration({ botToken: "discord-secret", guildId: "123456789012345678", channelId: "223456789012345678" }, sessionSecret);
-    database.rows.set("FROM encrypted_integrations", { id: "discord-1", ...encrypted, verifiedAt: "2026-08-30T00:01:00Z", enabled: 1 });
+    const database = new FakeDatabase(); await configureDiscordCalendar(database);
     database.rows.set("FROM meetings WHERE", { id: "meeting-1", title: "Current studio", startsAt: new Date(Date.now() - 600_000).toISOString(), endsAt: new Date(Date.now() + 600_000).toISOString(), notes: "Bring tools" });
     database.rows.set("SELECT event_id AS eventId, active FROM discord_calendar_event_mappings", { eventId, active: 1 });
-    database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", status: "failed", attempts: 1, actorUserId: "operator-1" }]);
+    database.lists.set("FROM discord_calendar_operations o", [{ meetingId: "meeting-1", generation: 1, action: "upsert", status: "failed", attempts: 1, revision: 1, actorUserId: "operator-1" }]);
     const originalFetch = globalThis.fetch; const methods: string[] = [];
-    globalThis.fetch = async (_input, init) => {
+    globalThis.fetch = async (input, init) => {
+      if (!isDiscordCalendarRequest(String(input))) return Response.json({ id: "message-1" });
       methods.push(String(init?.method));
       if (init?.method === "GET") return new Response(JSON.stringify([]));
       assert.equal(init?.method, "PATCH"); const payload = JSON.parse(String(init?.body));
@@ -3594,12 +3739,21 @@ test("Discord calendar explains an unsynced started meeting and updates a tracke
     };
     try {
       const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, INTEGRATION_KEY: sessionSecret, DB: database } as unknown as Env;
-      const result = await worker.fetch(request("/discord/calendar", { meetingId: "meeting-1" }, { cookie: await sessionCookie("operator") }), env);
-      const body = await result.json() as { synced: number; skipped: number; failed: number; outcomes: Array<{ reason?: string }> };
-      assert.equal(result.status, 200); assert.equal(body.failed, 0);
-      if (eventId) { assert.equal(body.synced, 1); assert.deepEqual(methods, ["PATCH"]); }
-      else { assert.equal(body.skipped, 1); assert.match(body.outcomes[0].reason ?? "", /already started.*Sync upcoming meetings/); assert.deepEqual(methods, ["GET"]); }
-      assert.ok(database.calls.some(call => call.sql.includes("last_error = NULL")) || database.batches.some(batch => batch.some(call => call.sql.includes("last_error = NULL"))));
+      // A meeting under way can still be queued: only an ended meeting is refused.
+      await queueDiscordCalendarSync(env, database, () => methods.length);
+      await calendarDeliveryPass(env, "attendance.discord-calendar");
+      assert.deepEqual(discordCalendarFailures(database), []);
+      const writes = [...database.calls, ...database.batches.flat()];
+      if (eventId) {
+        assert.deepEqual(methods, ["PATCH"]);
+        assert.ok(writes.some((call) => call.sql.startsWith("UPDATE discord_calendar_event_mappings SET event_id = ?") && call.values[0] === "event-1" && call.sql.includes("last_error = NULL")));
+      } else {
+        // No event is created for a meeting that has started: after looking for one created earlier, the operation is
+        // settled with no error and the mapping gets no event.
+        assert.deepEqual(methods, ["GET"]);
+        assert.ok(writes.some((call) => call.sql.startsWith("UPDATE discord_calendar_operations SET status = CASE WHEN revision = ? THEN 'delivered'") && call.sql.includes("last_error = NULL") && call.values.includes("meeting-1")));
+        assert.equal(writes.some((call) => call.sql.startsWith("UPDATE discord_calendar_event_mappings SET event_id = ?")), false);
+      }
     } finally { globalThis.fetch = originalFetch; }
   }
 });

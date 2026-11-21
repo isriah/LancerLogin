@@ -3,13 +3,14 @@
 // deployment with no Durable Object, and the cron as a watchdog only. Synthetic data only.
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker, { registeredCoreSchedulerJobs, registeredModuleSchedulerJobs, runSchedulerSlice, type Env } from "../apps/api/src/index.ts";
+import worker, { PlatformScheduler, registeredCoreSchedulerJobs, registeredModuleSchedulerJobs, runSchedulerSlice, type Env } from "../apps/api/src/index.ts";
 import { SCHEDULER_STOP_MS, SLICE_CONTINUE_MS, SLICE_IDLE_MAX_MS } from "../apps/api/src/platform-scheduler.ts";
-import { scheduledSliceLimits } from "../apps/api/src/scheduler-budget.ts";
+import { scheduledPassLimits, scheduledSliceLimits } from "../apps/api/src/scheduler-budget.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { InstallationSeed, TestD1Database, attendanceWithOutreachDisabled } from "./fixtures/d1-database.ts";
 import { sessionSecret } from "./fixtures/worker-fake-database.ts";
+import { countingDatabase } from "./fixtures/counting-database.ts";
 
 const jobIds = [...registeredCoreSchedulerJobs, ...registeredModuleSchedulerJobs].map((job) => job.id);
 const guildId = "123456789012345678";
@@ -183,5 +184,281 @@ test("with the Durable Object the cron only re-arms the alarm; without it the cr
     db.sqlite.exec("UPDATE platform_scheduler_state SET jobs_json = json_set(jobs_json, '$.\"attendance.discord-calendar\".next', 0)");
     await worker.scheduled({ cron: "*/5 * * * *", scheduledTime: Date.now() } as never, env);
     assert.equal(requests.filter((line) => line.startsWith("POST")).length, 1);
+  });
+});
+
+// ---- Robustness of the runner and the Discord notice and anomaly-report jobs (database-access audit, 2026-11-20) ----
+
+const anomalyChannel = "323456789012345678", noticeChannel = "223456789012345678";
+const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+/** A synthetic required meeting that ended `hoursAgo` hours ago, long past its attendance close. */
+function endedMeeting(db: TestD1Database, hoursAgo: number, title: string) {
+  const id = `ended-${++meetingNumber}`; const end = Date.now() - hoursAgo * 3_600_000;
+  db.sqlite.prepare("INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,required,created_by,created_at) VALUES (?,'primary',?,?,?,1,'admin','2026-09-01T00:00:00Z')").run(id, title, new Date(end - 7_200_000).toISOString(), new Date(end).toISOString());
+  return id;
+}
+/** Two synthetic members: A is linked to Discord and never scans (absent everywhere); B arrives 30 minutes late (an anomaly). */
+function testMembers(db: TestD1Database) {
+  db.sqlite.exec(`INSERT INTO members(id,installation_id,external_id,first_name,last_name,email,discord_user_id,active,created_at) VALUES
+    ('member-a','primary','TEST-A','Test Student','A','test-student-a@example.test','811111111111111111',1,'2026-01-01T00:00:00Z'),
+    ('member-b','primary','TEST-B','Test Student','B','test-student-b@example.test',NULL,1,'2026-01-01T00:00:00Z')`);
+}
+function lateArrival(db: TestD1Database, meetingId: string) {
+  const meeting = db.sqlite.prepare("SELECT starts_at AS startsAt, ends_at AS endsAt FROM meetings WHERE id = ?").get(meetingId) as { startsAt: string; endsAt: string };
+  const event = db.sqlite.prepare("INSERT INTO attendance_events(id,installation_id,member_id,meeting_id,source,occurred_at,action) VALUES (?,'primary','member-b',?,'manual',?,?)");
+  event.run(`in-${meetingId}`, meetingId, new Date(Date.parse(meeting.startsAt) + 30 * 60_000).toISOString(), "check_in"); event.run(`out-${meetingId}`, meetingId, meeting.endsAt, "check_out");
+}
+function enableAnomalyReports(db: TestD1Database) {
+  db.sqlite.prepare("UPDATE organization_settings SET discord_anomaly_reports_enabled = 1, discord_anomaly_report_channel_id = ?, discord_anomaly_reports_enabled_at = ?").run(anomalyChannel, new Date(Date.now() - 7 * day).toISOString());
+}
+/** Discord stand-in for messages: a message whose text contains "Failing" is refused; everything else is accepted. */
+async function withMessages<T>(work: (posts: { channel: string; content: string }[], requests: string[]) => Promise<T>, onRequest?: () => void): Promise<T> {
+  const original = globalThis.fetch; const posts: { channel: string; content: string }[] = []; const requests: string[] = []; let created = 5000;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input).replace("https://discord.com/api/v10", ""); const method = init?.method ?? "GET"; requests.push(`${method} ${url}`); onRequest?.();
+    const message = /^\/channels\/(\d+)\/messages$/.exec(url);
+    if (message && method === "POST") {
+      const content = String((JSON.parse(String(init?.body ?? "{}")) as { content?: string }).content ?? "");
+      posts.push({ channel: message[1]!, content });
+      if (content.includes("Failing")) return Response.json({ message: "Synthetic Discord failure", code: 50_035 }, { status: 400 });
+      return Response.json({ id: String(++created) });
+    }
+    if (url.endsWith("/scheduled-events") && method === "GET") return Response.json([]);
+    if (/\/commands$/.test(url) && method === "GET") return Response.json([]);
+    return Response.json({ id: method === "POST" ? String(++created) : url.split("/").pop(), pinned: true });
+  }) as typeof fetch;
+  try { return await work(posts, requests); } finally { globalThis.fetch = original; }
+}
+const reportRow = (db: TestD1Database, meetingId: string) => { const row = db.sqlite.prepare("SELECT status, attempts, last_error AS lastError FROM discord_anomaly_reports WHERE meeting_id = ?").get(meetingId) as { status: string; attempts: number; lastError: string | null } | undefined; return row && { ...row }; };
+const noticeRow = (db: TestD1Database, meetingId: string) => { const row = db.sqlite.prepare("SELECT status, attempts, last_error AS lastError FROM discord_attendance_notifications WHERE meeting_id = ?").get(meetingId) as { status: string; attempts: number; lastError: string | null } | undefined; return row && { ...row }; };
+const failedReport = (db: TestD1Database, meetingId: string, attempts: number, updatedMinutesAgo: number) => db.sqlite.prepare("INSERT INTO discord_anomaly_reports(installation_id,meeting_id,channel_id,status,nonce,attempts,last_error,updated_at) VALUES ('primary',?,?,'failed',?,?,'Synthetic Discord failure',?)").run(meetingId, anomalyChannel, `nonce-${meetingId}`, attempts, minutesAgo(updatedMinutesAgo));
+const notice = (db: TestD1Database, meetingId: string, status: string, attempts: number, updatedMinutesAgo: number) => db.sqlite.prepare("INSERT INTO discord_attendance_notifications(installation_id,meeting_id,status,attempts,updated_at,channel_id,delivery_id) VALUES ('primary',?,?,?,?,?,?)").run(meetingId, status, attempts, minutesAgo(updatedMinutesAgo), noticeChannel, `delivery-${meetingId}`);
+const due = (db: TestD1Database, ...jobs: string[]) => db.sqlite.exec(`UPDATE platform_scheduler_state SET jobs_json = json_set(jobs_json, ${jobs.map((job) => `'$."${job}".next', 0`).join(", ")})`);
+const storedJob = (db: TestD1Database, job: string) => JSON.parse((db.sqlite.prepare("SELECT jobs_json AS j FROM platform_scheduler_state").get() as { j: string }).j)[job] as { next: number; last: number | null; outcome: string; cursor?: string };
+const sliceHooks = (crashed?: { job: string; at: number; count?: number }) => ({ ...(crashed ? { crashed } : {}), started: async () => undefined });
+
+test("anomaly reports: a new meeting's report goes out before reports that keep failing, and failing ones never ask for another slice", async () => {
+  const { db, env } = await installation(); testMembers(db); enableAnomalyReports(db);
+  // Three reports Discord refuses every time, for the three oldest meetings, and one meeting never attempted.
+  const failing = [30, 29, 28].map((hours, index) => endedMeeting(db, hours, `Failing Meeting ${index + 1}`));
+  const fresh = endedMeeting(db, 3, "Test Meeting New");
+  for (const meetingId of [...failing, fresh]) lateArrival(db, meetingId);
+  for (const meetingId of failing) failedReport(db, meetingId, 3, 10);
+  await withMessages(async (posts) => {
+    quietJobs(db); const now = Date.now();
+    const report = await runSchedulerSlice(env, { "attendance.discord-anomalies": now }, now, sliceHooks());
+    assert.deepEqual(report.attempted, ["attendance.discord-anomalies"]);
+    assert.equal(reportRow(db, fresh)?.status, "delivered", "the report never attempted is sent in the first slice");
+    assert.match(posts[0]!.content, /Test Meeting New/, "and before any retry");
+    assert.equal(Boolean(report.more), false, "failing reports do not ask for another slice");
+    assert.ok(report.nextWake >= now + 240_000, `the job waits for its interval: ${report.nextWake - now} ms`);
+    assert.equal(storedJob(db, "attendance.discord-anomalies").next, now + 300_000);
+    // Each failed attempt is counted, so the backoff grows.
+    assert.deepEqual(failing.map((meetingId) => reportRow(db, meetingId)?.status), ["failed", "failed", "failed"]);
+    assert.ok(failing.some((meetingId) => reportRow(db, meetingId)!.attempts === 4));
+  });
+});
+
+test("anomaly reports: a failed report waits out its backoff and is given up after its last attempt", async () => {
+  const { db, env } = await installation(); testMembers(db); enableAnomalyReports(db);
+  const [recent, waited, spent] = [endedMeeting(db, 30, "Failing Meeting Recent"), endedMeeting(db, 29, "Failing Meeting Waited"), endedMeeting(db, 28, "Failing Meeting Spent")];
+  for (const meetingId of [recent, waited, spent]) lateArrival(db, meetingId);
+  // Ten attempts back off 1,024 seconds: one tried 5 minutes ago is not due, one tried 20 minutes ago is.
+  failedReport(db, recent, 10, 5); failedReport(db, waited, 10, 20);
+  // Sixteen attempts is the cap, however long ago the last one was.
+  failedReport(db, spent, 16, 3 * 24 * 60);
+  await withMessages(async (posts) => {
+    quietJobs(db); const now = Date.now();
+    const report = await runSchedulerSlice(env, { "attendance.discord-anomalies": now }, now, sliceHooks());
+    assert.deepEqual(posts.map((post) => /Failing Meeting (\w+)/.exec(post.content)?.[1]), ["Waited"]);
+    assert.equal(Boolean(report.more), false);
+    assert.deepEqual([reportRow(db, recent)!.attempts, reportRow(db, waited)!.attempts, reportRow(db, spent)!.attempts], [10, 11, 16]);
+  });
+});
+
+test("attendance notices: a notice left pending by a stopped invocation is taken up again once it is ten minutes old", async () => {
+  const { db, env } = await installation(); testMembers(db);
+  const stuck = endedMeeting(db, 5, "Test Meeting Stuck"), inFlight = endedMeeting(db, 4, "Test Meeting In Flight");
+  notice(db, stuck, "pending", 1, 20); notice(db, inFlight, "pending", 1, 2);
+  await withMessages(async (posts) => {
+    quietJobs(db); const now = Date.now();
+    const report = await runSchedulerSlice(env, { "attendance.discord-notices": now }, now, sliceHooks());
+    assert.deepEqual(report.attempted, ["attendance.discord-notices"]);
+    assert.deepEqual(posts.map((post) => /\*\*(.+)\*\*/.exec(post.content)?.[1]), ["Test Meeting Stuck"]);
+    assert.deepEqual(noticeRow(db, stuck), { status: "delivered", attempts: 2, lastError: null });
+    assert.equal(noticeRow(db, inFlight)?.status, "pending", "a notice written two minutes ago may still be in flight");
+  });
+});
+
+test("attendance notices: a failure before the first Discord request marks the notice failed with its reason, and it is retried", async () => {
+  const { db, env } = await installation(); testMembers(db);
+  const meetingId = endedMeeting(db, 5, "Test Meeting Limit");
+  const counted = countingDatabase(db); let failing = true;
+  // The absence evaluation's roster read fails, as a query does when the invocation runs out of subrequests.
+  counted.fail = (statements) => { if (failing && statements.some((sql) => sql.includes("inactive_periods_json AS inactivePeriodsJson"))) throw new Error("Too many API requests by single Worker invocation"); };
+  await withMessages(async (posts) => {
+    quietJobs(db); let now = Date.now();
+    await runSchedulerSlice({ ...env, DB: counted } as Env, { "attendance.discord-notices": now }, now, sliceHooks());
+    assert.equal(posts.length, 0);
+    assert.deepEqual(noticeRow(db, meetingId), { status: "failed", attempts: 1, lastError: "Too many API requests by single Worker invocation" });
+    // One attempt backs off a minute. The job's next regular run is five minutes later.
+    db.sqlite.prepare("UPDATE discord_attendance_notifications SET updated_at = ?").run(minutesAgo(5));
+    failing = false; quietJobs(db); now = Date.now();
+    const retried = await runSchedulerSlice({ ...env, DB: counted } as Env, { "attendance.discord-notices": now }, now, sliceHooks());
+    assert.equal(posts.length, 1);
+    assert.deepEqual(noticeRow(db, meetingId), { status: "delivered", attempts: 2, lastError: null });
+    assert.equal(Boolean(retried.more), false);
+    // What the audit counted as about 18 D1 queries against 12 budgeted. This slice is its opening read (1), the job's
+    // own reads (5), one notice and the closing write (1); the notice's policy reads now go out as one batch.
+    assert.ok(retried.d1Queries - 7 <= 13, `one notice costs ${retried.d1Queries - 7} D1 queries, budgeted 13`);
+  });
+});
+
+test("attendance notices: new notices go first, a notice that keeps failing backs off, and one notice fits a slice's budget", async () => {
+  const { db, env } = await installation(); testMembers(db);
+  // The two newest meetings' notices keep failing; an older meeting has never had one.
+  const failing = [endedMeeting(db, 2, "Failing Meeting 1"), endedMeeting(db, 3, "Failing Meeting 2")];
+  const fresh = endedMeeting(db, 6, "Test Meeting New");
+  for (const meetingId of failing) notice(db, meetingId, "failed", 2, 10);
+  await withMessages(async (posts) => {
+    quietJobs(db); const now = Date.now();
+    const first = await runSchedulerSlice(env, { "attendance.discord-notices": now }, now, sliceHooks());
+    assert.match(posts[0]!.content, /Test Meeting New/, "the notice never attempted is sent first");
+    assert.equal(noticeRow(db, fresh)?.status, "delivered");
+    assert.equal(Boolean(first.more), false, "retries left over wait for the job's next regular run");
+    assert.ok(first.d1Queries + first.externalRequests <= scheduledSliceLimits.total, JSON.stringify(first));
+    // A notice with only failing work: tried, counted, and no immediate re-run.
+    db.sqlite.prepare("UPDATE discord_attendance_notifications SET updated_at = ? WHERE status = 'failed'").run(minutesAgo(10));
+    quietJobs(db); const later = Date.now();
+    const second = await runSchedulerSlice(env, { "attendance.discord-notices": later }, later, sliceHooks());
+    assert.equal(Boolean(second.more), false);
+    assert.ok(second.nextWake >= later + 240_000);
+    assert.ok(failing.some((meetingId) => noticeRow(db, meetingId)!.attempts === 3), "the failed attempt is counted");
+    // Sixteen attempts is the cap; Send Discord absence notice on the meeting still sends it.
+    db.sqlite.prepare("UPDATE discord_attendance_notifications SET attempts = 16, updated_at = ? WHERE status = 'failed'").run(minutesAgo(3 * 24 * 60));
+    const before = posts.length; quietJobs(db); const last = Date.now();
+    await runSchedulerSlice(env, { "attendance.discord-notices": last }, last, sliceHooks());
+    assert.equal(posts.length, before, "a notice past its last attempt is left alone");
+  });
+});
+
+/** A backlog in every delivery job: calendar events, absence notices and anomaly reports all waiting. */
+function backlog(db: TestD1Database) {
+  testMembers(db); enableAnomalyReports(db);
+  for (let index = 0; index < 8; index += 1) meetingWithPendingEvent(db, 2 + index);
+  for (let index = 0; index < 6; index += 1) lateArrival(db, endedMeeting(db, 3 + index, `Test Meeting Past ${index + 1}`));
+}
+
+test("worst case: with every job due and a backlog in each, a Durable Object slice stays within 40 subrequests in all", async () => {
+  const { db, env } = await installation(); backlog(db);
+  await withMessages(async () => {
+    const counted = countingDatabase(db); let fetches = 0; const original = globalThis.fetch;
+    globalThis.fetch = ((...args: Parameters<typeof fetch>) => { fetches += 1; return original(...args); }) as typeof fetch;
+    try {
+      let now = Date.now(); const slices: { job: string | undefined; d1: number; external: number }[] = [];
+      for (let index = 0; index < 60; index += 1) {
+        const before = { d1: counted.queries.length, external: fetches };
+        const report = await runSchedulerSlice({ ...env, DB: counted } as Env, {}, now, sliceHooks());
+        slices.push({ job: report.ran, d1: counted.queries.length - before.d1, external: fetches - before.external });
+        assert.equal(report.d1Queries, counted.queries.length - before.d1, "the budget counts every D1 query the slice makes");
+        assert.equal(report.externalRequests, fetches - before.external, "and every provider request");
+        if (!report.attempted.length) break;
+        now = report.more ? report.nextWake : now + 1_000;
+      }
+      const worst = Math.max(...slices.map((slice) => slice.d1 + slice.external));
+      assert.ok(worst <= scheduledSliceLimits.total, `the worst slice used ${worst} of ${scheduledSliceLimits.total}: ${JSON.stringify(slices)}`);
+      assert.ok(worst >= 20, `the backlog makes some slice busy: ${worst}`);
+      assert.equal((db.sqlite.prepare("SELECT COUNT(*) AS n FROM discord_attendance_notifications WHERE status = 'delivered'").get() as { n: number }).n, 6, "and the work still gets done");
+    } finally { globalThis.fetch = original; }
+  });
+});
+
+test("worst case: with every job due and a backlog in each, a cron pass stays within 46 subrequests in all and records its outcomes", async () => {
+  const { db, env } = await installation(); backlog(db);
+  await withMessages(async (_posts, requests) => {
+    const counted = countingDatabase(db); const passes: { d1: number; external: number }[] = [];
+    for (let tick = 0; tick < 4; tick += 1) {
+      // Every job is due at every tick.
+      db.sqlite.exec("UPDATE platform_scheduler_state SET jobs_json = '{}'");
+      const before = { d1: counted.queries.length, external: requests.length };
+      await worker.scheduled({ cron: "*/5 * * * *", scheduledTime: (tick + 1) * 300_000 } as never, { ...env, DB: counted } as Env);
+      passes.push({ d1: counted.queries.length - before.d1, external: requests.length - before.external });
+      assert.match(counted.queries.at(-1)!, /^INSERT INTO platform_scheduler_state/, "the pass's last query is its closing state write");
+      const outcomes = Object.values(JSON.parse((db.sqlite.prepare("SELECT jobs_json AS j FROM platform_scheduler_state").get() as { j: string }).j) as Record<string, { outcome: string }>).map((state) => state.outcome);
+      assert.ok(outcomes.length > 0 && !outcomes.includes("running"), `no job is left marked running: ${outcomes.join(",")}`);
+    }
+    const worst = Math.max(...passes.map((pass) => pass.d1 + pass.external));
+    assert.ok(worst <= scheduledPassLimits.total, `the worst pass used ${worst} of ${scheduledPassLimits.total}: ${JSON.stringify(passes)}`);
+    assert.ok(worst >= 30, `the backlog makes a pass busy: ${JSON.stringify(passes)}`);
+  });
+});
+
+test("cron mode with the Durable Object bound: the cron tells the object to stand down before its pass, and the object's alarm runs no jobs", async () => {
+  const { db, env } = await installation(); quietJobs(db); due(db, "attendance.discord-calendar");
+  meetingWithPendingEvent(db, 3);
+  const order: string[] = [];
+  const cronMode = { ...env, PLATFORM_SCHEDULER_MODE: "cron", PLATFORM_SCHEDULER: { idFromName: (name: string) => name, get: () => ({ fetch: async (request: Request) => { order.push(`${request.method} ${new URL(request.url).pathname}`); return Response.json({ alarm: null, standby: true }); } }) } } as unknown as Env;
+  await withDiscord(async (requests) => {
+    const original = globalThis.fetch; globalThis.fetch = ((...args: Parameters<typeof fetch>) => { order.push("discord"); return original(...args); }) as typeof fetch;
+    try { await worker.scheduled({ cron: "*/5 * * * *", scheduledTime: Date.now() } as never, cronMode); } finally { globalThis.fetch = original; }
+    assert.equal(order[0], "POST /standdown", "the object stands down before the pass runs a job");
+    assert.ok(order.includes("discord"), "and the cron pass does the work");
+    assert.equal(order.filter((line) => line.startsWith("POST /")).length, 1, "one request to the object per tick");
+    // An alarm armed before the switch to cron mode fires: it must not run the jobs the cron now runs.
+    requests.length = 0; due(db, "attendance.discord-calendar"); meetingWithPendingEvent(db, 4);
+    const stored = new Map<string, unknown>(); let alarm: number | null = Date.now();
+    const storage = { get: async <T>(key: string) => stored.get(key) as T | undefined, put: async (key: string, value: unknown) => { stored.set(key, value); }, delete: async (key: string) => stored.delete(key), getAlarm: async () => alarm, setAlarm: async (time: number) => { alarm = time; }, deleteAlarm: async () => { alarm = null; } };
+    const reads = db.reads;
+    await new PlatformScheduler({ storage }, cronMode).alarm();
+    assert.equal(requests.length, 0, "the object's alarm sends nothing to Discord");
+    assert.equal(db.reads, reads, "and reads nothing from D1");
+    assert.equal(alarm, null, "and does not re-arm itself");
+    // The same object in durable mode does run the slice.
+    alarm = Date.now(); await new PlatformScheduler({ storage }, { ...cronMode, PLATFORM_SCHEDULER_MODE: undefined } as unknown as Env).alarm();
+    assert.equal(requests.filter((line) => line.startsWith("POST")).length, 1); assert.notEqual(alarm, null);
+  });
+});
+
+test("two deliveries of one cron tick: the second finds the jobs claimed and runs none, so a notice is posted once", async () => {
+  const { db, env } = await installation(); testMembers(db); quietJobs(db); due(db, "attendance.discord-notices");
+  endedMeeting(db, 5, "Test Meeting Once");
+  await withMessages(async (posts) => {
+    const tick = { cron: "*/5 * * * *", scheduledTime: Date.now() } as never;
+    await Promise.all([worker.scheduled(tick, env), worker.scheduled(tick, env)]);
+    assert.equal(posts.filter((post) => post.content.includes("Test Meeting Once")).length, 1);
+    assert.equal(storedJob(db, "attendance.discord-notices").outcome, "ok");
+  });
+});
+
+test("a runner's closing write keeps what another writer recorded for a job it did not run", async () => {
+  const { db, env } = await installation(); quietJobs(db);
+  meetingWithPendingEvent(db, 3);
+  const other = { next: 4_102_444_800_000, last: 1_700_000_000_000, outcome: "failed" };
+  // While this slice's job is talking to Discord, another runner records housekeeping's outcome.
+  let written = false;
+  const record = () => { if (written) return; written = true; db.sqlite.prepare("UPDATE platform_scheduler_state SET jobs_json = json_set(jobs_json, '$.\"core.housekeeping\"', json(?))").run(JSON.stringify(other)); };
+  await withMessages(async () => {
+    const now = Date.now();
+    const report = await runSchedulerSlice(env, { "attendance.discord-calendar": now }, now, sliceHooks());
+    assert.deepEqual(report.attempted, ["attendance.discord-calendar"]); assert.equal(written, true);
+  }, record);
+  assert.deepEqual(storedJob(db, "core.housekeeping"), other, "the other job's state is not put back to what this slice read");
+  assert.equal(storedJob(db, "attendance.discord-calendar").outcome, "ok");
+});
+
+test("when the scheduler state cannot be read, a slice runs every due job once and sleeps five minutes instead of looping housekeeping every second", async () => {
+  const { db, env } = await installation(); meetingWithPendingEvent(db, 3);
+  const counted = countingDatabase(db);
+  counted.fail = (statements) => { if (statements.some((sql) => sql.includes("FROM platform_scheduler_state"))) throw new Error("D1_ERROR: synthetic read failure"); };
+  await withDiscord(async (requests) => {
+    const now = Date.now(); const slices: Awaited<ReturnType<typeof runSchedulerSlice>>[] = [];
+    for (let index = 0; index < 3; index += 1) slices.push(await runSchedulerSlice({ ...env, DB: counted } as Env, {}, now + index * SLICE_IDLE_MAX_MS, sliceHooks()));
+    const first = slices[0]!;
+    assert.equal(Boolean(first.more), false, "no continuation is asked for: without state it could never be recorded as served");
+    assert.equal(first.nextWake, now + SLICE_IDLE_MAX_MS, "the next slice is five minutes later");
+    assert.equal(first.stateless, true);
+    assert.ok(first.attempted.includes("core.housekeeping") && first.attempted.includes("attendance.discord-calendar"), `every due job runs, not only the first: ${first.attempted.join(",")}`);
+    assert.equal(requests.filter((line) => line.startsWith("POST") && line.endsWith("/scheduled-events")).length, 1, "the waiting calendar event went out");
+    assert.ok(slices.every((slice) => slice.d1Queries + slice.externalRequests <= scheduledPassLimits.total), "each within a pass's budget");
   });
 });

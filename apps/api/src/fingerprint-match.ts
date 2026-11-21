@@ -38,6 +38,7 @@ export function validateMinimumScore(input: unknown) {
   return Number(value.minimumScore);
 }
 
-export async function saveFingerprintMinimumScore(db: D1Database, minimumScore: number) {
-  await db.prepare("INSERT INTO kiosk_fingerprint_match_settings(installation_id,minimum_score,updated_at) VALUES ('primary',?,?) ON CONFLICT(installation_id) DO UPDATE SET minimum_score=excluded.minimum_score,updated_at=excluded.updated_at").bind(minimumScore, new Date().toISOString()).run();
+/** Saves the minimum match score, as a statement the caller batches with its audit row. */
+export function saveFingerprintMinimumScoreStatement(db: D1Database, minimumScore: number) {
+  return db.prepare("INSERT INTO kiosk_fingerprint_match_settings(installation_id,minimum_score,updated_at) VALUES ('primary',?,?) ON CONFLICT(installation_id) DO UPDATE SET minimum_score=excluded.minimum_score,updated_at=excluded.updated_at").bind(minimumScore, new Date().toISOString());
 }

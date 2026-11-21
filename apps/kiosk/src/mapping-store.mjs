@@ -64,6 +64,9 @@ export function createMappingStore(path) {
     } finally { await file?.close(); await unlink(temporary).catch(() => undefined); }
   }
   return {
+    // Whether the mappings file is there and readable. A missing file reads as no mappings, which is not the same as
+    // knowing that no member is linked: the reader cleanup releases nothing extra unless this is true.
+    present: async () => { try { normalize(JSON.parse(await readFile(path, "utf8"))); return true; } catch { return false; } },
     read: () => exclusive(read),
     memberForSlot: (slot) => exclusive(async () => (await read())[String(slot)]?.memberId),
     replace: (mappings) => exclusive(() => persist(mappings)),

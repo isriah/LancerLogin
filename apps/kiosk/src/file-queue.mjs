@@ -1,4 +1,4 @@
-import { chmod, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 
@@ -25,6 +25,10 @@ import { dirname } from "node:path";
 // torn line. At load, a line that cannot be parsed is copied to
 // `${path}.journal.damaged` for diagnosis and skipped; a complete record that a
 // release without this repair joined to a torn line is recovered from that line.
+// setAside() counts the entries in that file, for the kiosk's diagnostics. The
+// count lasts as long as the file: it clears only when someone removes the file
+// after recovering what it holds (or unpairing archives it). Nothing here
+// parses or replays the damaged lines.
 
 const emptyOutcomes = () => ({ version: 1, accepted: 0, duplicate: 0, rejected: [], pendingAck: null, historyComplete: true });
 const dayMs = 24 * 60 * 60_000;
@@ -221,6 +225,29 @@ export function createFileQueue(path, { now = Date.now, compactBytes = 1024 * 10
     return { records, torn, damaged };
   }
 
+  // The entries in the side file: distinct damaged lines, so a line set aside again after a crash before the journal
+  // was rewritten counts once, and the time the newest was found. A side-file entry cut short by a power cut is
+  // written again whole at the next start, joined to the cut one; only that whole entry counts.
+  let setAsideRead = { key: "", value: { count: 0, lastAt: null } };
+  async function readSetAside() {
+    let info;
+    try { info = await stat(damagedPath); } catch (error) { if (error?.code === "ENOENT") return { count: 0, lastAt: null }; throw error; }
+    const key = `${info.ino}:${info.size}:${info.mtimeMs}`;
+    if (setAsideRead.key === key) return { ...setAsideRead.value };
+    const lines = new Set(); let lastAt = null;
+    for (const text of (await readFile(damagedPath, "utf8")).split("\n")) {
+      let entry;
+      for (let at = 0; at >= 0 && !entry; at = text.indexOf('{"foundAt":', at + 1)) {
+        try { const value = JSON.parse(text.slice(at)); if (typeof value?.line === "string") entry = value; } catch { /* Not a whole entry from here. */ }
+      }
+      if (!entry) continue;
+      lines.add(entry.line);
+      if (typeof entry.foundAt === "string" && Number.isFinite(Date.parse(entry.foundAt)) && (!lastAt || Date.parse(entry.foundAt) > Date.parse(lastAt))) lastAt = entry.foundAt;
+    }
+    setAsideRead = { key, value: { count: lines.size, lastAt: lines.size ? lastAt : null } };
+    return { ...setAsideRead.value };
+  }
+
   // Keep unreadable journal lines in an owner-only side file before the journal is rewritten without them.
   async function quarantine(lines) {
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -390,6 +417,10 @@ export function createFileQueue(path, { now = Date.now, compactBytes = 1024 * 10
         await load();
         return events.map((event) => ({ ...event }));
       });
+    },
+    /** Unreadable journal entries kept in the side file: { count, lastAt, file }. Does not load the queue. */
+    setAside() {
+      return exclusive(async () => ({ ...await readSetAside(), file: damagedPath }));
     },
     diagnostics() {
       return exclusive(async () => {

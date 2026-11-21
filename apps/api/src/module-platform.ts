@@ -1,3 +1,4 @@
+import { calendarRemovalStatements } from "./calendar-queue.ts";
 import { bundledModuleRegistry, type ModuleLifecyclePhase, type ModulePlatformSnapshot } from "../../../packages/shared/src/module-platform.ts";
 import { HttpError } from "./http-error.ts";
 import type { D1Database } from "./d1-usage.ts";
@@ -137,7 +138,7 @@ export function validateModuleConfiguration(value: unknown, keepEnabled: readonl
   return { enabled: [...value.enabled] as string[], revision: Number(value.revision), confirmDisable: confirmations as ModuleConfiguration["confirmDisable"] };
 }
 
-export async function configureModulePlatform(db: ModuleDatabase, actorUserId: string, value: unknown) {
+export async function configureModulePlatform(db: ModuleDatabase, actorUserId: string, value: unknown, calendarRemovalTargets: { google_calendar?: string | null; discord?: string | null } = {}) {
   const current = await readModulePlatformSnapshot(db, actorUserId, { unregistered: "omit" });
   const input = validateModuleConfiguration(value, current.modules.filter((module) => module.unavailable && module.enabled).map((module) => module.id));
   if (input.enabled.some((moduleId) => !current.modules.some((module) => module.id === moduleId))) throw new HttpError(409, "A selected module is still being set up. Reload and try again.");
@@ -157,17 +158,39 @@ export async function configureModulePlatform(db: ModuleDatabase, actorUserId: s
   });
   const attendance = transitions.find((item) => item.module.id === "attendance")!;
   const disablingAttendance = attendance.disabling;
-  if (disablingAttendance) {
-    const blocker = await db.prepare(`SELECT 1 AS blocked WHERE
-      EXISTS(SELECT 1 FROM integration_deliveries WHERE installation_id=? AND status='pending')
-      OR EXISTS(SELECT 1 FROM google_calendar_operations WHERE installation_id=? AND status='pending')
-      OR EXISTS(SELECT 1 FROM discord_calendar_operations WHERE installation_id=? AND (status='processing' OR julianday(lease_expires_at)>julianday('now')))`)
-      .bind(installationId, installationId, installationId).first();
-    if (blocker) throw new HttpError(409, "Wait for in-flight Attendance delivery work to finish before disabling the module");
-  }
+  // Only work that is being sent this moment holds the module: an email delivery in progress, or a Discord calendar
+  // operation whose delivery holds its lease (five minutes at most). Calendar operations that are merely queued do not:
+  // they are kept with the module's data and delivered if it is enabled again, and the remote events their pending
+  // deletes were for are recorded as removals below, which outlive the data clean-up.
+  const attendanceWorkPending = `(EXISTS(SELECT 1 FROM integration_deliveries WHERE installation_id='primary' AND status='pending')
+      OR EXISTS(SELECT 1 FROM discord_calendar_operations WHERE installation_id='primary' AND status='processing' AND julianday(lease_expires_at)>julianday('now')))`;
+  const attendanceWorkMessage = "Wait for in-flight Attendance delivery work to finish before disabling the module. It is being sent right now: try again in a moment";
+  if (disablingAttendance && await db.prepare(`SELECT 1 AS blocked WHERE ${attendanceWorkPending}`).first()) throw new HttpError(409, attendanceWorkMessage);
   const now = new Date().toISOString();
   const deleteAfter = new Date(Date.parse(now) + 7 * 24 * 60 * 60 * 1000).toISOString();
   const operationId = crypto.randomUUID();
+  // Anything may change between the snapshot read above and the batch. The batch re-checks every condition its writes
+  // depend on before writing, and their combined outcome after, inside the same transaction: a guard that fails raises a
+  // SQL error, so D1 rolls the whole batch back and a refusal never leaves part of the change stored.
+  const conflictMarker = "module-configuration-conflict", attendanceWorkMarker = "module-attendance-work-pending";
+  const modulesAt = (states: { id: string; generation: number; phase: string }[]) => `(SELECT count(*) FROM json_each(?) x
+      JOIN platform_modules m ON m.installation_id=? AND m.module_id=json_extract(x.value,'$.id') AND m.generation=json_extract(x.value,'$.generation') AND m.phase=json_extract(x.value,'$.phase')
+      JOIN platform_module_epochs e ON e.installation_id=m.installation_id AND e.module_id=m.module_id AND e.generation=m.generation)=${states.length}`;
+  const before = transitions.map(({ module }) => ({ id: module.id, generation: module.generation, phase: module.phase }));
+  const after = transitions.map(({ module, generation, phase }) => ({ id: module.id, generation, phase }));
+  const preconditions = [
+    db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM platform_module_administration a JOIN platform_module_administration_epochs e ON e.installation_id=a.installation_id AND e.revision=a.revision
+        WHERE a.installation_id=? AND a.revision=? AND a.revision<?)
+      AND EXISTS(SELECT 1 FROM users u WHERE u.installation_id=? AND u.id=? AND u.active=1 AND u.role='admin')
+      AND ${modulesAt(before)} THEN 1 ELSE json_extract('{}','${conflictMarker}') END AS current_configuration`)
+      .bind(installationId, input.revision, maximumAuthority - 1, installationId, actorUserId, JSON.stringify(before), installationId),
+    ...(disablingAttendance ? [db.prepare(`SELECT CASE WHEN ${attendanceWorkPending} THEN json_extract('{}','${attendanceWorkMarker}') ELSE 1 END AS attendance_idle`)] : []),
+  ];
+  const outcome = db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM platform_module_administration a JOIN platform_module_administration_epochs e ON e.installation_id=a.installation_id AND e.revision=a.revision
+      WHERE a.installation_id=? AND a.revision=?)
+    AND EXISTS(SELECT 1 FROM audit_log WHERE installation_id=? AND id=?)
+    AND ${modulesAt(after)} THEN 1 ELSE json_extract('{}','${conflictMarker}') END AS configuration_saved`)
+    .bind(installationId, input.revision + 1, installationId, operationId, JSON.stringify(after), installationId);
   const statements = [
     db.prepare(`UPDATE platform_module_administration SET revision=revision+1,selection_completed=1
       WHERE installation_id=? AND revision=? AND revision<?
@@ -182,7 +205,7 @@ export async function configureModulePlatform(db: ModuleDatabase, actorUserId: s
         setup_complete=CASE WHEN ? THEN 0 ELSE setup_complete END,
         deletion_cursor=CASE WHEN ? THEN 0 ELSE deletion_cursor END,cleanup_failure=NULL
         WHERE installation_id=? AND module_id=? AND generation=? AND phase=?
-        AND ${module.id === "attendance" && disabling ? "NOT EXISTS(SELECT 1 FROM integration_deliveries WHERE installation_id='primary' AND status='pending') AND NOT EXISTS(SELECT 1 FROM google_calendar_operations WHERE installation_id='primary' AND status='pending') AND NOT EXISTS(SELECT 1 FROM discord_calendar_operations WHERE installation_id='primary' AND (status='processing' OR julianday(lease_expires_at)>julianday('now')))" : "1=1"}
+        AND ${module.id === "attendance" && disabling ? `NOT ${attendanceWorkPending}` : "1=1"}
         AND EXISTS(SELECT 1 FROM platform_module_administration a JOIN platform_module_administration_epochs e ON e.installation_id=a.installation_id AND e.revision=a.revision WHERE a.installation_id=platform_modules.installation_id AND a.revision=?)`)
         .bind(phase, generation, enable ? null : disabling ? now : module.deletion.disabledAt, enable ? null : disabling ? deleteAfter : module.deletion.deleteAfter, fresh ? 1 : 0, fresh ? 1 : 0, installationId, module.id, module.generation, module.phase, input.revision + 1),
       db.prepare(`UPDATE platform_module_epochs SET generation=? WHERE installation_id=? AND module_id=? AND generation=?
@@ -205,9 +228,13 @@ export async function configureModulePlatform(db: ModuleDatabase, actorUserId: s
       SELECT ?,?,?, 'modules.configured','platform_module',?,?,? WHERE EXISTS(SELECT 1 FROM platform_module_administration a JOIN platform_module_administration_epochs e ON e.installation_id=a.installation_id AND e.revision=a.revision WHERE a.installation_id=? AND a.revision=?)`)
       .bind(operationId, installationId, actorUserId, installationId, JSON.stringify({ enabled: input.enabled }), now, installationId, input.revision + 1),
   ];
-  const results = await db.batch(statements);
-  const transitionResults = results.slice(2, 2 + transitions.length * 2);
-  if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1 || transitionResults.some((result) => result.meta?.changes !== 1) || results.at(-1)?.meta?.changes !== 1) throw new HttpError(409, "Module configuration or Admin access changed; reload before saving");
+  const removals = disablingAttendance ? calendarRemovalStatements(db, now, calendarRemovalTargets, { only: "pendingDeletes" }) : [];
+  await db.batch([...preconditions, ...removals, ...statements, outcome]).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes(attendanceWorkMarker)) throw new HttpError(409, attendanceWorkMessage);
+    if (message.includes(conflictMarker)) throw new HttpError(409, "Module configuration or Admin access changed; reload before saving");
+    throw error;
+  });
   return readModulePlatformSnapshot(db, actorUserId, { unregistered: "show" });
 }
 

@@ -4,8 +4,8 @@ import { discovered } from "./release-discovery";
 import { mockSession, mockSetupStatus } from "./api-fixtures";
 
 const branding = { organizationName: "Reference Arts Collective", subtitle: "Shared operations", logoData: "", primaryColor: references.brand.primary, secondaryColor: references.brand.secondary, logoBackdrop: "auto", lateScanMinutes: 30 };
-async function context(page: Page, role: "admin" | "operator" = "admin") {
-  await mockSetupStatus(page, { settings: branding });
+async function context(page: Page, role: "admin" | "operator" = "admin", settings: Record<string, unknown> = {}) {
+  await mockSetupStatus(page, { settings: { ...branding, ...settings } });
   await mockSession(page, role);
   await page.route("**/admin/releases/latest", route => route.fulfill({ json: discovered({ tag_name: "v0.19.0" }) }));
   await page.route("**/admin/update-info", route => route.fulfill({ json: { releaseVersion: "0.19.0" } }));
@@ -57,6 +57,27 @@ for (const viewport of references.viewports) for (const theme of references.them
     await page.screenshot({ path: test.info().outputPath("roster.png"), fullPage: true });
   });
 }
+
+test("Roster attendance start dates are the organization's dates, not the UTC date of the moment a member was added", async ({ page }) => {
+  // 18:00 on Sep 14 in Los Angeles is 01:00Z on Sep 15; the browser itself is in UTC.
+  await page.clock.setFixedTime(new Date("2026-09-15T01:00:00Z"));
+  await context(page, "admin", { timeZone: "America/Los_Angeles" });
+  const members = [{ id: "member-1", memberId: "TEST-A", firstName: "Test Student", lastName: "A", email: "student.a@example.test", active: 1, rosterAddedAt: "2026-09-15T01:00:00Z" }];
+  await page.route("**/admin/members", route => route.fulfill({ json: { members } }));
+  await page.route("**/admin/attendance/members", route => route.fulfill({ json: { members: [{ memberId: "TEST-A", attendanceRequiredFrom: null }] } }));
+  await page.goto("/roster");
+  await page.getByRole("button", { name: "Edit Test Student A" }).click();
+  const editor = page.getByRole("dialog", { name: "Edit roster member" });
+  await expect(editor.getByRole("group", { name: "Attendance required from" })).toContainText("Sep 14, 2026 (when they were added to the roster)");
+  await editor.getByLabel("Custom date").check();
+  await expect(editor.getByLabel("New start date")).toHaveValue("2026-09-14");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Add member", exact: true }).first().click();
+  const adder = page.getByRole("dialog", { name: "Add roster member" });
+  await expect(adder.getByRole("group", { name: "Attendance required from" })).toContainText("Sep 14, 2026 (today, when they're added)");
+  await adder.getByLabel("Custom date").check();
+  await expect(adder.getByLabel("New start date")).toHaveValue("2026-09-14");
+});
 
 test("Roster attendance start date stays automatic unless Custom date is checked", async ({ page }) => {
   await context(page);

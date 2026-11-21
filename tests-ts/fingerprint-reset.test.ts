@@ -114,16 +114,49 @@ test("retired-grant checks close an in-flight upload and a download after decryp
 });
 
 test("reset capacity limits fail closed without clearing configuration or partial commands", async context => {
-  for (const limit of ["kiosks", "batches"]) {
+  for (const limit of ["kiosks", "recent batches", "pending batches"]) {
     const { db, reset, enable } = await fixture(context), vault = await enable();
     if (limit === "kiosks") for (let index = 0; index < 31; index++) {
       db.sqlite.prepare("INSERT INTO pairing_codes(id,installation_id,code_hash,purpose,expires_at,created_by,created_at) VALUES(?,'primary',?,'hardware','2099-01-01','admin','2026-01-01')").run(`extra-pair-${index}`, `extra-hash-${index}`);
       db.sqlite.prepare("INSERT INTO kiosks(id,installation_id,name,token_hash,pairing_code_id,pairing_bound,created_at) VALUES(?,'primary',?,?,?,1,'2026-01-01')").run(`extra-${index}`, `Extra ${index}`, `token-${index}`, `extra-pair-${index}`);
-    } else for (let index = 0; index < 64; index++) db.sqlite.prepare("INSERT INTO kiosk_fingerprint_reset_batches VALUES(?,'primary','admin',1,1)").run(`prior-${index}`);
+    } else for (let index = 0; index < 64; index++) {
+      // Recent batches are kept for exact retries; old ones are kept while a current pairing still has to acknowledge them.
+      db.sqlite.prepare("INSERT INTO kiosk_fingerprint_reset_batches VALUES(?,'primary','admin',?,?)").run(`prior-${index}`, limit === "recent batches" ? Date.now() : 1, limit === "recent batches" ? Date.now() : 1);
+      if (limit === "pending batches") db.sqlite.prepare("INSERT INTO kiosk_fingerprint_reset_commands VALUES(?,?,'primary','source','pair-a',1,NULL)").run(`prior-command-${index}`, `prior-${index}`);
+    }
+    const pendingBefore = db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_reset_commands").get()?.n;
     assert.equal((await reset()).status, 409, limit);
     assert.equal(db.sqlite.prepare("SELECT vault_id FROM kiosk_fingerprint_vault_settings").get()?.vault_id, vault);
-    assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_reset_commands").get()?.n, 0);
+    assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_reset_commands").get()?.n, pendingBefore);
+    assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_reset_batches").get()?.n, limit === "kiosks" ? 0 : 64);
   }
+});
+
+test("finished resets older than a day are pruned so a long-lived installation can always reset again", async context => {
+  const { db, call, reset, enable, command } = await fixture(context); await enable();
+  const batch = db.sqlite.prepare("INSERT INTO kiosk_fingerprint_reset_batches VALUES(?,'primary','admin',?,?)"), queued = db.sqlite.prepare("INSERT INTO kiosk_fingerprint_reset_commands VALUES(?,?,'primary',?,?,?,?)");
+  // 65 completed resets: every kiosk acknowledged, so the cap counted them forever before.
+  for (let index = 0; index < 65; index++) { batch.run(`done-${index}`, 1000 + index, 1000 + index); queued.run(`done-source-${index}`, `done-${index}`, "source", "pair-a", 1000 + index, 2000 + index); queued.run(`done-destination-${index}`, `done-${index}`, "destination", "pair-b", 1000 + index, 2000 + index); }
+  // An old reset still waiting on the destination's current pairing, and one whose only waiting command is for a pairing the
+  // destination no longer holds.
+  batch.run("waiting", 3000, 3000); queued.run("waiting-destination", "waiting", "destination", "pair-b", 3000, null);
+  batch.run("stale-pairing", 3001, 3001); queued.run("stale-command", "stale-pairing", "destination", "pair-retired", 3001, null);
+  const recent = Date.now() - 60_000; batch.run("recent", recent, recent); queued.run("recent-source", "recent", "source", "pair-a", recent, recent);
+
+  const response = await reset("after-many"); assert.equal(response.status, 200, await response.clone().text());
+  assert.equal((await response.json() as { resetId: string }).resetId, "after-many");
+  const batches = (db.sqlite.prepare("SELECT id FROM kiosk_fingerprint_reset_batches ORDER BY id").all() as { id: string }[]).map(row => row.id);
+  assert.deepEqual(batches, ["after-many", "recent", "waiting"], "finished old batches and unreachable stale-pairing commands are pruned; pending and recent ones stay");
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_reset_commands WHERE batch_id LIKE 'done-%' OR batch_id='stale-pairing'").get()?.n, 0);
+  assert.equal(db.sqlite.prepare("SELECT acknowledged_at FROM kiosk_fingerprint_reset_commands WHERE id='waiting-destination'").get()?.acknowledged_at, null, "a still-pending command keeps blocking the destination's sharing");
+  assert.equal(db.sqlite.prepare(`SELECT 1 AS blocked WHERE ${fingerprintResetGuard}`).get("destination", "pair-b"), undefined);
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM kiosk_fingerprint_vault_settings").get()?.n, 0, "the new reset cleared the vault configuration");
+  assert.equal((await command()).kind, "reset_fingerprint_mappings");
+  const overview = await (await call("/admin/kiosks/fingerprint-reset")).json() as { resetCommands: { batchId: string }[] };
+  assert.ok(overview.resetCommands.length === 2 && overview.resetCommands.every(value => value.batchId === "after-many"));
+  // An exact retry of the latest reset stays idempotent, and a later reset with no old rows left to prune still succeeds.
+  assert.equal((await reset("after-many")).status, 200);
+  assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM audit_log WHERE action='kiosk.fingerprint_mappings_reset_requested'").get()?.n, 1);
 });
 
 test("reset is atomic, idempotent, pairing-specific and available while sharing is off", async context => {

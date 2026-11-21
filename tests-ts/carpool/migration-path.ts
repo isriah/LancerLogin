@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import worker, { type Env } from "../../apps/api/src/index.ts";
 import { reconcileInstalledModules } from "../../apps/api/src/module-catalog.ts";
-import { commitPluginChange, requiredModuleMigrations } from "../../apps/api/src/plugin-selection.ts";
+import { commitPluginChange, pluginReviewToken, requiredModuleMigrations } from "../../apps/api/src/plugin-selection.ts";
 import { createSessionCodec } from "../../apps/api/src/runtime-security.ts";
 import { effectiveSelection, parseSelectionFile } from "../../scripts/compose-modules.mjs";
 import { composeUpdateModules, preflightModuleGuard } from "../../scripts/run-web-upgrade.mjs";
@@ -61,7 +61,8 @@ test("an installation using first-party Carpool keeps it by adding the plugin, a
     assert.equal(required?.id, "carpool"); assert.ok(required.plugin);
     const signedInAt = Date.now(); // One reading, so the session spans exactly the lifetime freshUntil requires.
     const admin = { userId: "admin", expiresAt: signedInAt + 8 * 3_600_000, authenticatedAt: signedInAt };
-    await commitPluginChange(env as never, admin, { action: "add", id: "carpool", source: required.plugin!.source, commit: required.plugin!.commit, selectionSha: "0".repeat(40), trustConfirmed: true }, withoutPlugin);
+    const reviewed = { action: "add", id: "carpool", source: required.plugin!.source, commit: required.plugin!.commit };
+    await commitPluginChange(env as never, admin, { ...reviewed, selectionSha: "0".repeat(40), reviewToken: await pluginReviewToken(env as never, admin.userId, reviewed, "0".repeat(40)), trustConfirmed: true }, withoutPlugin);
     assert.deepEqual(await requiredModuleMigrations(env as never, withoutPlugin), []);
   } finally { globalThis.fetch = previous; }
 

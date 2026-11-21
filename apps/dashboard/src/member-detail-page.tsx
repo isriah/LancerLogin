@@ -23,7 +23,7 @@ function RateExplanations({ policy }: { policy: ReportMember }) {
   return <details className="calc-disclosure"><summary>How these rates are calculated</summary><div className="calc-groups">{groups.map((group, index) => <section key={`${group.title}-${index}`} aria-labelledby={`calc-group-${index}`}><h3 id={`calc-group-${index}`}>{group.title}</h3><p>{group.summary}</p>{group.steps.length > 0 && <ol className="calc-steps">{group.steps.map((step) => <li key={step.label} className={step.result ? "calc-result" : undefined}><span>{step.label}</span>{group.statusLabel === step.value && group.status ? <span className="ui-status" data-tone={statusTone(group.status)}>{step.value}</span> : <b>{step.value}</b>}</li>)}</ol>}</section>)}</div></details>;
 }
 
-export function MemberDetailPage({ role, memberId, discordEnabled, debugMode }: { role: "admin" | "operator"; memberId: string; discordEnabled: boolean; debugMode: boolean }) {
+export function MemberDetailPage({ role, memberId, discordEnabled, debugMode, timeZone }: { role: "admin" | "operator"; memberId: string; discordEnabled: boolean; debugMode: boolean; timeZone?: string }) {
   const { path, navigate } = usePath();
   const [detail, setDetail] = useState<Detail>(); const [labelData, setLabelData] = useState<LabelData>(); const [notice, setNotice] = useState("Loading member history…"); const [editing, setEditing] = useState(false);
   const [historyNotices, setHistoryNotices] = useState<Record<string, string>>({});
@@ -115,7 +115,7 @@ export function MemberDetailPage({ role, memberId, discordEnabled, debugMode }: 
           </div>)}
         </div></div> : <p className="empty-state">No completed meetings are available for this member yet.</p>}
       </section>
-      <EditMemberDialog member={editing ? detail.member : undefined} labelData={labelData} attendanceEnabled onDeleted={() => navigate("/roster")} onClose={() => setEditing(false)} onSaved={async () => { await load("Member updated."); }} />
+      <EditMemberDialog member={editing ? detail.member : undefined} labelData={labelData} attendanceEnabled timeZone={timeZone} onDeleted={() => navigate("/roster")} onClose={() => setEditing(false)} onSaved={async () => { await load("Member updated."); }} />
     </> : notice !== "Loading member history…" && <section className="task-card empty-page" aria-labelledby="member-unavailable-title"><h2 id="member-unavailable-title">Member unavailable</h2><p>This roster record could not be loaded. It may have been removed or the link may be out of date.</p><RouteLink href="/roster" currentPath={path} navigate={navigate}>Return to roster</RouteLink></section>}
   </section>;
 }

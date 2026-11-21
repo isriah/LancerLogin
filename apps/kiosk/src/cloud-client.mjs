@@ -27,13 +27,13 @@ export async function pairInstallation({ apiUrl, code, kioskName, releaseVersion
   return { apiUrl: endpoint, kioskId: paired.kioskId, kioskToken: paired.kioskToken, pairingId: paired.pairingId, kioskName: paired.name ?? kioskName, pairedAt: new Date().toISOString() };
 }
 
-export async function sendHeartbeat(config, { readerOnline = false, authenticationMethod, releaseVersion = "development", uptimeSeconds = 0, networkType = "offline", networkSignal = null, lastWifiScanAt = null, pendingEvents = 0, lastSyncAt = null, errorCategory = null, attention, updatePolicyVersion, fetchImpl = fetch } = {}) {
+export async function sendHeartbeat(config, { readerOnline = false, authenticationMethod, releaseVersion = "development", uptimeSeconds = 0, networkType = "offline", networkSignal = null, lastWifiScanAt = null, pendingEvents = 0, lastSyncAt = null, errorCategory = null, attention, storage, updatePolicyVersion, fetchImpl = fetch } = {}) {
   const response = await fetchImpl(`${normalizeApiUrl(config.apiUrl)}/kiosk/heartbeat`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${config.kioskToken}` },
     // The Worker records a missing policy as 1 and rejects unknown values, so send only a recognized installed-helper policy.
-    // Workers before 2.0.0-beta.14 ignore the attention details.
-    body: JSON.stringify({ readerOnline: Boolean(readerOnline), ...(authenticationMethod ? { authenticationMethod } : {}), releaseVersion, uptimeSeconds, networkType, networkSignal, lastWifiScanAt, pendingEvents, lastSyncAt, errorCategory, ...(attention ? { attention } : {}), ...(updatePolicyVersion === 1 || updatePolicyVersion === 2 ? { updatePolicyVersion } : {}) }),
+    // Workers before 2.0.0-beta.14 ignore the attention details, and Workers before 2.1.0-beta.11 the storage details.
+    body: JSON.stringify({ readerOnline: Boolean(readerOnline), ...(authenticationMethod ? { authenticationMethod } : {}), releaseVersion, uptimeSeconds, networkType, networkSignal, lastWifiScanAt, pendingEvents, lastSyncAt, errorCategory, ...(attention ? { attention } : {}), ...(storage ? { storage } : {}), ...(updatePolicyVersion === 1 || updatePolicyVersion === 2 ? { updatePolicyVersion } : {}) }),
   });
   return parseResponse(response);
 }

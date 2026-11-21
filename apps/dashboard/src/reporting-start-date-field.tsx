@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { api } from "./dashboard-api";
 import { futureReportingStartWarning, reportingStartHelp, reportingStartLabel } from "./reporting-baseline";
+import { DateInput } from "./date-input";
 
 type ReportBaseline = { moduleId: string; label: string; startsOn: string | null; revision: number; timeZone: string; today: string };
 
@@ -29,7 +30,7 @@ export function ReportingStartDateField({ moduleId }: { moduleId: string }) {
   return <article className="ui-card reporting-start-date-card" aria-labelledby={`${id}-title`}>
     <div><h2 id={`${id}-title`}>Reporting start date</h2>{stored && <p id={`${id}-help`}>{reportingStartHelp(moduleLabel)}</p>}</div>
     {!stored ? !notice && <p className="ui-status" role="status">Loading reporting start date…</p> : <form className="ui-form" onSubmit={(event) => void save(event)}>
-      <label>{reportingStartLabel(moduleLabel)} <span>(optional)</span><input className="ui-control" type="date" value={value} disabled={saving || !stored} aria-describedby={warning ? `${id}-help ${id}-warning` : `${id}-help`} onChange={(event) => setValue(event.target.value)} /></label>
+      <label>{reportingStartLabel(moduleLabel)} <span>(optional)</span><DateInput className="ui-control" value={value} disabled={saving || !stored} aria-describedby={warning ? `${id}-help ${id}-warning` : `${id}-help`} onChange={(event) => setValue(event.target.value)} /></label>
       {warning && <p id={`${id}-warning`} className="ui-status" data-tone="warning" role="status">{warning}</p>}
       <div><button className="ui-button ui-button--primary" type="submit" disabled={saving || !stored || value === (stored.startsOn ?? "")}>{saving ? "Saving…" : "Save reporting start date"}</button></div>
     </form>}

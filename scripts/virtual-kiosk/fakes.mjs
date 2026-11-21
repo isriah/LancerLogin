@@ -10,6 +10,8 @@ export const virtualWifiNetworks = Object.freeze([
   // A password only a full keyboard can type: capitals, spaces, quotes, a backslash and other punctuation.
   Object.freeze({ ssid: "Virtual Shop", signal: 64, security: "WPA2", password: "Shop 7 \"Q\"\\$z~!" }),
   Object.freeze({ ssid: "Virtual Guest", signal: 52, security: "--", password: "" }),
+  // A network that signs in with a username (WPA-Enterprise). The kiosk lists it and refuses to join it.
+  Object.freeze({ ssid: "Virtual Campus", signal: 40, security: "WPA2 802.1X", password: "", enterprise: true }),
 ]);
 
 /** A kiosk's network: wired, on a Wi-Fi network, or with no connection. */
@@ -18,7 +20,7 @@ export function defaultNetworkState() { return { connection: "ethernet", ssid: n
 export function validNetworkState(value) {
   if (!value || typeof value !== "object") return false;
   if (value.connection === "ethernet" || value.connection === "none") return value.ssid === null;
-  return value.connection === "wifi" && virtualWifiNetworks.some((network) => network.ssid === value.ssid);
+  return value.connection === "wifi" && virtualWifiNetworks.some((network) => network.ssid === value.ssid && !network.enterprise);
 }
 
 export const networkOnline = (state) => state.connection !== "none";
@@ -35,7 +37,7 @@ export function createVirtualNmcli({ state = defaultNetworkState(), onChange = (
   const join = (ssid, password) => {
     const network = virtualWifiNetworks.find((item) => item.ssid === ssid);
     if (!network) throw Object.assign(new Error(`Error: No network with SSID '${ssid}' found.`), { code: 10 });
-    if (network.password && network.password !== password) throw Object.assign(new Error("Error: Connection activation failed: Secrets were required, but not provided."), { code: 4 });
+    if (network.enterprise || network.password && network.password !== password) throw Object.assign(new Error("Error: Connection activation failed: Secrets were required, but not provided."), { code: 4 });
     current = { connection: "wifi", ssid }; onChange({ ...current });
   };
   return {

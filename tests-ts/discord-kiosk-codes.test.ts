@@ -381,6 +381,41 @@ test("wrong codes sent at the same time pass the throttle no more often than one
   assert.equal(events().length, 1);
 });
 
+test("a wrong code counted between a good code's lookup and its recording keeps its count and its wait", async (context) => {
+  const { database, pairWeb, setMethod, newCode, scan, codeRow, kioskRow, events } = await fixture(context);
+  const kiosk = await pairWeb("Test Web Kiosk A");
+  assert.equal((await setMethod(kiosk.kioskId, { discordCode: true })).status, 200);
+  const invalid = { error: "That code is wrong or has expired. Run /code in Discord for a new one.", code: "code_invalid" };
+  for (let attempt = 1; attempt <= 4; attempt += 1) assert.deepEqual(await json(await scan(kiosk, { discordCode: "000000" })), invalid);
+  assert.deepEqual([kioskRow(kiosk.kioskId).failures, kioskRow(kiosk.kioskId).throttleUntil], [4, null]);
+
+  // The good code is looked up while the kiosk has no wait. Before the batch that records its scan runs, the same kiosk
+  // credential's fifth wrong code is looked up and counted, which starts the 30 second wait.
+  const good = await newCode(discordA);
+  const batch = database.batch.bind(database); let fifth: Response | undefined;
+  context.mock.method(database, "batch", async (statements: Parameters<CountingDatabase["batch"]>[0]) => {
+    if (!fifth && statements.some((statement) => (statement as unknown as { sql: string }).sql.includes("INTO attendance_events"))) {
+      assert.deepEqual(events(), [], "the good scan is not recorded yet");
+      fifth = await scan(kiosk, { discordCode: "000000" });
+    }
+    return batch(statements);
+  });
+  const recorded = await scan(kiosk, { discordCode: good }); assert.equal(recorded.status, 202, await recorded.clone().text());
+  assert.ok(fifth, "the wrong code ran between the lookup and the recording batch");
+  assert.equal(fifth.status, 403);
+  assert.deepEqual(await json(fifth), { ...invalid, retryAt: new Date(Date.now() + 30_000).toISOString(), retryAfterSeconds: 30 });
+  assert.equal(codeRow("test-a")!.usedAt, new Date().toISOString()); assert.equal(events().length, 1);
+
+  // Recording the good scan clears the four wrong codes its lookup saw, not the fifth or the wait the fifth started.
+  assert.deepEqual([kioskRow(kiosk.kioskId).failures, kioskRow(kiosk.kioskId).throttleUntil], [1, new Date(Date.now() + 30_000).toISOString()]);
+  const sixth = await scan(kiosk, { discordCode: "000000" }); assert.equal(sixth.status, 429);
+  assert.deepEqual(await json(sixth), { error: "Too many wrong codes. Try again in 30 seconds.", code: "code_throttled", retryAt: new Date(Date.now() + 30_000).toISOString(), retryAfterSeconds: 30 });
+  // After the wait the count goes on from the one wrong code after the lookup: the next wrong codes are free again.
+  context.mock.timers.tick(30_000);
+  assert.deepEqual(await json(await scan(kiosk, { discordCode: "000000" })), invalid);
+  assert.deepEqual([kioskRow(kiosk.kioskId).failures, kioskRow(kiosk.kioskId).throttleUntil], [2, null]);
+});
+
 test("wrong codes are throttled per kiosk: five free, then 30 s, 60 s and 5 minutes, until a correct code", async (context) => {
   const { database, pairWeb, setMethod, newCode, scan, codeRow, kioskRow } = await fixture(context);
   const kiosk = await pairWeb("Test Web Kiosk A"), other = await pairWeb("Test Web Kiosk B");

@@ -11,6 +11,7 @@ Every release tag must have a matching `vX.Y.Z.md` or `vX.Y.Z-beta.N.md` file in
 
 ## LancerLogin 2 beta releases
 
+- [v2.1.0-beta.13](v2.1.0-beta.13.md) - Notion comments show the module's name instead of "Unnamed Bot", with a name each module can let an Admin change
 - [v2.1.0-beta.12](v2.1.0-beta.12.md) - A shared Notion connection for plugins, Discord events kept when the bot's credentials change, a Discord calendar hold with Retry failed delivery, and Integrations that load when credentials can't be read
 - [v2.1.0-beta.11](v2.1.0-beta.11.md) - Backups and restores in parts, calendar events sent in the background, a one-time start-date correction, a health check after install or upgrade, and Pi kiosk reader, Wi-Fi and power-cut fixes
 - [v2.1.0-beta.10](v2.1.0-beta.10.md) - PIN requests in the top bar, latest beta from the install workflow without the token, free-plan backups, the Pi kiosk's Wi-Fi keyboard and logos of any shape

@@ -21,7 +21,7 @@ const manifest = {
     ],
   }],
   // One optional Notion database. It declares no pages.trash, so tests can confirm Core refuses an undeclared operation.
-  notion: { users: ["list"], bindings: [{ id: "items", label: "Example items database", reason: "Example items are copied to this Notion database", required: false, kind: "data_source", operations: ["query", "pages.create", "pages.update"] }] },
+  notion: { users: ["list"], bindings: [{ id: "items", label: "Example items database", reason: "Example items are copied to this Notion database", required: false, kind: "data_source", operations: ["query", "pages.create", "pages.update", "comments.create"] }] },
   navigation: [{ label: "Example", path: "/example" }],
   settings: [{ label: "Example", path: "/settings/example" }],
   setup: { version: 1, steps: [{ id: "catalog", label: "First Example item", required: true }] },

@@ -530,7 +530,7 @@ test("schema 52 backups carry each kiosk's Discord code setting; codes and the t
   database.raw.exec("UPDATE kiosks SET discord_code_failures = 6, discord_code_throttle_until = '2026-09-30T12:05:00.000Z'");
   const exported = await call("/admin/data/backup?scope=installation"); assert.equal(exported.status, 200, await exported.clone().text());
   const backup = await exported.json() as any;
-  assert.equal(backup.schemaVersion, 53);
+  assert.equal(backup.schemaVersion, 54);
   assert.deepEqual([backup.tables.kiosks[0].discord_code, backup.tables.kiosks[0].discord_code_backup], [1, "always"]);
   assert.equal("discord_code_failures" in backup.tables.kiosks[0], false); assert.equal("discord_code_throttle_until" in backup.tables.kiosks[0], false);
   assert.equal("discord_kiosk_codes" in backup.tables, false, "codes last two minutes and never travel");

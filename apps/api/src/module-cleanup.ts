@@ -164,6 +164,10 @@ async function finish(db: D1Database, state: DueState, token: string, now: Date,
     db.prepare(`DELETE FROM notion_bindings WHERE installation_id=? AND module_id=?
       AND EXISTS(SELECT 1 FROM audit_log WHERE id=? AND installation_id=?)`)
       .bind(state.installationId, state.moduleId, auditId, state.installationId),
+    // So does the name on its Notion comments; enabling it again comments under its own label.
+    db.prepare(`DELETE FROM notion_comment_names WHERE installation_id=? AND module_id=?
+      AND EXISTS(SELECT 1 FROM audit_log WHERE id=? AND installation_id=?)`)
+      .bind(state.installationId, state.moduleId, auditId, state.installationId),
   ]);
   if (results.slice(0, 4).some((result) => result.meta?.changes !== 1)) return { status: "retry-required" };
   return { status: "deleted" };

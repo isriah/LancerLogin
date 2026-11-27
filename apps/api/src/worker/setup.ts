@@ -170,8 +170,9 @@ export async function updateInfo(request: Request, env: Env): Promise<Response> 
   await requireRole(request, env, ["admin"]);
   const repository = env.UPDATE_REPOSITORY && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.UPDATE_REPOSITORY) && env.UPDATE_REPOSITORY.toLowerCase() !== "isriah/lancerlogin" ? env.UPDATE_REPOSITORY : undefined;
   const workflowUrl = repository ? `https://github.com/${repository}/actions/workflows/upgrade-web.yml` : env.UPDATE_WORKFLOW_URL;
-  if (!workflowUrl) throw new HttpError(503, "The private deployment workflow is not configured");
-  return response({ releaseVersion: env.RELEASE_VERSION ?? "development", workflowUrl });
+  // No workflow address is an ordinary answer: the dashboard reads this on every page to know the running release, and
+  // Settings > Updates explains that dashboard updates are not set up.
+  return response({ releaseVersion: env.RELEASE_VERSION ?? "development", ...(workflowUrl ? { workflowUrl } : {}) });
 }
 export async function discoverRelease(request: Request, env: Env): Promise<Response> {
   await requireRole(request, env, ["admin"]);

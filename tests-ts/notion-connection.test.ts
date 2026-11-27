@@ -11,7 +11,7 @@ import { encryptIntegration, moduleCredentials } from "../apps/api/src/integrati
 import { HttpError } from "../apps/api/src/http-error.ts";
 import { NotionError, notionDefaultRetryAfterMs, notionMaximumRetryAfterMs, notionRequest, notionRetryAfterMs, notionTimeoutMs, notionVersion } from "../apps/api/src/notion-client.ts";
 import {
-  notionCallsPerInvocation, notionIntegrationStatus, notionService, parseNotionCapabilities, removeNotionBinding, removeNotionConnection, saveNotionConnection, setNotionBinding,
+  notionCallsPerInvocation, notionCommentName, notionIntegrationStatus, notionService, parseNotionCapabilities, removeNotionBinding, removeNotionConnection, saveNotionConnection, setNotionBinding, setNotionCommentName,
   withoutUserEmails, type NotionDeps, type NotionLogEntry,
 } from "../apps/api/src/module-notion.ts";
 import { SchedulerBudget, SchedulerBudgetError } from "../apps/api/src/scheduler-budget.ts";
@@ -256,7 +256,7 @@ test("a page Core returned is acted on directly; any other page costs one read, 
   await service.trashPage("orders", page(2).replaceAll("-", "").toUpperCase());
   assert.deepEqual(since(before), [`PATCH /pages/${page(1)}`, "POST /comments", `PATCH /pages/${page(2)}`], "a known page costs no extra request");
   assert.deepEqual(fixture.notion.calls[before]!.body, { properties: { Status: { status: { name: "Ordered" } } } }, "an update sends only properties");
-  assert.deepEqual(fixture.notion.calls[before + 1]!.body, { parent: { page_id: page(2) }, rich_text: [{ text: { content: "Synthetic comment" } }] });
+  assert.deepEqual(fixture.notion.calls[before + 1]!.body, { parent: { page_id: page(2) }, rich_text: [{ text: { content: "Synthetic comment" } }], display_name: { type: "custom", custom: { name: "Part Requests" } } });
   assert.deepEqual(fixture.notion.calls[before + 2]!.body, { in_trash: true }, "a trash sends only in_trash");
 
   // Miss: a page this invocation has not seen costs one read of its parent, once. What an earlier invocation learned
@@ -716,4 +716,82 @@ test("an Admin chooses a database only for a declared binding, and only one the 
   assert.equal(await removeNotionBinding(fixture.deps, "part-requests", "orders"), false);
   await assert.rejects(removeNotionBinding(fixture.deps, "Part Requests", "orders"), (error: unknown) => error instanceof HttpError && error.status === 404);
   assert.equal(fixture.rows("SELECT * FROM notion_bindings").length, 0);
+});
+
+test("each module's comments carry the name an Admin set for that module, or its label", async () => {
+  const fixture = setup((call) => {
+    if (call.path === "/comments" && call.method === "POST") return { status: 200, body: { object: "comment", id: uuid("e", 1) } };
+    if (call.path === `/pages/${page(1)}`) return { status: 200, body: pageIn(page(1), ordersSource) };
+    return undefined;
+  });
+  // Three modules that may comment, and the two from above that may not (Chores declared no comments; Attendance no Notion).
+  const commenting = (id: string, label: string) => ({ id, label, available: true, notion: { bindings: [{ id: "log", label: `${label} log`, reason: "Synthetic", required: true, kind: "data_source", operations: ["query", "comments.create"] }] } satisfies ModuleNotionDefinition });
+  const installed = [modules[0]!, commenting("test-inventory", "Test Inventory"), commenting("test-tools", "Test Tools"), modules[1]!, modules[2]!];
+  await fixture.connect(); fixture.bind("part-requests", "orders"); fixture.bind("test-inventory", "log"); fixture.bind("test-tools", "log");
+  let batches = 0; const batch = fixture.db.batch.bind(fixture.db);
+  fixture.db.batch = ((statements: Parameters<typeof batch>[0]) => { batches += 1; return batch(statements); }) as typeof fixture.db.batch;
+  /** The display name on the comment a new invocation of the module posts. */
+  const posted = async (moduleId: string, definition: { label?: string; notion?: ModuleNotionDefinition } | undefined = installed.find((module) => module.id === moduleId)) => {
+    const before = fixture.notion.calls.length;
+    await fixture.service(moduleId, definition as never).createComment(moduleId === "part-requests" ? "orders" : "log", page(1), { richText: [{ text: { content: "Synthetic comment" } }] });
+    const calls = fixture.notion.calls.slice(before).filter((call) => call.path === "/comments");
+    assert.equal(calls.length, 1);
+    return calls[0]!.body.display_name;
+  };
+  const named = (name: string) => ({ type: "custom", custom: { name } });
+  const set = (moduleId: string, name: unknown) => setNotionCommentName(fixture.deps, installed, moduleId, { name });
+  const stored = () => Object.fromEntries(fixture.rows<{ module_id: string; name: string }>("SELECT module_id,name FROM notion_comment_names ORDER BY module_id").map((row) => [row.module_id, row.name]));
+
+  // With nothing set every module comments under its own label, and the name costs no query beyond the invocation's one read.
+  const reads = fixture.db.reads;
+  assert.deepEqual(await posted("part-requests"), named("Part Requests"));
+  assert.equal(batches, 1, "the connection, the bindings and the name are read together"); assert.equal(fixture.db.reads, reads, "and nothing else is read");
+  assert.deepEqual(await posted("test-inventory"), named("Test Inventory"));
+  assert.deepEqual(await posted("part-requests", { label: `  ${"L".repeat(120)}  `, notion: declaration }), named("L".repeat(100)), "a long label is cut to what an Admin could set");
+  assert.deepEqual(await posted("part-requests", { notion: declaration }), named("LancerLogin"), "Notion refuses an empty name, so a module without a label still sends one");
+  assert.deepEqual(await notionCommentName(fixture.deps, installed, "part-requests"), { moduleId: "part-requests", label: "Part Requests", name: "" });
+
+  // Two modules get different names; the third is left blank and keeps its label. Names are trimmed.
+  const connectionBefore = fixture.connection();
+  assert.equal(await set("part-requests", "  Test Team 0000  "), "set");
+  assert.equal(await set("test-inventory", "Test Stockroom"), "set");
+  assert.deepEqual(stored(), { "part-requests": "Test Team 0000", "test-inventory": "Test Stockroom" });
+  assert.deepEqual(await notionCommentName(fixture.deps, installed, "part-requests"), { moduleId: "part-requests", label: "Part Requests", name: "Test Team 0000" });
+  assert.deepEqual(await notionCommentName(fixture.deps, installed, "test-tools"), { moduleId: "test-tools", label: "Test Tools", name: "" });
+  batches = 0;
+  assert.deepEqual(await posted("part-requests"), named("Test Team 0000"));
+  assert.equal(batches, 1, "a set name arrives in the same read");
+  assert.deepEqual(await posted("test-inventory"), named("Test Stockroom"));
+  assert.deepEqual(await posted("test-tools"), named("Test Tools"));
+  const connectionAfter = fixture.connection()!;
+  assert.deepEqual([connectionAfter.ciphertext, connectionAfter.key_version, connectionAfter.revision], [connectionBefore!.ciphertext, connectionBefore!.key_version, connectionBefore!.revision], "a name changes nothing on the connection: the token and its revision stay");
+  assert.equal(fixture.notion.calls.some((call) => call.path.startsWith("/users")), false, "setting a name asks Notion nothing");
+  assert.equal(await set("part-requests", "Test Team 0000"), "unchanged");
+  assert.equal(await set("part-requests", "N".repeat(100)), "set"); assert.deepEqual(await posted("part-requests"), named("N".repeat(100)));
+
+  // Refused: too long, not text, more than one line, another field, or a module that cannot comment.
+  for (const bad of ["N".repeat(101), ` ${"N".repeat(101)} `, 7, null, true, ["Test"], "Test\nTeam", undefined]) await assert.rejects(set("part-requests", bad), (error: unknown) => error instanceof HttpError && error.status === 400, JSON.stringify(bad));
+  for (const bad of [null, [], "Test", { name: "Test", revision: 1 }]) await assert.rejects(setNotionCommentName(fixture.deps, installed, "part-requests", bad), (error: unknown) => error instanceof HttpError && error.status === 400, JSON.stringify(bad));
+  for (const moduleId of ["chores", "attendance", "missing", "Part Requests"]) {
+    await assert.rejects(set(moduleId, "Test Team"), (error: unknown) => error instanceof HttpError && error.status === 404, moduleId);
+    await assert.rejects(notionCommentName(fixture.deps, installed, moduleId), (error: unknown) => error instanceof HttpError && error.status === 404, moduleId);
+  }
+  assert.equal(await set("test-tools", "Test Team"), "set");
+  await assert.rejects(setNotionCommentName(fixture.deps, installed.map((module) => ({ ...module, available: false })), "part-requests", { name: "Test Team" }), (error: unknown) => error instanceof HttpError && error.status === 404);
+  assert.deepEqual(stored(), { "part-requests": "N".repeat(100), "test-inventory": "Test Stockroom", "test-tools": "Test Team" });
+
+  // Blank clears one module's name and leaves the others.
+  assert.equal(await set("part-requests", "   "), "cleared"); assert.equal(await set("part-requests", ""), "unchanged");
+  assert.equal(await set("test-tools", ""), "cleared");
+  assert.deepEqual(stored(), { "test-inventory": "Test Stockroom" });
+  assert.deepEqual(await posted("part-requests"), named("Part Requests"));
+  assert.deepEqual(await posted("test-inventory"), named("Test Stockroom"));
+
+  // The name belongs to the module: clearing its database or removing the token keeps it, and it can still be changed.
+  assert.equal(await removeNotionBinding(fixture.deps, "test-inventory", "log"), true);
+  await removeNotionConnection(fixture.deps);
+  assert.deepEqual(stored(), { "test-inventory": "Test Stockroom" });
+  assert.equal(await set("part-requests", "Test Team 0000"), "set");
+  await fixture.connect(); fixture.bind("test-inventory", "log");
+  assert.deepEqual(await posted("test-inventory"), named("Test Stockroom")); assert.deepEqual(await posted("part-requests"), named("Test Team 0000"));
 });

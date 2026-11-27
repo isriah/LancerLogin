@@ -1,7 +1,7 @@
 import { calendarCatchUp, calendarRemovalDisconnectStatements, calendarRemovalStatusSql, discordCalendarConnect, discordCalendarLeave, discordCalendarServerForget, discordCalendarServerRecord, discordCredentialsStill, type CalendarProvider } from "../calendar-queue.ts";
 import { decryptIntegration } from "../integration-crypto.ts";
 import { clearFirstCache, firstDataService, firstIntegrationStatus, removeFirstCredential, saveFirstCredential } from "../first-data.ts";
-import { notionIntegrationStatus, removeNotionBinding, removeNotionConnection, saveNotionConnection, setNotionBinding } from "../module-notion.ts";
+import { notionCommentName, notionIntegrationStatus, removeNotionBinding, removeNotionConnection, saveNotionConnection, setNotionBinding, setNotionCommentName } from "../module-notion.ts";
 import { type D1Database, type D1Result } from "../d1-usage.ts";
 import { HttpError } from "../http-error.ts";
 import { bundledModuleRegistry } from "../../../../packages/shared/src/module-platform.ts";
@@ -254,4 +254,20 @@ export async function completeResendVerification(request: Request, env: Env): Pr
   const challenge = await db.prepare("SELECT challenge_hash AS challengeHash, target, expires_at AS expiresAt FROM integration_verification_challenges WHERE installation_id = 'primary' AND provider = 'resend'").first<{ challengeHash: string; target: string; expiresAt: string }>();
   if (!challenge || challenge.expiresAt <= new Date().toISOString() || challenge.challengeHash !== await sha256(code)) throw new HttpError(400, "The verification code is invalid or expired");
   const verifiedAt = await markIntegrationVerified(db, "resend", principal.userId, { target: challenge.target }); return response({ provider: "resend", configured: true, state: "configured", verifiedAt });
+}
+
+/**
+ * The name Notion shows on one module's comments, for the SDK's NotionCommentNameField on that module's settings page.
+ * Admin only, changes from the dashboard origin only, each change audited. A module that declared no `comments.create`
+ * answers 404. GET is one query; PUT is a write, its audit row and the read back.
+ */
+export async function notionCommentNameSetting(request: Request, env: Env, moduleId: string): Promise<Response> {
+  const principal = await requireRole(request, env, ["admin"]); const deps = notionDeps(env);
+  if (request.method !== "GET" && request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new HttpError(403, "Notion changes require the dashboard origin");
+  const modules = bundledModuleRegistry.modules;
+  if (request.method === "PUT") {
+    const change = await setNotionCommentName(deps, modules, moduleId, await parseJson(request, 1024));
+    if (change !== "unchanged") await writeAudit(deps.db, principal, `integration.notion_comment_name_${change}`, "integration", `notion:${moduleId}`);
+  }
+  return response(await notionCommentName(deps, modules, moduleId));
 }

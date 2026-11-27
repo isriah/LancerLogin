@@ -37,7 +37,7 @@ import { sendAttendanceEmail } from "./worker/email.ts";
 import { googleCalendarCallback, googleCalendarConfiguration, googleCalendarStart, listGoogleCalendars, retryGoogleCalendarOperations, selectGoogleCalendar, syncAllGoogleCalendarMeetings } from "./worker/google-calendar.ts";
 import { googleCallback, googleStart } from "./worker/google-sign-in.ts";
 import { providerFrom, requireIntegrationConfigured } from "./worker/integration-support.ts";
-import { completeResendVerification, discordAnomalyReportSettings, discordChannelManagerSettings, firstIntegration, integrationCapabilities, integrationConfiguration, integrationsStatus, notionIntegration, startResendVerification } from "./worker/integrations.ts";
+import { completeResendVerification, discordAnomalyReportSettings, discordChannelManagerSettings, firstIntegration, integrationCapabilities, integrationConfiguration, integrationsStatus, notionCommentNameSetting, notionIntegration, startResendVerification } from "./worker/integrations.ts";
 import { completeKioskCommand, dashboardKioskEnrollment, kioskAuthenticationConfiguration, kioskCommandStatus, kioskConfiguration, kioskEnrollmentProgress, kioskFor, kioskHeartbeat, kioskRoster, kioskStatus, manageKiosk, pairingCodes, pendingKioskCommand, queueKioskCommand, redeemPairingCode } from "./worker/kiosks.ts";
 import { attendancePolicies, labelMembership, labelTarget, labels, updateLabel } from "./worker/labels.ts";
 import { createMeetingWeightCategory, listMeetingWeightCategories, reorderMeetingWeightCategories, updateMeetingWeightCategory } from "./worker/meeting-weights.ts";
@@ -117,6 +117,7 @@ const worker = { async fetch(request: Request, env: Env, context?: WorkerContext
     else if (url.pathname === "/admin/modules" && request.method === "PUT") result = await modulePlatform(request, env);
     else if (url.pathname === "/admin/modules/grants" && ["GET", "POST"].includes(request.method) || url.pathname === "/admin/modules/grants/revoke" && request.method === "POST") result = await moduleInterfaceGrants(request, env, request.method === "GET" ? "list" : url.pathname.endsWith("/revoke") ? "revoke" : "grant");
     else if (/^\/admin\/modules\/[^/]+\/report-baseline$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await moduleReportBaseline(request, env, decodeURIComponent(url.pathname.split("/")[3]));
+    else if (/^\/admin\/modules\/[^/]+\/notion-comment-name$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await notionCommentNameSetting(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/modules\/[^/]+\/setup$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await moduleSetup(request, env, decodeURIComponent(url.pathname.split("/")[3]));
     else if (/^\/admin\/modules\/assignments\/[^/]+$/.test(url.pathname) && ["GET", "PUT"].includes(request.method)) result = await moduleAssignments(request, env, decodeURIComponent(url.pathname.split("/")[4]));
     else if (url.pathname.startsWith("/module-setup/attendance/")) { const principal = await requireRole(request, env, ["admin"]); result = await attendanceSetupRoute(request, requireDatabase(env), principal.userId); }

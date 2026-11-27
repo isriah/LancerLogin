@@ -240,6 +240,11 @@ test("only an Admin can discover the private deployment updater", async () => {
   const result = await worker.fetch(request("/admin/update-info", undefined, { cookie: await sessionCookie("admin") }), env);
   assert.equal(result.status, 200);
   assert.deepEqual(await result.json(), { releaseVersion: "development", workflowUrl });
+  // An installation with no deployment workflow still says which release it runs. Its dashboard reads this on every
+  // page, so "not set up" is an ordinary answer without a workflow address, not a server error.
+  const unconfigured = await worker.fetch(request("/admin/update-info", undefined, { cookie: await sessionCookie("admin") }), { ...env, UPDATE_WORKFLOW_URL: undefined } as unknown as Env);
+  assert.equal(unconfigured.status, 200);
+  assert.deepEqual(await unconfigured.json(), { releaseVersion: "development" });
 });
 
 test("only an Admin can change settings, dashboard access, or queue kiosk updates", async () => {
@@ -3508,7 +3513,7 @@ test("roster backup and restore retain label definitions, dated history, and att
   database.rows.set("SELECT attendance_recent_days AS recentDays", { recentDays: 30, policyActivatedOn: "2026-09-22" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
   const exported = await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env); assert.equal(exported.status, 200);
-  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 53); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
+  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 54); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
   assert.deepEqual(Object.keys(backup.tables).sort(), ["label_attendance_rules", "label_weekly_targets", "member_label_changes", "member_labels", "members"]);
   assert.deepEqual(backup.tables.label_attendance_rules, [{ id: "class-rule", installation_id: "primary", label_id: "mentor:primary", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", excused_handling: "count_missed" }]);
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie }), env)).status, 200);
@@ -3528,7 +3533,7 @@ test("installation backup retains Discord role mappings while roster backup omit
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
   const roster = await (await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env)).json() as { tables: Record<string, unknown[]> };
-  assert.equal(installation.schemaVersion, 53); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.schemaVersion, 54); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
   assert.equal(installation.tables.saved_report_views.length, 1); assert.equal(installation.tables.saved_report_tabs.length, 1);
   assert.equal(Object.hasOwn(roster.tables, "discord_label_role_mappings"), false);
   assert.equal(Object.hasOwn(roster.tables, "saved_report_views"), false);
@@ -3765,7 +3770,7 @@ test("contest backups retain rejected submission history, default schema40 and r
   const history = JSON.stringify([{ messageId: "original-message", createdAt: "2026-10-15T10:00:00Z", status: "rejected", resolvedBy: "admin-1", resolvedAt: "2026-10-15T11:00:00Z", reviewNote: "Original review", submittedByDiscordUserId: "synthetic-discord" }]);
   database.lists.set("FROM discord_attendance_contests WHERE", [{ installation_id: "primary", meeting_id: "meeting", member_id: "member", message_id: "new-message", status: "open", resolved_by: null, resolved_at: null, created_at: "2026-10-15T12:00:00Z", submitted_by_discord_user_id: "synthetic-discord", review_note: null, prior_reviews_json: history }]);
   const backup = await (await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie }), env)).json() as any;
-  assert.equal(backup.schemaVersion, 53); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
+  assert.equal(backup.schemaVersion, 54); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
   const restore = (value: unknown) => worker.fetch(request("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup: value }, { cookie }), env);
   const restored = await restore(backup); assert.equal(restored.status, 200, await restored.clone().text());
   assert.ok(database.batches.at(-1)?.some(call => call.sql.includes("INSERT INTO discord_attendance_contests") && call.values.includes(history)));

@@ -86,7 +86,9 @@ What the card shows:
 - **What the token allows.** Notion has no way to list an integration's capabilities, so each of the five shows what LancerLogin has seen: **Working** after a module used it, **Refused by Notion** after Notion refused it, and **Not used yet** until either. Saving or checking the token tests **Read user information**; choosing a database tests **Read content**. To fix a refusal, change the capability in the integration's settings in Notion.
 - **Databases.** One row for each database an installed module declared, with **Chosen** or **Not chosen**. **Clear** takes a database away from its module.
 
-When Notion asks LancerLogin to slow down, every module waits until the time Notion names, and the card says when calls resume. Entire-installation backups carry the encrypted token and the chosen databases. A token restored onto an installation with a different encryption key shows **Saved, but can't be read**; enter the token again and save.
+Comments a module adds in Notion appear under that module's name, such as **Part Requests**. Notion adds the connection it came through after the name. A module that comments can offer **Name shown on comments** on its own settings page to use another name for its comments; leave it blank to use the module's name. Removing the token or a chosen database keeps that name, and deleting the module's data removes it.
+
+When Notion asks LancerLogin to slow down, every module waits until the time Notion names, and the card says when calls resume. Entire-installation backups carry the encrypted token, the chosen databases and each module's comment name. A token restored onto an installation with a different encryption key shows **Saved, but can't be read**; enter the token again and save.
 
 ## Discord
 

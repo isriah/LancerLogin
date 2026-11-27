@@ -76,7 +76,10 @@ export type NotionService = {
   updatePage(bindingId: string, pageId: string, input: { readonly properties: Readonly<Record<string, unknown>> }): Promise<NotionJson>;
   /** Move a row of the bound database to Notion's trash. Needs `pages.trash`. */
   trashPage(bindingId: string, pageId: string): Promise<void>;
-  /** Comment on a row of the bound database. Needs `comments.create`. An uncertain failure may have posted it. */
+  /**
+   * Comment on a row of the bound database. Needs `comments.create`. An uncertain failure may have posted it. Notion
+   * shows the comment under the name an Admin set for this module, else the module's label (SDK 1.9.0).
+   */
   createComment(bindingId: string, pageId: string, input: { readonly richText: readonly unknown[] }): Promise<{ readonly id: string | null }>;
   readonly users: {
     /** One page of workspace users, bots included (guests are not listed by Notion). Needs `users: ["list"]`. */
@@ -112,17 +115,25 @@ export type NotionDeps = {
   readonly deliveryPausedUntil?: () => Promise<number | null>;
   readonly log?: (entry: NotionLogEntry) => void;
 };
-export type NotionCaller = { readonly moduleId: string; readonly definition?: Pick<ModuleDefinition, "notion"> };
+/** `definition.label` names the module on the comments it posts until an Admin sets a comment name for it. */
+export type NotionCaller = { readonly moduleId: string; readonly definition?: Pick<ModuleDefinition, "notion"> & { readonly label?: string } };
 
 const installationId = "primary";
 const unknownCapabilities: NotionCapabilities = Object.freeze({ read: "unknown", insert: "unknown", update: "unknown", comment: "unknown", users: "unknown", email: "unknown" });
 const bindingIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const moduleIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const maximumBodyBytes = 200_000;
+/** The longest comment name an Admin may set for a module, and the most of a module's label a comment carries. */
+export const notionCommentNameLength = 100;
+/** The name on a comment when neither an Admin's name nor the module's label is usable; Notion refuses an empty one. */
+const fallbackCommentName = "LancerLogin";
+/** Whether a module declared `comments.create` on any of its Notion databases. */
+const commentsDeclared = (notion: ModuleDefinition["notion"]) => Boolean(notion?.bindings.some((binding) => binding.operations.includes("comments.create")));
 
 type ConnectionRow = { ciphertext: string; iv: string; enabled: number; botName: string; workspaceName: string; checkedAt: string; capabilitiesJson: string; pausedUntilMs: number; revision: number };
 type BindingRow = { moduleId: string; bindingId: string; databaseId: string; dataSourceId: string; name: string };
 const connectionSelect = "SELECT ciphertext,iv,enabled,bot_name AS botName,workspace_name AS workspaceName,checked_at AS checkedAt,capabilities_json AS capabilitiesJson,paused_until_ms AS pausedUntilMs,revision FROM notion_connection WHERE installation_id=?";
+const commentNameSelect = "SELECT name FROM notion_comment_names WHERE installation_id=? AND module_id=?";
 const bindingSelect = "SELECT module_id AS moduleId,binding_id AS bindingId,database_id AS databaseId,data_source_id AS dataSourceId,name FROM notion_bindings WHERE installation_id=?";
 
 /** The saved capability record, with anything missing or malformed read as unknown. */
@@ -229,7 +240,8 @@ export function notionService(deps: NotionDeps, caller: NotionCaller): NotionSer
   const withEmail = Boolean(declared?.users?.includes("email"));
   /** What a module receives: Notion's JSON, without email addresses unless the module declared `email`. */
   const shared = <T,>(value: T): T => withEmail ? value : withoutUserEmails(value);
-  type Loaded = { connection: ConnectionRow | undefined; token: string | undefined; bindings: Map<string, BindingRow>; capabilities: Record<NotionCapability, NotionCapabilityState> };
+  type Loaded = { connection: ConnectionRow | undefined; token: string | undefined; bindings: Map<string, BindingRow>; capabilities: Record<NotionCapability, NotionCapabilityState>; commentName: string | undefined };
+  const comments = commentsDeclared(declared);
   let loading: Promise<Loaded> | undefined;
   let calls = 0;
   let pausedUntil = 0;
@@ -241,11 +253,15 @@ export function notionService(deps: NotionDeps, caller: NotionCaller): NotionSer
     pages.add(id);
   };
 
-  /** The connection and this module's bindings, read together once per invocation: one D1 query. */
+  /**
+   * The connection and this module's bindings, read together once per invocation: one D1 query. A module that may
+   * comment has its comment name read in the same batch, so naming a comment costs no query of its own.
+   */
   const load = (): Promise<Loaded> => loading ??= (async () => {
-    const [connections, bindings] = await deps.db.batch([
+    const [connections, bindings, names] = await deps.db.batch([
       deps.db.prepare(connectionSelect).bind(installationId),
       deps.db.prepare(`${bindingSelect} AND module_id=?`).bind(installationId, caller.moduleId),
+      ...(comments ? [deps.db.prepare(commentNameSelect).bind(installationId, caller.moduleId)] : []),
     ]);
     const connection = rowsOf<ConnectionRow>(connections)[0];
     pausedUntil = Math.max(pausedUntil, Number(connection?.pausedUntilMs ?? 0));
@@ -253,6 +269,7 @@ export function notionService(deps: NotionDeps, caller: NotionCaller): NotionSer
       connection, token: connection ? await tokenOf(deps.credentials, connection.ciphertext, connection.iv) : undefined,
       bindings: new Map(rowsOf<BindingRow>(bindings).map((row) => [row.bindingId, row])),
       capabilities: { ...parseNotionCapabilities(connection?.capabilitiesJson) },
+      commentName: rowsOf<{ name: string }>(names)[0]?.name,
     };
   })().catch((error) => { loading = undefined; throw error; });
 
@@ -405,7 +422,10 @@ export function notionService(deps: NotionDeps, caller: NotionCaller): NotionSer
       await requireDeliveryRunning();
       const row = await bound(bindingId, "comments.create");
       await requirePageInScope(bindingId, row, id, "comments.create");
-      const comment = await send("comments.create", "comment", { path: "/comments", method: "POST", body: { parent: { page_id: id }, rich_text: richText }, creates: true });
+      // Without a display name Notion shows "Unnamed Bot". The name is the one an Admin set for this module, else the
+      // module's label; it was read with the bindings above.
+      const name = (await load()).commentName?.trim() || (typeof caller.definition?.label === "string" ? caller.definition.label.trim().slice(0, notionCommentNameLength).trim() : "") || fallbackCommentName;
+      const comment = await send("comments.create", "comment", { path: "/comments", method: "POST", body: { parent: { page_id: id }, rich_text: richText, display_name: { type: "custom", custom: { name } } }, creates: true });
       return { id: formatNotionId(comment.id) ?? null };
     },
     users: Object.freeze({
@@ -676,4 +696,50 @@ export async function removeNotionBinding(deps: NotionDeps, moduleId: string, bi
   if (!moduleIdPattern.test(moduleId) || moduleId.length > 64 || !bindingIdPattern.test(bindingId) || bindingId.length > 40) throw new HttpError(404, "That module did not declare this Notion database");
   const result = await deps.db.prepare("DELETE FROM notion_bindings WHERE installation_id=? AND module_id=? AND binding_id=?").bind(installationId, moduleId, bindingId).run();
   return result.meta?.changes === 1;
+}
+
+// The name Notion shows on a module's comments, set on that module's settings page (the SDK's NotionCommentNameField).
+// It belongs to the module, not to the connection: removing the token or a chosen database keeps it, as the module's
+// settings page still shows it; deleting the module's data removes it (module-cleanup.ts).
+
+export type NotionCommentNameStatus = {
+  readonly moduleId: string;
+  /** The module's label: the name its comments carry while `name` is empty. */
+  readonly label: string;
+  /** The name an Admin set, or "" when there is none. */
+  readonly name: string;
+};
+function commentingModule(modules: NotionModules, moduleId: string) {
+  const module = modules.find((item) => item.id === moduleId && item.available);
+  if (!module || !commentsDeclared(module.notion)) throw new HttpError(404, "This module does not comment in Notion");
+  return module;
+}
+
+/** `GET /admin/modules/{moduleId}/notion-comment-name`, for a module that declared `comments.create`: one query. */
+export async function notionCommentName(deps: NotionDeps, modules: NotionModules, moduleId: string): Promise<NotionCommentNameStatus> {
+  const module = commentingModule(modules, moduleId);
+  const row = await deps.db.prepare(commentNameSelect).bind(installationId, moduleId).first<{ name: string }>();
+  return { moduleId, label: module.label, name: row?.name ?? "" };
+}
+
+/**
+ * `PUT /admin/modules/{moduleId}/notion-comment-name` with `{ name }`: the name Notion shows on that module's comments,
+ * trimmed, one line, at most 100 characters. An empty name removes it, and the module's label is used again. Nothing
+ * is sent to Notion and the token is not needed. `unchanged` means the stored name was already that.
+ */
+export async function setNotionCommentName(deps: NotionDeps, modules: NotionModules, moduleId: string, value: unknown): Promise<"set" | "cleared" | "unchanged"> {
+  commentingModule(modules, moduleId);
+  if (!isObject(value) || Object.keys(value).some((key) => key !== "name")) throw new HttpError(400, "Send only name");
+  if (typeof value.name !== "string") throw new HttpError(400, "The name shown on comments must be text");
+  const name = value.name.trim();
+  if (name.length > notionCommentNameLength) throw new HttpError(400, `The name shown on comments can be at most ${notionCommentNameLength} characters`);
+  if (/[\u0000-\u001f\u007f]/.test(name)) throw new HttpError(400, "The name shown on comments must be one line of text");
+  if (!name) {
+    const removed = await deps.db.prepare("DELETE FROM notion_comment_names WHERE installation_id=? AND module_id=?").bind(installationId, moduleId).run();
+    return removed.meta?.changes === 1 ? "cleared" : "unchanged";
+  }
+  const written = await deps.db.prepare(`INSERT INTO notion_comment_names(installation_id,module_id,name,updated_at) VALUES(?,?,?,?)
+    ON CONFLICT(installation_id,module_id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at WHERE notion_comment_names.name<>excluded.name`)
+    .bind(installationId, moduleId, name, new Date(deps.now()).toISOString()).run();
+  return written.meta?.changes === 1 ? "set" : "unchanged";
 }

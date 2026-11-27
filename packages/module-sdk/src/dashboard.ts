@@ -54,6 +54,12 @@ export { ReportingStartDateField } from "../../../apps/dashboard/src/reporting-s
  * choice. `onChanged` reports whether the binding has a database. Since module SDK 1.8.0.
  */
 export { NotionBindingField } from "../../../apps/dashboard/src/notion-binding-field.tsx";
+/**
+ * The name Notion shows on the module's comments, for an Admin-only settings page of a module that declared
+ * `comments.create` on a Notion database. Core stores the name and sends it with every comment the module posts through
+ * `services.notion`; left blank, comments carry the module's label. Since module SDK 1.9.0.
+ */
+export { NotionCommentNameField } from "../../../apps/dashboard/src/notion-comment-name-field.tsx";
 
 /**
  * The CSV import kit Core's roster and meeting imports use (SDK 1.4.0): delimited parsing (comma or tab, quotes, byte order

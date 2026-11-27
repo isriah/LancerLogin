@@ -15,8 +15,10 @@ import { omitContestResubmissionFields } from "./fixtures/backup-versions.ts";
 import { syntheticAddonModule, syntheticNotesModule } from "./fixtures/synthetic-plugin/external-manifests.ts";
 import { syntheticAddonApiModule, syntheticNotesApiModule } from "./fixtures/synthetic-plugin/external-modules.ts";
 
-// The envelope Core exports now, at schema 53.
+// The envelope Core exports now, at schema 54.
 const golden = JSON.parse(readFileSync(new URL("./fixtures/first-party-backup-envelope.json", import.meta.url), "utf8"));
+// The envelope Core exported at schema 53, before each module's Notion comment name joined installation backups.
+const schema53Golden = JSON.parse(readFileSync(new URL("./fixtures/first-party-backup-envelope-schema-53.json", import.meta.url), "utf8"));
 // The envelope Core exported at schemas 51 and 52, before Core's Notion connection joined installation backups. Schema 52
 // added two kiosk columns (migration 0100), which ownership metadata does not list, so its envelope is the schema 51 one.
 const schema52Golden = JSON.parse(readFileSync(new URL("./fixtures/first-party-backup-envelope-schema-52.json", import.meta.url), "utf8"));
@@ -44,6 +46,8 @@ const schema51 = (envelope: any) => ({ ...envelope, ownership: { ...envelope.own
 // Core tables added after the schema 52 envelope: the Notion connection and each module's chosen databases (schema 53, migration 0108).
 const notionTables = ["notion_connection", "notion_bindings"];
 const schema53 = (envelope: any) => ({ ...envelope, ownership: { ...envelope.ownership, core: { ...envelope.ownership.core, tables: envelope.ownership.core.tables.filter((table: string) => !notionTables.includes(table)) } }, tables: envelope.tables.filter((table: string) => !notionTables.includes(table)) });
+// Core tables added after the schema 53 envelope: the name on each module's Notion comments (schema 54, migration 0109).
+const schema54 = (envelope: any) => ({ ...envelope, ownership: { ...envelope.ownership, core: { ...envelope.ownership.core, tables: envelope.ownership.core.tables.filter((table: string) => table !== "notion_comment_names") } }, tables: envelope.tables.filter((table: string) => table !== "notion_comment_names") });
 const schema49 = (envelope: any) => ({ ...envelope, ownership: { ...envelope.ownership, core: { ...envelope.ownership.core, tables: envelope.ownership.core.tables.filter((table: string) => table !== "first_credentials") } }, tables: envelope.tables.filter((table: string) => table !== "first_credentials") });
 const without = (envelope: any, moduleId: string, prefix: string) => ({ ...envelope, ownership: { ...envelope.ownership, modules: envelope.ownership.modules.filter((module: { id: string }) => module.id !== moduleId) }, tables: envelope.tables.filter((table: string) => !table.startsWith(prefix)) });
 const pluginRegistry = createModuleRegistry([...firstPartyModules, syntheticNotesModule, syntheticAddonModule]);
@@ -65,20 +69,22 @@ test("plugin-free builds keep the first-party backup envelope and an empty plugi
   const db = new BackupDatabase(); t.after(() => db.raw.close()); const client = backupClient(worker, db);
   for (const scope of ["meetings", "roster", "installation"] as const) {
     const backup = await client.backup(scope);
-    assert.equal(backup.schemaVersion, 53);
-    assert.deepEqual(backup.ownership, golden[scope].ownership, `${scope} ownership matches the schema 53 envelope`);
+    assert.equal(backup.schemaVersion, 54);
+    assert.deepEqual(backup.ownership, golden[scope].ownership, `${scope} ownership matches the schema 54 envelope`);
     assert.deepEqual(Object.keys(backup.tables), golden[scope].tables);
     // Schema 43 differs from the schema 41 and 42 envelope only by Carpool, and schema 44 from schema 43 only by Outreach:
     // each moved into a plugin with its own section. Schema 48 differs from schema 47 only by the simulator's sessions, and
     // schema 49 from schema 48 only by the FIRST credentials, schema 50 from schema 49 only by the reporting start dates, and
-    // schema 51 from schema 50 only by the early arrival allowance, and schema 53 from schema 52 only by the Notion tables.
+    // schema 51 from schema 50 only by the early arrival allowance, and schema 53 from schema 52 only by the Notion tables, and
+    // schema 54 from schema 53 only by the Notion comment names.
     assert.deepEqual(without(historicalGolden[scope], "carpool", "carpool_"), schema43Golden[scope]);
     assert.deepEqual(without(schema43Golden[scope], "hour-tracking", "hours_"), schema44(schema47Golden[scope]));
     assert.deepEqual(schema48(schema47Golden[scope]), schema48Golden[scope]);
     assert.deepEqual(schema49(schema49Golden[scope]), schema48Golden[scope]);
     assert.deepEqual(schema50(schema50Golden[scope]), schema49Golden[scope]);
     assert.deepEqual(schema51(schema52Golden[scope]), schema50Golden[scope]);
-    assert.deepEqual(schema53(golden[scope]), schema52Golden[scope]);
+    assert.deepEqual(schema53(schema53Golden[scope]), schema52Golden[scope]);
+    assert.deepEqual(schema54(golden[scope]), schema53Golden[scope]);
     // Core still recognizes the historical metadata and Core-section tables of both modules exactly.
     assert.deepEqual(historicalGolden[scope].ownership.modules.slice(1), extractedModuleOwnership(scope, 42));
     assert.deepEqual(schema43Golden[scope].ownership.modules.slice(1), extractedModuleOwnership(scope, 43));
@@ -113,7 +119,7 @@ test("schema 50 installation backups carry the FIRST credential; older backups r
   db.raw.exec("INSERT INTO first_team_cache(installation_id,program,number,name,location,season,source,checked_ms) VALUES('primary','FRC','321','Test Robotics A','Testville, PA',2026,'events-api',1); INSERT INTO first_seasons VALUES('primary','FRC',2026,1); INSERT INTO first_requests VALUES('primary','events-api','synthetic',1)");
   const credential = db.rows("SELECT * FROM first_credentials")[0];
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 53);
+  assert.equal(backup.schemaVersion, 54);
   assert.deepEqual(backup.tables.first_credentials, [credential]);
   assert.equal(JSON.stringify(backup).includes("synthetic-frc-token"), false, "only the ciphertext travels");
   for (const table of ["first_team_cache", "first_seasons", "first_requests"]) assert.equal(table in backup.tables, false, `${table} is never backed up`);
@@ -135,7 +141,7 @@ test("schema 50 installation backups carry the FIRST credential; older backups r
   assert.equal(db.count("SELECT COUNT(*) AS n FROM first_credentials"), 0, "as for other added tables, a schema 48 backup's FIRST rows are ignored");
 });
 
-test("schema 53 installation backups carry the Notion connection and chosen databases; older backups restore without them", async (t) => {
+test("installation backups carry the Notion connection and chosen databases from schema 53 and each module's comment name from schema 54; older backups restore without them", async (t) => {
   const db = new BackupDatabase(); t.after(() => db.raw.close()); const client = backupClient(worker, db);
   // Encrypted under another installation's key, as a backup restored here would be: it travels, but cannot be read.
   const otherKey = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
@@ -145,14 +151,17 @@ test("schema 53 installation backups carry the Notion connection and chosen data
     VALUES('primary',?,?,3,0,'Test Bot','Test Workspace','2026-11-26T00:00:00.000Z','{"read":"ok","insert":"refused"}',99999999999999,4,'2026-11-26T00:00:00.000Z')`).run(encrypted.ciphertext, encrypted.iv);
   const bind = db.raw.prepare("INSERT INTO notion_bindings(installation_id,module_id,binding_id,database_id,data_source_id,name,revision,updated_at) VALUES('primary',?,?,?,?,'Test Orders',2,'2026-11-26T00:00:00.000Z')");
   bind.run("attendance", "orders", database, source); bind.run("part-requests", "orders", database, source);
+  db.raw.exec("INSERT INTO notion_comment_names(installation_id,module_id,name,updated_at) VALUES ('primary','attendance','Test Team 0000','2026-11-26T00:00:00.000Z'),('primary','part-requests','Test Parts Desk','2026-11-26T00:00:00.000Z')");
+  const commentName = db.rows("SELECT * FROM notion_comment_names WHERE module_id='attendance'")[0];
   const { paused_until_ms: _paused, ...connection } = db.rows("SELECT * FROM notion_connection")[0]!;
   const binding = db.rows("SELECT * FROM notion_bindings WHERE module_id='attendance'")[0];
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 53);
+  assert.equal(backup.schemaVersion, 54);
   assert.deepEqual(backup.tables.notion_connection, [connection], "the ciphertext, IV, switch and record travel; the rate-limit pause does not");
   assert.deepEqual(backup.tables.notion_bindings, [binding], "a module whose code is not in this build carries none of its choices");
+  assert.deepEqual(backup.tables.notion_comment_names, [commentName], "nor its comment name");
   assert.equal(JSON.stringify(backup).includes("ntn_synthetic_backup_token"), false, "only the ciphertext travels");
-  for (const scope of ["meetings", "roster"] as const) for (const table of ["notion_connection", "notion_bindings"]) assert.equal(table in (await client.backup(scope)).tables, false);
+  for (const scope of ["meetings", "roster"] as const) for (const table of ["notion_connection", "notion_bindings", "notion_comment_names"]) assert.equal(table in (await client.backup(scope)).tables, false);
   const invalid: ((copy: any) => void)[] = [
     (copy) => { copy.tables.notion_connection[0].ciphertext = ""; }, (copy) => { copy.tables.notion_connection[0].enabled = 2; }, (copy) => { copy.tables.notion_connection[0].key_version = 0; },
     (copy) => { copy.tables.notion_connection.push({ ...copy.tables.notion_connection[0] }); }, (copy) => { copy.tables.notion_connection[0].capabilities_json = "not json"; },
@@ -160,12 +169,16 @@ test("schema 53 installation backups carry the Notion connection and chosen data
     (copy) => { copy.tables.notion_connection[0].bot_name = "x".repeat(201); }, (copy) => { copy.tables.notion_connection[0].paused_until_ms = 5; },
     (copy) => { copy.tables.notion_bindings[0].database_id = "not-an-id"; }, (copy) => { copy.tables.notion_bindings[0].binding_id = "Orders"; },
     (copy) => { copy.tables.notion_bindings.push({ ...copy.tables.notion_bindings[0] }); }, (copy) => { copy.tables.notion_bindings[0].revision = -1; },
+    (copy) => { copy.tables.notion_comment_names[0].name = ""; }, (copy) => { copy.tables.notion_comment_names[0].name = "N".repeat(101); }, (copy) => { copy.tables.notion_comment_names[0].name = " Test "; },
+    (copy) => { copy.tables.notion_comment_names[0].name = 7; }, (copy) => { copy.tables.notion_comment_names[0].name = "Test\nTeam"; }, (copy) => { copy.tables.notion_comment_names[0].module_id = "Part Requests"; },
+    (copy) => { copy.tables.notion_comment_names.push({ ...copy.tables.notion_comment_names[0] }); }, (copy) => { copy.tables.notion_comment_names[0].installation_id = "other"; }, (copy) => { delete copy.tables.notion_comment_names; },
   ];
   for (const change of invalid) { const copy = structuredClone(backup); change(copy); assert.equal((await client.restore(copy)).status, 400, change.toString()); }
-  db.raw.exec("DELETE FROM notion_connection; DELETE FROM notion_bindings");
+  db.raw.exec("DELETE FROM notion_connection; DELETE FROM notion_bindings; DELETE FROM notion_comment_names");
   assert.equal((await client.restore(backup)).status, 200);
   assert.deepEqual(db.rows("SELECT * FROM notion_connection"), [{ ...connection, paused_until_ms: 0 }], "the connection restores unchanged, with no pause");
   assert.deepEqual(db.rows("SELECT * FROM notion_bindings"), [binding]);
+  assert.deepEqual(db.rows("SELECT * FROM notion_comment_names"), [commentName], "the comment name restores unchanged");
   // This installation's integration key cannot decrypt the restored token: saved, but unreadable until saved again.
   const status = await (await client.call("/admin/integrations/notion")).json() as Record<string, any>;
   assert.deepEqual({ saved: status.saved, readable: status.readable, enabled: status.enabled, capabilities: status.capabilities.insert }, { saved: true, readable: false, enabled: false, capabilities: "refused" });
@@ -174,12 +187,23 @@ test("schema 53 installation backups carry the Notion connection and chosen data
   db.raw.prepare("UPDATE notion_connection SET ciphertext=?,iv=?").run(readable.ciphertext, readable.iv);
   assert.equal(((await (await client.call("/admin/integrations/notion")).json()) as Record<string, any>).readable, true);
 
+  // A schema 53 backup carries the connection and the databases but no comment names: it restores with none.
+  const schema53Backup = structuredClone(backup); schema53Backup.schemaVersion = 53;
+  assert.equal((await client.restore(schema53Backup)).status, 400, "schema 53 ownership does not list the comment names");
+  omitContestResubmissionFields(schema53Backup);
+  assert.deepEqual(schema53Backup.ownership, schema53Golden.installation.ownership, "the shaped archive carries the schema 53 ownership");
+  assert.equal("notion_comment_names" in schema53Backup.tables, false);
+  const restored53 = await client.restore(schema53Backup); assert.equal(restored53.status, 200, await restored53.clone().text());
+  assert.deepEqual(db.rows("SELECT * FROM notion_connection"), [{ ...connection, paused_until_ms: 0 }]); assert.deepEqual(db.rows("SELECT * FROM notion_bindings"), [binding]);
+  assert.equal(db.count("SELECT COUNT(*) AS n FROM notion_comment_names"), 0, "a schema 53 backup restores with no comment names");
+
   const legacy = structuredClone(backup); legacy.schemaVersion = 52; omitContestResubmissionFields(legacy);
   assert.deepEqual(legacy.ownership, schema52Golden.installation.ownership, "the shaped archive carries the schema 52 ownership");
   assert.equal("notion_connection" in legacy.tables, false); assert.equal("notion_bindings" in legacy.tables, false);
   const restored = await client.restore(legacy); assert.equal(restored.status, 200, await restored.clone().text());
   assert.equal(db.count("SELECT COUNT(*) AS n FROM notion_connection"), 0, "an older backup restores with no Notion connection");
   assert.equal(db.count("SELECT COUNT(*) AS n FROM notion_bindings"), 0, "and with no chosen databases");
+  assert.equal(db.count("SELECT COUNT(*) AS n FROM notion_comment_names"), 0, "and with no comment names");
   const stray = structuredClone(legacy); stray.tables.notion_connection = backup.tables.notion_connection; stray.tables.notion_bindings = backup.tables.notion_bindings;
   assert.equal((await client.restore(stray)).status, 200);
   assert.equal(db.count("SELECT COUNT(*) AS n FROM notion_connection") + db.count("SELECT COUNT(*) AS n FROM notion_bindings"), 0, "as for other added tables, a schema 52 backup's Notion rows are ignored");

@@ -153,6 +153,7 @@ test("a composed plugin is migrated, registered, enabled, served, scheduled, bac
   db.raw.exec(`INSERT INTO notion_bindings(installation_id,module_id,binding_id,database_id,data_source_id,name,updated_at) VALUES
     ('primary','example','items','dddddddd-dddd-dddd-dddd-dddddddddd01','55555555-5555-5555-5555-555555555501','Test Items','2026-11-26T00:00:00.000Z'),
     ('primary','attendance','other','dddddddd-dddd-dddd-dddd-dddddddddd02','55555555-5555-5555-5555-555555555502','Test Other','2026-11-26T00:00:00.000Z')`);
+  db.raw.exec("INSERT INTO notion_comment_names(installation_id,module_id,name,updated_at) VALUES ('primary','example','Test Team 0000','2026-11-26T00:00:00.000Z'),('primary','attendance','Test Other Name','2026-11-26T00:00:00.000Z')");
   modules = await call("/platform/modules");
   modules = await call("/admin/modules", { method: "PUT", body: { enabled: ["attendance"], revision: modules.body.revision, confirmDisable: [{ moduleId: "example", generation }] } });
   assert.equal(modules.body.modules.find((module: any) => module.id === "example")?.phase, "retained");
@@ -162,6 +163,7 @@ test("a composed plugin is migrated, registered, enabled, served, scheduled, bac
   assert.equal(db.count("SELECT COUNT(*) AS n FROM example_items") + db.count("SELECT COUNT(*) AS n FROM example_requests"), 0);
   assert.equal(db.count("SELECT COUNT(*) AS n FROM platform_modules WHERE module_id='example' AND phase='deleted'"), 1);
   assert.deepEqual(db.rows("SELECT module_id, binding_id FROM notion_bindings"), [{ module_id: "attendance", binding_id: "other" }], "deleting a module's data removes its Notion database choices only");
+  assert.deepEqual(db.rows("SELECT module_id FROM notion_comment_names"), [{ module_id: "attendance" }], "and its comment name only");
   assert.equal(db.count("SELECT COUNT(*) AS n FROM members"), 1);
 });
 
@@ -230,7 +232,7 @@ test("a composed plugin looks up FIRST teams through Core, counted per visitor o
 });
 
 test("a composed plugin uses Notion through Core: an Admin chooses its database and Core keeps it to that database", async (t) => {
-  const { db, call } = installation();
+  const { db, env, call } = installation();
   let modules = await call("/platform/modules");
   modules = await call("/admin/modules", { method: "PUT", body: { enabled: ["attendance", "example"], revision: modules.body.revision } });
   db.raw.exec("INSERT INTO example_items(installation_id,id,title,created_at) VALUES ('primary','first','First item','2026-10-26T00:00:00.000Z')");
@@ -256,6 +258,7 @@ test("a composed plugin uses Notion through Core: an Admin chooses its database 
     if (path === `/data_sources/${source}/query`) return Response.json({ results: [pageIn(listedPage, source)], has_more: false });
     if (method === "POST" && path === "/pages") return Response.json(pageIn(createdPage, source));
     if (method === "PATCH" && path === `/pages/${createdPage}`) return Response.json(pageIn(createdPage, source));
+    if (method === "POST" && path === "/comments") return Response.json({ object: "comment", id: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeee01" });
     if (method === "GET" && path === `/pages/${otherPage}`) return Response.json(pageIn(otherPage, otherSource));
     return new Response("", { status: 404 });
   }) as typeof fetch;
@@ -273,7 +276,7 @@ test("a composed plugin uses Notion through Core: an Admin chooses its database 
   assert.equal(sent.length, 0);
   const empty = await admin("/admin/integrations/notion");
   assert.equal(empty.body.saved, false);
-  assert.deepEqual(empty.body.bindings.filter((binding: any) => binding.moduleId === "example"), [{ moduleId: "example", moduleLabel: "Example", id: "items", label: "Example items database", reason: "Example items are copied to this Notion database", required: false, operations: ["query", "pages.create", "pages.update"], bound: false, databaseId: null, dataSourceId: null, name: "", link: null }]);
+  assert.deepEqual(empty.body.bindings.filter((binding: any) => binding.moduleId === "example"), [{ moduleId: "example", moduleLabel: "Example", id: "items", label: "Example items database", reason: "Example items are copied to this Notion database", required: false, operations: ["query", "pages.create", "pages.update", "comments.create"], bound: false, databaseId: null, dataSourceId: null, name: "", link: null }]);
   const exampleBinding = (body: any) => body.bindings.find((binding: any) => binding.moduleId === "example" && binding.id === "items");
 
   // Before an Admin connects Notion, every call the plugin makes is refused without a request.
@@ -318,6 +321,43 @@ test("a composed plugin uses Notion through Core: an Admin chooses its database 
   assert.deepEqual(db.rows("SELECT metadata_json FROM audit_log WHERE action='integration.notion_refused'").map((row: any) => JSON.parse(row.metadata_json)), [{ moduleId: "example", binding: "items", operation: "pages.update", reason: "page-outside-binding" }]);
   const status = await admin("/admin/integrations/notion");
   assert.deepEqual(status.body.capabilities, { read: "ok", insert: "ok", update: "ok", comment: "unknown", users: "ok", email: "ok" });
+  assert.equal("commentName" in status.body, false, "the Notion card carries no comment name: it is each module's own setting");
+
+  // The name on the plugin's comments is the plugin's own setting, kept by Core: Admin only, from the dashboard, audited.
+  // A module that declared no comments has none. Until a name is set, comments carry the module's label.
+  const namePath = "/admin/modules/example/notion-comment-name";
+  const commentName = async () => { sent.length = 0; const reply = await admin("/admin/example/notion", { body: { comment: true } }); assert.equal(reply.body.commented.ok, "eeeeeeee-eeee-eeee-eeee-eeeeeeeeee01", JSON.stringify(reply.body.commented)); return sent.find((request) => request.path === "/comments")!.body.display_name; };
+  const asOperator = async (method: string, body?: unknown) => (await worker.fetch(new Request(`https://api.example.test${namePath}`, { method, headers: { cookie: "lancerlogin_session=" + await createSessionCodec(sessionSecret).issue({ userId: "operator", role: "operator" }), origin, ...(body === undefined ? {} : { "content-type": "application/json" }) }, body: body === undefined ? undefined : JSON.stringify(body) }), env as never)).status;
+  assert.deepEqual((await admin(namePath)).body, { moduleId: "example", label: "Example", name: "" });
+  assert.deepEqual(await commentName(), { type: "custom", custom: { name: "Example" } });
+  assert.equal((await call(namePath, { signedIn: false })).status, 401);
+  assert.equal((await call(namePath, { method: "PUT", body: { name: "Test Team 0000" }, signedIn: false, dashboard: true })).status, 401);
+  assert.equal(await asOperator("GET"), 403, "an Operator cannot read the name");
+  assert.equal(await asOperator("PUT", { name: "Test Team 0000" }), 403, "an Operator cannot change the name");
+  assert.equal((await call(namePath, { method: "PUT", body: { name: "Test Team 0000" } })).status, 403, "a change needs the dashboard origin");
+  assert.equal((await call(namePath, { method: "PUT", body: { name: "N".repeat(101) }, dashboard: true })).status, 400);
+  assert.equal((await call(namePath, { method: "PUT", body: { name: "Test Team 0000", token }, dashboard: true })).status, 400);
+  for (const other of ["attendance", "missing"]) {
+    assert.equal((await call(`/admin/modules/${other}/notion-comment-name`)).status, 404, `${other} does not comment in Notion`);
+    assert.equal((await call(`/admin/modules/${other}/notion-comment-name`, { method: "PUT", body: { name: "Test Team 0000" }, dashboard: true })).status, 404);
+  }
+  assert.equal(db.count("SELECT COUNT(*) AS n FROM notion_comment_names"), 0, "a refused change stores nothing");
+  assert.equal(db.count("SELECT COUNT(*) AS n FROM audit_log WHERE action LIKE 'integration.notion_comment_name%'"), 0, "and records nothing");
+  const revisionBefore = db.rows("SELECT revision, key_version FROM notion_connection")[0];
+  const named = await admin(namePath, { method: "PUT", body: { name: "  Test Team 0000 " }, dashboard: true });
+  assert.equal(named.status, 200, JSON.stringify(named.body)); assert.deepEqual(named.body, { moduleId: "example", label: "Example", name: "Test Team 0000" });
+  assert.deepEqual(db.rows("SELECT module_id, name FROM notion_comment_names"), [{ module_id: "example", name: "Test Team 0000" }]);
+  assert.deepEqual(db.rows("SELECT revision, key_version FROM notion_connection")[0], revisionBefore, "the token is not touched");
+  assert.deepEqual(await commentName(), { type: "custom", custom: { name: "Test Team 0000" } });
+  assert.equal((await admin(namePath, { method: "PUT", body: { name: "Test Team 0000" }, dashboard: true })).status, 200, "saving the same name again is not an error");
+  const blank = await admin(namePath, { method: "PUT", body: { name: "" }, dashboard: true });
+  assert.deepEqual(blank.body, { moduleId: "example", label: "Example", name: "" }); assert.equal(db.count("SELECT COUNT(*) AS n FROM notion_comment_names"), 0);
+  assert.deepEqual(await commentName(), { type: "custom", custom: { name: "Example" } });
+  assert.deepEqual(db.rows("SELECT action, actor_user_id, target_type, target_id FROM audit_log WHERE action LIKE 'integration.notion_comment_name%' ORDER BY rowid"), [
+    { action: "integration.notion_comment_name_set", actor_user_id: "admin", target_type: "integration", target_id: "notion:example" },
+    { action: "integration.notion_comment_name_cleared", actor_user_id: "admin", target_type: "integration", target_id: "notion:example" },
+  ], "each change is recorded once; saving an unchanged name is not");
+  assert.equal((await admin(namePath, { method: "PUT", body: { name: "Test Team 0000" }, dashboard: true })).status, 200);
 
   // Turned off, the token is kept and every call is refused; the database choice can be cleared and the token removed.
   assert.equal((await admin("/admin/integrations/notion", { method: "PUT", body: { enabled: false, revision: 1 }, dashboard: true })).body.enabled, false);
@@ -331,7 +371,8 @@ test("a composed plugin uses Notion through Core: an Admin chooses its database 
   assert.equal(removed.body.saved, false); assert.equal(exampleBinding(removed.body).bound, true, "removing the token keeps the chosen database");
   const cleared = await admin(bindingPath, { method: "DELETE", dashboard: true });
   assert.equal(exampleBinding(cleared.body.integration).bound, false);
-  assert.deepEqual(db.rows("SELECT action FROM audit_log WHERE action LIKE 'integration.%' AND action<>'integration.notion_refused' ORDER BY rowid").map((row: any) => row.action).slice(2), ["integration.notion_disabled", "integration.notion_enabled", "integration.removed", "integration.notion_binding_removed"]);
+  assert.deepEqual((await admin(namePath)).body, { moduleId: "example", label: "Example", name: "Test Team 0000" }, "removing the token and clearing the database keep the module's comment name, which its settings page still shows");
+  assert.deepEqual(db.rows("SELECT action FROM audit_log WHERE action LIKE 'integration.%' AND action<>'integration.notion_refused' AND action NOT LIKE 'integration.notion_comment_name%' ORDER BY rowid").map((row: any) => row.action).slice(2), ["integration.notion_disabled", "integration.notion_enabled", "integration.removed", "integration.notion_binding_removed"]);
   // The token appears in no response and no stored row.
   assert.equal(JSON.stringify(seen).includes("ntn_"), false);
   assert.equal(JSON.stringify(db.rows("SELECT * FROM audit_log")).includes("ntn_"), false);

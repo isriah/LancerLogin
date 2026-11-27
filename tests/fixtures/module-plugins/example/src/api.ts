@@ -88,7 +88,9 @@ const api: ApiModuleContribution<unknown> = {
         const trashed = await attempt(() => notion.trashPage("items", input?.pageId ?? created.ok));
         const users = await attempt(async () => (await notion.users.list()).users);
         const imported = await attempt(() => notion.importLegacyConnection({ ciphertext: "c", iv: "i" }));
-        return context.respond({ ready, status, binding, rows, created, updatedOwn, updatedOther, trashed, users, imported });
+        // Only when asked: a comment on the row this request created. Core chooses the name Notion shows on it.
+        const commented = input?.comment && created.ok ? await attempt(async () => (await notion.createComment("items", created.ok, { richText: [{ text: { content: "Example comment" } }] })).id) : null;
+        return context.respond({ ready, status, binding, rows, created, updatedOwn, updatedOther, trashed, users, imported, commented });
       }
       if (context.url.pathname !== "/admin/example/items") return undefined;
       await context.requireRole(["admin", "operator"]);

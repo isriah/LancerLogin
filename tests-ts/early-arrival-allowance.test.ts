@@ -172,7 +172,7 @@ test("schema 51 backups carry the early arrival allowance and older backups rest
   const db = new BackupDatabase(); context.after(() => db.raw.close()); const client = backupClient(worker, db);
   db.raw.exec("UPDATE organization_settings SET early_scan_minutes = 40");
   const backup = await client.backup("installation");
-  assert.equal(backup.schemaVersion, 53);
+  assert.equal(backup.schemaVersion, 54);
   assert.equal(backup.tables.organization_settings[0].early_scan_minutes, 40);
   for (const scope of ["meetings", "roster"] as const) assert.equal("organization_settings" in (await client.backup(scope)).tables, false);
 

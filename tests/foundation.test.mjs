@@ -125,8 +125,8 @@ test("the Worker's entry point holds the route table, and handlers stay in their
 
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
   const source = workerSource();
-  assert.match(source, /const backupSchemaVersion = 53;/);
-  assert.match(source, /backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49, module_report_baselines: 50, notion_connection: 53, notion_bindings: 53 }/);
+  assert.match(source, /const backupSchemaVersion = 54;/);
+  assert.match(source, /backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49, module_report_baselines: 50, notion_connection: 53, notion_bindings: 53, notion_comment_names: 54 }/);
   assert.match(source, /simulated_kiosk_sessions: { schema: 48, owner: "attendance" }/);
   assert.match(source, /tables\.simulated_kiosk_sessions = \[\];/);
   assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -17\)/);

@@ -49,6 +49,7 @@ export const tableColumns = {
   first_credentials: ["installation_id", "program", "username", "ciphertext", "iv", "key_version", "checked_at", "updated_at"],
   notion_connection: ["installation_id", "ciphertext", "iv", "key_version", "enabled", "bot_name", "workspace_name", "checked_at", "capabilities_json", "revision", "updated_at"],
   notion_bindings: ["installation_id", "module_id", "binding_id", "database_id", "data_source_id", "name", "revision", "updated_at"],
+  notion_comment_names: ["installation_id", "module_id", "name", "updated_at"],
   google_calendar_event_mappings: ["installation_id", "meeting_id", "event_id", "generation", "active", "synced_at", "last_error", "updated_at"],
   google_calendar_operations: ["installation_id", "meeting_id", "event_id", "action", "starts_at", "ends_at", "status", "attempts", "next_attempt_at", "last_error", "updated_at"],
   discord_calendar_event_mappings: ["installation_id", "meeting_id", "event_id", "generation", "active", "synced_at", "last_error", "updated_at"],
@@ -67,7 +68,7 @@ export type BackupTable = keyof typeof tableColumns;
 export const installationTables: BackupTable[] = [
   "installations", "platform_module_administration", "platform_module_administration_epochs", "platform_module_epochs", "platform_modules", "organization_settings", "module_report_baselines", "members", "users", "user_preferences", "platform_module_assignment_epochs", "platform_module_assignment_revisions", "platform_module_assignments", "platform_module_setup_progress", "user_walkthroughs", "member_labels", "member_label_changes", "discord_label_role_mappings", "label_weekly_targets", "label_attendance_rules", "saved_report_views", "saved_report_tabs", "meeting_weight_categories", "meetings", "meeting_audience_labels", "meeting_templates",
   "attendance_events", "attendance_corrections", "setup_progress", "pairing_codes",
-  "kiosks", "member_pins", "simulated_kiosk_sessions", "encrypted_integrations", "google_calendar_authorizations", "first_credentials", "notion_connection", "notion_bindings", "integration_deliveries",
+  "kiosks", "member_pins", "simulated_kiosk_sessions", "encrypted_integrations", "google_calendar_authorizations", "first_credentials", "notion_connection", "notion_bindings", "notion_comment_names", "integration_deliveries",
   "integration_state", "discord_attendance_notifications", "discord_attendance_recipients", "discord_attendance_contests", "discord_anomaly_reports", "audit_log", "telemetry_diagnostics",
   "google_calendar_event_mappings", "google_calendar_operations", "discord_calendar_event_mappings", "discord_calendar_operations",
 ];
@@ -75,7 +76,7 @@ export const meetingTables: BackupTable[] = ["meeting_weight_categories", "meeti
 export const rosterTables: BackupTable[] = ["members", "member_labels", "member_label_changes", "label_weekly_targets", "label_attendance_rules"];
 export const tablesForScope = (scope: BackupScope) => scope === "installation" ? installationTables : scope === "meetings" ? meetingTables : rosterTables;
 // Core tables added after the backup format existed; a backup older than the schema that added one never carries it.
-const backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49, module_report_baselines: 50, notion_connection: 53, notion_bindings: 53 };
+const backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49, module_report_baselines: 50, notion_connection: 53, notion_bindings: 53, notion_comment_names: 54 };
 // Tables dropped after the backup format existed, with the first schema that no longer carries them and the module that
 // owned them, so older backups still match their ownership metadata. Their rows are read and then ignored.
 const backupTablesRemovedAt: Partial<Record<BackupTable, { schema: number; owner: string }>> = { simulated_kiosk_sessions: { schema: 48, owner: "attendance" } };
@@ -109,7 +110,10 @@ export const safeBackupValue = (value: unknown) => value === null || typeof valu
 // entire-installation backups. Older backups restore with no Notion connection and no chosen databases. A restored token
 // the current integration key cannot decrypt shows as saved but unreadable until an Admin saves it again. The pause after
 // a rate limit is operational and never travels.
-export const backupSchemaVersion = 53;
+// Schema 54: the name Notion shows on each module's comments (notion_comment_names, migration 0109) in
+// entire-installation backups, for modules in the build being backed up. Older backups restore with no names, so each
+// module's comments carry its label.
+export const backupSchemaVersion = 54;
 /** Exported values computed from other columns: a label paused after a restore is still two-way in a backup. */
 const backupColumnExpressions: Partial<Record<BackupTable, Record<string, string>>> = {
   discord_label_role_mappings: { sync_direction: `CASE WHEN sync_direction = 'to_discord' AND two_way_error = '${twoWayRestorePaused}' THEN 'two_way' ELSE sync_direction END` },

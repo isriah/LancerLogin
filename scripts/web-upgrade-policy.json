@@ -540,6 +540,11 @@
       "name": "0108_notion_connection.sql",
       "sha256": "21687a0455c25c6a88f90543c9f1ff1f02e279d77eb46b2393b0c4a755fe30b2",
       "forwardCompatible": true
+    },
+    {
+      "name": "0109_notion_comment_names.sql",
+      "sha256": "32a8cde1c14803bbeb3f934110bf8705bf183928d1ce965a4cbb000021a76800",
+      "forwardCompatible": true
     }
   ]
 }

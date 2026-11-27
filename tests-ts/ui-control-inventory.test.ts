@@ -27,6 +27,7 @@ const reviewedNativeControls: Record<string, Counts> = {
   "info-tip.tsx": { button: 1 },
   "first-integration-settings.tsx": { button: 4, input: 3, select: 1 },
   "notion-binding-field.tsx": { button: 2, input: 1, select: 1 },
+  "notion-comment-name-field.tsx": { button: 1, input: 1 },
   "notion-integration-settings.tsx": { button: 3, input: 2 },
   "integration-settings.tsx": { button: 18, input: 9, select: 1, summary: 2 },
   "kiosk-enrollment-dialog.tsx": { button: 4, input: 1 },

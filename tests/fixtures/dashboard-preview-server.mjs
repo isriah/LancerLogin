@@ -257,6 +257,7 @@ const server = createServer(async (request, response) => {
     : path === "/admin/update-channel" ? { channel: "stable", revision: 0 }
     : path === "/admin/integrations" ? { integrations: [{ provider: "google", enabled: true, saved: true, configured: true, state: "configured", verifiedAt: iso(-60) }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled", pendingOperations: 0, failedOperations: 0 }, { provider: "resend", enabled: true, saved: true, configured: false, state: "verification_required" }, { provider: "discord", enabled: false, saved: false, configured: false, state: "disabled" }] }
     : path === "/admin/integrations/first" ? { programs: { FRC: { saved: false, username: "", checkedAt: null, readable: false }, FTC: { saved: false, username: "", checkedAt: null, readable: false } }, fll: { available: false }, encryption: true }
+    : path === "/admin/integrations/notion" ? { saved: false, enabled: false, readable: false, encryption: true, botName: "", workspaceName: "", checkedAt: null, pausedUntil: null, capabilities: { read: "unknown", insert: "unknown", update: "unknown", comment: "unknown", users: "unknown", email: "unknown" }, revision: 0, bindings: [] }
     : { error: "Preview route not implemented" };
   response.statusCode = payload.error ? 404 : 200; response.end(JSON.stringify(payload));
 });

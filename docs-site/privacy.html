@@ -30,7 +30,7 @@
     <li>Raw badge and QR values never leave the kiosk; it keeps only keyed digests</li>
     <li>Network addresses are not stored; sign-in rate limits keep only a keyed hash for a day</li>
   </ul>
-  <p>Integrations you turn on send only what they need: Google Calendar and Discord receive meeting titles, notes, and times; Resend and Discord deliver the messages you configure. The FIRST connection sends FIRST only the team number being looked up, with your saved FIRST username and token for FRC and FTC; it sends nothing about your members or guests.</p>
+  <p>Integrations you turn on send only what they need: Google Calendar and Discord receive meeting titles, notes, and times; Resend and Discord deliver the messages you configure. The FIRST connection sends FIRST only the team number being looked up, with your saved FIRST username and token for FRC and FTC; it sends nothing about your members or guests. The Notion connection sends Notion what a module writes to the databases an Admin chose for it; Core itself sends no roster, member, or attendance information, and a module receives email addresses from Notion only if it declared that it needs them.</p>
 
   <h2 id="kiosk-data">What a kiosk receives</h2>
   <p>Every paired kiosk receives the names and member IDs of your active members, so it can recognize them without a network. Some settings send more:</p>

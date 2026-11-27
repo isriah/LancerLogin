@@ -1,4 +1,5 @@
-import type { D1Database } from "./d1-usage.ts";
+import type { D1Database, D1Statement } from "./d1-usage.ts";
+import { allowanceChangeGuard, isAllowanceOverlapAbort } from "./meeting-overlap-guard.ts";
 import { HttpError } from "./http-error.ts";
 import { attendanceClosesAt, DEFAULT_EARLY_SCAN_MINUTES, DEFAULT_LATE_SCAN_MINUTES, MAX_EARLY_SCAN_MINUTES, MAX_LATE_SCAN_MINUTES, newlyOverlappingMeetingWindows, type MeetingWindowLike } from "./attendance-lifecycle.ts";
 
@@ -33,4 +34,23 @@ export async function assertAllowanceChangeKeepsMeetingsApart(db: D1Database, be
   const notClosed = (result.results ?? []).filter((meeting) => meeting.endsAt && Number.isFinite(Date.parse(meeting.startsAt)) && Date.parse(attendanceClosesAt(meeting.endsAt, after.lateScanMinutes)) >= now);
   const conflict = newlyOverlappingMeetingWindows(notClosed, before, after);
   if (conflict) throw new HttpError(409, `Meeting attendance windows cannot overlap. With these allowances, ${meetingWindowLabel(conflict[0])} conflicts with ${meetingWindowLabel(conflict[1])}. Move one of them or choose a shorter allowance.`);
+}
+
+/** The allowances saved now. A meeting write whose overlap guard aborted reads them again: a change to them may be why. */
+export const savedAttendanceAllowances = async (db: D1Database) => attendanceAllowances(await db.prepare("SELECT late_scan_minutes AS lateScanMinutes, early_scan_minutes AS earlyScanMinutes FROM organization_settings WHERE installation_id = 'primary'").first<Partial<AttendanceAllowances>>());
+
+/**
+ * Runs the batch that saves allowances, led by a guard that repeats assertAllowanceChangeKeepsMeetingsApart inside it:
+ * a meeting saved or moved since that check, which the new allowances would make overlap another, aborts the batch and
+ * nothing is saved. The check then runs again against the meetings now saved and throws the error a save sent after
+ * that meeting gets. `earlyScanMinutes` null keeps the saved allowance. Returns the results of `statements`.
+ */
+export async function saveAllowancesKeepingMeetingsApart(db: D1Database, after: { lateScanMinutes: number; earlyScanMinutes: number | null }, statements: D1Statement[]) {
+  try { return (await db.batch([allowanceChangeGuard(db, after), ...statements])).slice(1); }
+  catch (error) {
+    if (!isAllowanceOverlapAbort(error)) throw error;
+    const saved = await savedAttendanceAllowances(db);
+    await assertAllowanceChangeKeepsMeetingsApart(db, saved, { lateScanMinutes: after.lateScanMinutes, earlyScanMinutes: after.earlyScanMinutes ?? saved.earlyScanMinutes });
+    throw new HttpError(409, "Meeting attendance windows cannot overlap. A meeting was saved while these allowances were being changed; reload and try again.");
+  }
 }

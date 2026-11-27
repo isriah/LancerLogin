@@ -118,6 +118,33 @@ export type ModuleInterfaceUse = {
   readonly reason: string;
 };
 
+/** What a module may do with one bound Notion database (SDK 1.8.0). Each maps to one call of `services.notion`. */
+export const moduleNotionOperations = ["retrieve", "query", "pages.create", "pages.retrieve", "pages.update", "pages.trash", "comments.create"] as const;
+export type ModuleNotionOperation = (typeof moduleNotionOperations)[number];
+/** Workspace user access a module may ask for: listing members, reading one, and seeing email addresses. */
+export const moduleNotionUserOperations = ["list", "retrieve", "email"] as const;
+export type ModuleNotionUserOperation = (typeof moduleNotionUserOperations)[number];
+
+/** One Notion database a module uses through Core's connection. An Admin chooses the database; Core refuses any other. */
+export type ModuleNotionBindingDefinition = {
+  /** The module's own name for the binding, such as `orders`. */
+  readonly id: string;
+  /** Shown to the Admin who chooses the database. */
+  readonly label: string;
+  /** Why the module needs it, shown beside the label. */
+  readonly reason: string;
+  /** Whether the module cannot work without it. `services.notion.ready()` waits for every required binding. */
+  readonly required: boolean;
+  readonly kind: "data_source";
+  readonly operations: readonly ModuleNotionOperation[];
+};
+
+/** A module's use of Core's Notion connection (SDK 1.8.0): the databases it needs and what it may do with each. */
+export type ModuleNotionDefinition = {
+  readonly users?: readonly ModuleNotionUserOperation[];
+  readonly bindings: readonly ModuleNotionBindingDefinition[];
+};
+
 export type ModuleDefinition = {
   readonly id: string;
   readonly label: string;
@@ -129,6 +156,8 @@ export type ModuleDefinition = {
   readonly interfaces?: readonly ModuleInterfaceDefinition[];
   /** Interfaces of other modules this module calls (SDK 1.1.0). */
   readonly uses?: readonly ModuleInterfaceUse[];
+  /** Notion databases this module uses through Core's connection, and what it may do with each (SDK 1.8.0). */
+  readonly notion?: ModuleNotionDefinition;
   readonly capabilities: readonly ModuleCapabilityDefinition[];
   readonly navigation: readonly { readonly label: string; readonly path: string }[];
   readonly settings: readonly { readonly label: string; readonly path: string }[];
@@ -354,6 +383,20 @@ export function createModuleRegistry(input: readonly ModuleDefinition[]) {
       if (provider === module.id) throw new Error("A module cannot use its own interface");
     }
     if (new Set((module.uses ?? []).map((use) => `${use.interface}@${use.version}`)).size !== (module.uses ?? []).length) throw new Error("Duplicate module interface use");
+    if (module.notion !== undefined) {
+      const notion = module.notion as unknown;
+      if (!notion || typeof notion !== "object" || Array.isArray(notion) || Object.keys(notion).some((key) => key !== "users" && key !== "bindings") || !isList(module.notion.bindings) || module.notion.bindings.length > 20) throw new Error("Invalid module Notion declaration");
+      const users = module.notion.users;
+      if (users !== undefined && (!isList(users) || new Set(users).size !== users.length || users.some((operation) => !(moduleNotionUserOperations as readonly unknown[]).includes(operation)))) throw new Error("Invalid module Notion user access");
+      // Email is a detail of the users a module reads, so it needs one of the calls that returns them.
+      if (users?.includes("email") && !users.includes("list") && !users.includes("retrieve")) throw new Error("Invalid module Notion user access");
+      if (!module.notion.bindings.length && !users?.length) throw new Error("Invalid module Notion declaration");
+      for (const binding of module.notion.bindings) {
+        if (!binding || typeof binding !== "object" || Object.keys(binding).some((key) => !["id", "label", "reason", "required", "kind", "operations"].includes(key)) || typeof binding.id !== "string" || binding.id.length > 40 || !operationIdPattern.test(binding.id) || !plainText(binding.label, 80) || !plainText(binding.reason, 200) || typeof binding.required !== "boolean" || binding.kind !== "data_source") throw new Error("Invalid module Notion binding");
+        if (!isList(binding.operations) || !binding.operations.length || new Set(binding.operations).size !== binding.operations.length || binding.operations.some((operation) => !(moduleNotionOperations as readonly unknown[]).includes(operation))) throw new Error("Invalid module Notion binding operations");
+      }
+      if (new Set(module.notion.bindings.map((binding) => binding.id)).size !== module.notion.bindings.length) throw new Error("Duplicate module Notion binding");
+    }
   }
   for (const module of modules) if (module.dependencies.some((dependency) => !ids.has(dependency))) throw new Error("Unknown module dependency");
   // A prefix claims every name that starts with it, so no prefix may contain another or another module's declared table.

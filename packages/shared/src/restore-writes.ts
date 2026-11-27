@@ -23,7 +23,7 @@ export const restoreWriteCosts: Readonly<Record<string, number>> = {
   member_label_changes: 4, discord_label_role_mappings: 3, label_weekly_targets: 3, label_attendance_rules: 5, saved_report_views: 5,
   saved_report_tabs: 4, meeting_weight_categories: 4, meetings: 7, meeting_audience_labels: 2, meeting_templates: 4, attendance_events: 6,
   attendance_corrections: 5, setup_progress: 2, pairing_codes: 3, kiosks: 5, member_pins: 2, encrypted_integrations: 3,
-  google_calendar_authorizations: 2, first_credentials: 2, google_calendar_event_mappings: 3, google_calendar_operations: 4,
+  google_calendar_authorizations: 2, first_credentials: 2, notion_connection: 2, notion_bindings: 2, google_calendar_event_mappings: 3, google_calendar_operations: 4,
   discord_calendar_event_mappings: 3, discord_calendar_operations: 4, integration_deliveries: 4, integration_state: 2,
   discord_attendance_notifications: 3, discord_attendance_recipients: 5, discord_attendance_contests: 3, discord_anomaly_reports: 3,
   audit_log: 3, telemetry_diagnostics: 2,

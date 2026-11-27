@@ -2717,7 +2717,7 @@ test("Discord calendar delivery explains missing scheduled-event permission with
     assert.equal(failures.length, 1);
     assert.equal(failures[0]!.meetingId, "meeting-1");
     assert.match(String(failures[0]!.lastError), /Create Events permission/);
-    assert.equal(failures[0]!.retryAt, null);
+    assert.equal(failures[0]!.retryAt, "2026-09-30T12:15:00.000Z", "the refused operation waits out the 15-minute hold; it is not failed for good");
     assert.doesNotMatch(JSON.stringify([...database.calls, ...database.batches.flat()].map((call) => call.values)), /discord-secret/);
   } finally { globalThis.fetch = originalFetch; }
 });
@@ -2765,7 +2765,7 @@ test("bulk Discord calendar sync queues every meeting, and delivery stops after 
 
     await calendarDeliveryPass(env, "attendance.discord-calendar");
     assert.equal(calls, 1);
-    assert.deepEqual(discordCalendarFailures(database), [{ meetingId: "meeting-1", retryAt: null, lastError: "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has the Create Events permission, which Discord requires to create scheduled events, before syncing the calendar." }]);
+    assert.deepEqual(discordCalendarFailures(database), [{ meetingId: "meeting-1", retryAt: "2026-09-30T12:15:00.000Z", lastError: "Discord denied this request because the bot is missing a required permission. Confirm it is in the selected server and has the Create Events permission, which Discord requires to create scheduled events, before syncing the calendar." }]);
     // The second meeting is never claimed: it stays queued for a later pass.
     assert.deepEqual(discordCalendarClaims(database).map((call) => call.values[3]), ["meeting-1"]);
   } finally { globalThis.fetch = originalFetch; }
@@ -3038,7 +3038,7 @@ test("Google Calendar sync-all queues every meeting in one batch, and each sched
   database.rows.set("SELECT title, notes, required, attendance_weight AS attendanceWeight FROM meetings", { title: "Studio", notes: null, required: 1, attendanceWeight: 1 });
   // Seven current and upcoming meetings, each queued as one upsert; no deleted meeting is still mapped.
   database.rows.set("SELECT COUNT(*) AS selected", { selected: 7 });
-  database.runChangeHandler = (sql) => sql.includes("FROM meetings pm JOIN discord_calendar_event_mappings pd") || sql.includes("action = 'delete' AND status = 'failed'") ? 0 : !sql.startsWith("INSERT INTO google_calendar_operations") ? 1 : sql.includes("'upsert'") ? 7 : 0;
+  database.runChangeHandler = (sql) => sql.includes("FROM meetings pm JOIN discord_calendar_event_mappings pd") || sql.includes("action = 'delete' AND status = 'failed'") ? 0 : !sql.startsWith("INSERT INTO google_calendar_operations") ? 1 : sql.includes("g.event_id, 'upsert'") ? 7 : 0;
   const operations = Array.from({ length: 7 }, (_, index) => ({ meetingId: `meeting-${index + 1}`, eventId: `event-meeting-${index + 1}`, action: "upsert", startsAt: "2026-10-01T20:00:00Z", endsAt: "2026-10-01T21:00:00Z", status: "pending", attempts: 0, updatedAt: "2026-09-06T00:00:00.000Z", syncedAt: "2026-09-06", generation: 1 }));
   // The fake returns rows whatever the LIMIT says, so it hands back the five rows the query's LIMIT allows.
   database.lists.set("FROM google_calendar_operations o", operations.slice(0, 5));
@@ -3508,7 +3508,7 @@ test("roster backup and restore retain label definitions, dated history, and att
   database.rows.set("SELECT attendance_recent_days AS recentDays", { recentDays: 30, policyActivatedOn: "2026-09-22" });
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env; const cookie = await sessionCookie("admin");
   const exported = await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env); assert.equal(exported.status, 200);
-  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 52); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
+  const backup = await exported.json() as { format: string; formatVersion: number; schemaVersion: number; ownership: unknown; tables: Record<string, unknown[]>; attendanceRecentDays: number; attendancePolicyActivatedOn: string }; assert.equal(backup.schemaVersion, 53); assert.equal(backup.format, "lancerlogin-community-modular"); assert.equal(backup.formatVersion, 1); assert.ok(backup.ownership); assert.equal(backup.attendanceRecentDays, 30); assert.equal(backup.attendancePolicyActivatedOn, "2026-09-22");
   assert.deepEqual(Object.keys(backup.tables).sort(), ["label_attendance_rules", "label_weekly_targets", "member_label_changes", "member_labels", "members"]);
   assert.deepEqual(backup.tables.label_attendance_rules, [{ id: "class-rule", installation_id: "primary", label_id: "mentor:primary", starts_on: null, ends_on: null, rule_type: "weighted_percentage", threshold_percent: 75, meetings_per_week: null, created_by: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", excused_handling: "count_missed" }]);
   assert.equal((await worker.fetch(request("/admin/data/restore", { scope: "roster", confirmation: "RESTORE ROSTER", backup }, { cookie }), env)).status, 200);
@@ -3528,7 +3528,7 @@ test("installation backup retains Discord role mappings while roster backup omit
   const env = { APP_MODE: "configured", ALLOWED_ORIGIN: "https://dashboard.example.test", SESSION_KEY: sessionSecret, DB: database } as unknown as Env;
   const installation = await (await worker.fetch(request("/admin/data/backup?scope=installation", undefined, { cookie }), env)).json() as { schemaVersion: number; tables: Record<string, unknown[]> };
   const roster = await (await worker.fetch(request("/admin/data/backup?scope=roster", undefined, { cookie }), env)).json() as { tables: Record<string, unknown[]> };
-  assert.equal(installation.schemaVersion, 52); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
+  assert.equal(installation.schemaVersion, 53); assert.equal(installation.tables.discord_label_role_mappings.length, 1);
   assert.equal(installation.tables.saved_report_views.length, 1); assert.equal(installation.tables.saved_report_tabs.length, 1);
   assert.equal(Object.hasOwn(roster.tables, "discord_label_role_mappings"), false);
   assert.equal(Object.hasOwn(roster.tables, "saved_report_views"), false);
@@ -3765,7 +3765,7 @@ test("contest backups retain rejected submission history, default schema40 and r
   const history = JSON.stringify([{ messageId: "original-message", createdAt: "2026-10-15T10:00:00Z", status: "rejected", resolvedBy: "admin-1", resolvedAt: "2026-10-15T11:00:00Z", reviewNote: "Original review", submittedByDiscordUserId: "synthetic-discord" }]);
   database.lists.set("FROM discord_attendance_contests WHERE", [{ installation_id: "primary", meeting_id: "meeting", member_id: "member", message_id: "new-message", status: "open", resolved_by: null, resolved_at: null, created_at: "2026-10-15T12:00:00Z", submitted_by_discord_user_id: "synthetic-discord", review_note: null, prior_reviews_json: history }]);
   const backup = await (await worker.fetch(request("/admin/data/backup?scope=meetings", undefined, { cookie }), env)).json() as any;
-  assert.equal(backup.schemaVersion, 52); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
+  assert.equal(backup.schemaVersion, 53); assert.equal(backup.tables.discord_attendance_contests[0].prior_reviews_json, history);
   const restore = (value: unknown) => worker.fetch(request("/admin/data/restore", { scope: "meetings", confirmation: "RESTORE MEETINGS", backup: value }, { cookie }), env);
   const restored = await restore(backup); assert.equal(restored.status, 200, await restored.clone().text());
   assert.ok(database.batches.at(-1)?.some(call => call.sql.includes("INSERT INTO discord_attendance_contests") && call.values.includes(history)));

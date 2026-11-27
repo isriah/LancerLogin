@@ -13,7 +13,7 @@ Admins see these settings pages:
 | Organization | Name, subtitle, logo and colors. The logo is a PNG, JPEG, or WebP image up to 128 KiB. A logo of any shape works: on the dashboard and kiosks it is scaled to fit, and its frame narrows to match a square or tall logo. |
 | Modules | **Manage modules** (turn modules on or off, **Add module**, update or remove modules, **Apply changes**, module access), **Attendance**, and one page per module that has settings. Attendance has the tabs Attendance rules, Labels, Meeting configuration, Fingerprint sharing, Fingerprint recovery and Attendance setup. |
 | Access | Admin and Operator accounts, their roster links and the modules each Operator can use. |
-| Integrations | Google sign-in, Google Calendar, Resend, FIRST and Discord. |
+| Integrations | Google sign-in, Google Calendar, Resend, FIRST, Discord and Notion. |
 | Data | Category backups, restores and typed-confirmation deletion. |
 | Updates | Update track, dashboard release updates and their setup status. Module changes are deployed from **Modules > Manage modules**. |
 

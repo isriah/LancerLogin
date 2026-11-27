@@ -1,10 +1,29 @@
 // Synthetic, unshipped API contribution for composition tests. Handlers receive Core's module context and the
 // module-scoped database; they never see the Worker environment or Core credentials.
-import { HttpError, installationTimeZone, type ApiModuleContribution } from "@lancerlogin/module-sdk/api";
+import { expectedMembersForDay, HttpError, installationTimeZone, listActiveRosterWithLabels, meetingsOnLocalDate, presentMembersForDay, type ApiModuleContribution } from "@lancerlogin/module-sdk/api";
 import { countOpenItems, itemsWithRequests } from "./items.ts";
 
 const installationId = "primary";
 const validId = (value: unknown) => typeof value === "string" && /^[a-z0-9-]{1,64}$/.test(value);
+
+/**
+ * Lets tests confirm a job reads Core's day projections through its own scoped database: today's required meetings, who
+ * checked in, who was expected and the labelled roster, noted on the first open item. Nothing is written while Attendance is
+ * unavailable or the installation has no time zone yet.
+ */
+async function recordAttendanceDay(db: any) {
+  const timeZone = await installationTimeZone(db, installationId).catch(() => undefined);
+  if (!timeZone) return;
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const meetings = await meetingsOnLocalDate(db, installationId, today, { requiredOnly: true });
+  if (!meetings) return;
+  // One after another: the test database cannot overlap batches (D1 can).
+  const present = await presentMembersForDay(db, installationId, today, { requiredOnly: true });
+  const expected = await expectedMembersForDay(db, installationId, today, { requiredOnly: true });
+  const roster = await listActiveRosterWithLabels(db, installationId, today);
+  const note = `${today}: ${meetings.length} meetings, ${present?.length ?? 0} present, ${expected?.filter((row) => row.expected).length ?? 0} expected, ${roster.length} on the roster`;
+  await db.prepare("INSERT OR REPLACE INTO example_requests (installation_id, id, item_id, note, created_at) SELECT installation_id, 'attendance-day', id, ?, ? FROM example_items WHERE installation_id = ? AND closed = 0 ORDER BY id LIMIT 1").bind(note, new Date().toISOString(), installationId).run();
+}
 
 const api: ApiModuleContribution<unknown> = {
   moduleId: "example",
@@ -47,6 +66,30 @@ const api: ApiModuleContribution<unknown> = {
           return context.respond({ providerStatus, retryAfterMs: context.services.discord.retryAfterMs(error), message: (error as Error).message }, 502);
         }
       }
+      // Lets tests exercise Core's Notion service: the bound database, a page Core returned, a page it did not, an
+      // operation the manifest did not declare, user access without email, and the legacy import that is Part Requests' alone.
+      if (context.url.pathname === "/admin/example/notion" && context.request.method === "POST") {
+        await context.requireRole(["admin"]);
+        const input = await context.json(2048); const notion = context.services.notion;
+        const attempt = async (work: () => Promise<unknown>) => {
+          try { return { ok: await work() }; }
+          catch (error: any) {
+            if (notion.errorCode(error) === undefined && typeof error?.status !== "number") throw error;
+            return { code: notion.errorCode(error) ?? null, status: error.status, providerStatus: notion.providerStatus(error) ?? null, retryAfterMs: notion.retryAfterMs(error) ?? null, uncertain: notion.uncertain(error) };
+          }
+        };
+        const title = (text: string) => ({ Name: { title: [{ text: { content: text } }] } });
+        const ready = await notion.ready(); const status = await notion.status();
+        const binding = await attempt(async () => await notion.binding("items") ?? null);
+        const rows = await attempt(async () => (await notion.query("items", { pageSize: 5 })).results.map((row: any) => row.id));
+        const created: any = await attempt(async () => (await notion.createPage("items", { properties: title("Example item") })).id);
+        const updatedOwn = created.ok ? await attempt(async () => (await notion.updatePage("items", created.ok, { properties: title("Example item, updated") })).id) : null;
+        const updatedOther = input?.pageId ? await attempt(async () => (await notion.updatePage("items", input.pageId, { properties: title("Example other") })).id) : null;
+        const trashed = await attempt(() => notion.trashPage("items", input?.pageId ?? created.ok));
+        const users = await attempt(async () => (await notion.users.list()).users);
+        const imported = await attempt(() => notion.importLegacyConnection({ ciphertext: "c", iv: "i" }));
+        return context.respond({ ready, status, binding, rows, created, updatedOwn, updatedOther, trashed, users, imported });
+      }
       if (context.url.pathname !== "/admin/example/items") return undefined;
       await context.requireRole(["admin", "operator"]);
       if (context.request.method === "GET") return context.respond({ items: await itemsWithRequests(context.db, installationId) });
@@ -79,6 +122,7 @@ const api: ApiModuleContribution<unknown> = {
   jobs: {
     "example.digest": async ({ db }: any) => {
       await db.prepare("UPDATE example_items SET digest_count = digest_count + 1 WHERE installation_id = ? AND closed = 0").bind(installationId).run();
+      await recordAttendanceDay(db);
       return { open: await countOpenItems(db, installationId) };
     },
   },

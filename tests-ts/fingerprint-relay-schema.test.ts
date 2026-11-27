@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { attendanceModule, bundledModuleRegistry, createModuleRegistry } from "../packages/shared/src/module-platform.ts";
 import { applyCoreMigrations } from "./fixtures/d1-database.ts";
+import { workerSource } from "../tests/fixtures/worker-source.mjs";
 
 function fixture() {
   const db = new DatabaseSync(":memory:");
@@ -78,7 +79,7 @@ test("fingerprint relay registration cannot silently substitute keys and config 
 
 test("fingerprint relay operational tables belong to Attendance but are not portable backups", () => {
   const source = readFileSync("packages/shared/src/module-platform.ts", "utf8");
-  const backupSource = readFileSync("apps/api/src/index.ts", "utf8");
+  const backupSource = workerSource();
   for (const table of ["kiosk_fingerprint_sync", "kiosk_fingerprint_keys", "kiosk_fingerprint_deliveries"]) {
     assert.ok(source.includes(`"${table}"`));
     assert.equal(backupSource.includes(`${table}:`), false);

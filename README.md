@@ -34,7 +34,7 @@ These describe behavior in depth. Step-by-step instructions are on the documenta
 - [Integrations](docs/INTEGRATIONS.md), [labels and attendance policies](docs/ATTENDANCE-POLICIES.md), and [data workflows](docs/DATA-WORKFLOWS.md)
 - [Module plugins](docs/MODULE-PLUGINS.md), [Outreach plugin](docs/OUTREACH.md), and [Carpool plugin](docs/CARPOOL.md)
 - [Writing a plugin](docs/PLUGIN-AUTHORING.md) and [authoring modules](docs/MODULE-AUTHORING.md)
-- [Local development and verification](docs/DEVELOPMENT.md)
+- [Working on the code](CONTRIBUTING.md) and [local development and verification](docs/DEVELOPMENT.md)
 - [Release notes](docs/releases/README.md) and [changelog](CHANGELOG.md)
 
 ## Support

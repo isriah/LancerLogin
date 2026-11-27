@@ -145,6 +145,41 @@ type PercentageRow = { date: string; disposition: Observation["disposition"]; at
 type Standing = { labels: Set<string>; labelIds: string[]; eligibilityLabels: Set<string>; historicalMatch: boolean; ruleId: string | null; legacyRule: boolean; weekly: boolean; formula: boolean; entries: { labelId: string; rule: AttendanceRule; legacy: boolean; target: number; weeks: (WeekBucket | undefined)[] }[]; percentage: PercentageRow[][] };
 
 export function evaluateAttendance(input: AttendanceInput): PolicyMemberResult[] { return evaluate(input, true, [input.recentDays ?? 30])[0] as PolicyMemberResult[]; }
+
+/**
+ * Evaluations of one loaded copy of the source data, kept until the answer could change. The source data is reused
+ * across requests until something is written (ReportDataCache); evaluating it is most of a report's CPU, and a report,
+ * the leaderboard, the roster rates and an export all start from the same evaluations.
+ *
+ * An evaluation depends on the clock in two ways only: which meetings have closed, and the organization-local date. A
+ * kept one is used from the instant it was made until the next meeting closes or the local date changes.
+ *
+ * `source` is the loaded data object itself and is never edited. `key` names what `input` adds to it (a period, a
+ * meeting type, labels): the same key must always mean the same input. Callers must not edit the result.
+ */
+type KeptEvaluations = { madeAt: number; until: number; today: string; timeZone: string; byKey: Map<string, PolicyMemberResult[]> };
+const keptEvaluations = new WeakMap<object, KeptEvaluations>();
+// Each kept evaluation holds a row for every member and meeting (several megabytes for 150 members and 300 meetings),
+// and a Worker has 128 MB: the official figures and two periods are enough for the pages that share them.
+const keptEvaluationLimit = 3;
+export function evaluateAttendanceKept<T extends AttendanceInput>(source: T, key: string, input: (source: T) => AttendanceInput = (same) => same, nowText: string = new Date().toISOString()): PolicyMemberResult[] {
+  const now = Date.parse(nowText); const today = localDate(nowText, source.timeZone);
+  let kept = keptEvaluations.get(source);
+  if (!kept || now < kept.madeAt || now >= kept.until || kept.today !== today || kept.timeZone !== source.timeZone) {
+    let until = Infinity;
+    for (const meeting of source.meetings) { const closes = factsOf(meeting, source.timeZone).closes; if (closes > now && closes < until) until = closes; }
+    kept = { madeAt: now, until, today, timeZone: source.timeZone, byKey: new Map() };
+    keptEvaluations.set(source, kept);
+  }
+  let result = kept.byKey.get(key);
+  if (!result) {
+    // Evaluated at the instant the kept set was made, so every entry of a set describes the same moment.
+    result = evaluateAttendance({ ...input(source), now: new Date(kept.madeAt).toISOString() });
+    if (kept.byKey.size >= keptEvaluationLimit) kept.byKey.delete(kept.byKey.keys().next().value!);
+    kept.byKey.set(key, result);
+  }
+  return result;
+}
 /**
  * The same evaluation without building each meeting row's detail, for callers that compare outcomes rather than list
  * meetings. Every other field is identical to evaluateAttendance's; rows line up one for one.

@@ -547,6 +547,8 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     await useSettingsContext(page);
     await page.route("**/admin/integrations", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: true, saved: true, authorized: true, configured: true, state: "configured", calendarName: "Operations calendar", pendingOperations: 2, failedOperations: 1, lastError: "Google Calendar is temporarily unavailable." }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: true, state: "configured", pendingOperations: 1, failedOperations: 0 }] }) }));
     await page.route("**/admin/integrations/google-calendar/retry", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ synced: 0, queued: 3, failed: 0, waiting: 3, scheduler: "alarm", perPass: 5 }) }));
+    let discordRetries = 0;
+    await page.route("**/admin/integrations/discord/calendar/retry", (route) => { discordRetries += 1; return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ synced: 0, queued: 2, failed: 0, waiting: 2, scheduler: "alarm", perPass: 3 }) }); });
     await page.route("**/admin/integrations/google-calendar/sync-all", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ selected: 4, synced: 4, queued: 0, failed: 0 }) }));
     let discordSyncPage = 0;
     await page.route("**/admin/integrations/discord/calendar/sync-all**", (route) => {
@@ -575,6 +577,15 @@ for (const viewport of dashboardConformanceReferences.viewports) {
     const discordCard = page.locator(".integration-card").filter({ hasText: "Discord bot" });
     await discordCard.getByText("Manage configuration", { exact: true }).click();
     await expect(discordCard.getByText("1 waiting · 0 need another attempt", { exact: true })).toBeVisible();
+    // The Discord card offers the same retry as the Google Calendar card, beside Sync all meetings.
+    const discordRetry = discordCard.getByRole("button", { name: "Retry failed delivery" });
+    const discordActions = discordCard.locator(".integration-delivery-actions");
+    await expect(discordActions.getByRole("button")).toHaveText(["Retry failed delivery", "Sync all meetings"]);
+    await discordRetry.focus();
+    await expect(discordRetry).toBeFocused();
+    await discordRetry.click();
+    await expect(discordCard.getByText("2 Calendar events queued again. Queued events are sent in the background, soonest meetings first.")).toBeVisible();
+    expect(discordRetries).toBe(1);
     await discordCard.getByRole("button", { name: "Sync all meetings" }).click();
     await expect(discordCard.getByText(/Discord: 4 updated, 1 queued\. 5 current and upcoming meetings checked\. Queued events are sent in the background, soonest meetings first\./)).toBeVisible();
     expect(discordSyncPage).toBe(3);
@@ -1328,8 +1339,8 @@ test("integration credential fields opt out of sign-in autofill and password man
   await cards.filter({ hasText: "Resend email" }).getByRole("button", { name: "Replace credentials", exact: true }).click();
   await expect(cards.getByLabel("Calendar OAuth client ID", { exact: true })).toBeVisible();
   const passwords = cards.locator('input[type="password"]');
-  // Four provider secrets, and the FIRST card's FRC and FTC tokens.
-  await expect(passwords).toHaveCount(6);
+  // Four provider secrets, the FIRST card's FRC and FTC tokens, and the Notion card's token.
+  await expect(passwords).toHaveCount(7);
   for (const input of await passwords.all()) {
     await expect(input).toHaveAttribute("autocomplete", "new-password");
     await expect(input).toHaveAttribute("data-1p-ignore", "");
@@ -1382,7 +1393,10 @@ test("configured Google Calendar offers re-authorization and warns when it is re
   await expect(reauthorize).toHaveAttribute("href", /\/admin\/integrations\/google-calendar\/authorize$/);
   expect((await reauthorize.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   await expect(card.getByText(/authorization needs renewing/)).toHaveCount(0);
+  await expect(card.locator(".integration-state")).toHaveText("Configured"); await expect(card.locator(".integration-state")).toHaveAttribute("data-tone", "success");
   reauthorizationRequired = true; await page.reload();
+  // An authorization Google refused, or one past its end, is not shown as Configured.
+  await expect(card.locator(".integration-state")).toHaveText("Re-authorization required"); await expect(card.locator(".integration-state")).toHaveAttribute("data-tone", "warning");
   await card.getByText("Manage configuration", { exact: true }).click();
   await expect(card.getByRole("status").filter({ hasText: "Google Calendar authorization needs renewing." })).toHaveAttribute("data-tone", "warning");
   await expect(reauthorize).toHaveClass(/primary-button/);
@@ -1446,6 +1460,64 @@ test("saved integration credentials show a saved date and open the form only to 
   await expect(resend.getByLabel("Sending API key")).toHaveValue("");
   expect(writes).toEqual([]);
   await expectResponsiveFit(page, responsiveFit);
+});
+
+test("replacing Discord credentials for another server says how many calendar events stay on the previous one", async ({ page }) => {
+  await useSettingsContext(page);
+  let reply: Record<string, unknown> = { created: false, serverChanged: true, previousServerEvents: 3 };
+  await page.route("**/admin/integrations", (route) => route.fulfill({ json: { integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "discord", enabled: true, saved: true, configured: false, state: "verification_required", updatedAt: "2026-11-25T18:00:00.000Z", commandStatus: "unavailable", pendingOperations: 3, failedOperations: 0 }] } }));
+  await page.route("**/admin/integrations/discord", (route) => route.fulfill({ json: reply }));
+  await page.goto("/settings/integrations");
+  const card = page.locator(".integration-card").filter({ hasText: "Discord bot" });
+  const replace = async () => {
+    await card.getByRole("button", { name: "Replace credentials", exact: true }).click();
+    for (const [label, value] of [["Bot token", "test-bot-token"], ["Application ID", "323456789012345678"], ["Application public key", "a".repeat(64)], ["Server ID", "523456789012345678"], ["Attendance channel ID", "223456789012345678"]] as const) await card.getByLabel(label, { exact: true }).fill(value);
+    await card.getByRole("button", { name: "Replace saved credentials", exact: true }).click();
+  };
+  await replace();
+  const message = card.locator(".integration-message");
+  await expect(message).toHaveText("Discord bot credentials replaced. Verification is required again. This is a different Discord server. 3 calendar events LancerLogin created on the previous server are still there. After you verify, LancerLogin removes them if this bot can still reach that server; delete any that remain in Discord yourself.");
+  await expect(message).toHaveAttribute("data-tone", "success");
+  if (process.env.LANCERLOGIN_SCREENSHOT_DIR) await card.screenshot({ path: `${process.env.LANCERLOGIN_SCREENSHOT_DIR}/discord-card-server-changed.png` });
+  await expectResponsiveFit(page, responsiveFit);
+  // The same server (a token reset): nothing more to say, the events are kept.
+  reply = { created: false }; await replace();
+  await expect(message).toHaveText("Discord bot credentials replaced. Verification is required again.");
+  reply = { created: false, serverChanged: true, previousServerEvents: 1 }; await replace();
+  await expect(message).toContainText("1 calendar event LancerLogin created on the previous server is still there. After you verify, LancerLogin removes it if");
+  // Discord removed and set up for a different server: a first save that still leaves events on the server before.
+  reply = { created: true, serverChanged: true, previousServerEvents: 2 }; await replace();
+  await expect(message).toContainText("Discord bot credentials saved. Complete verification below. This is a different Discord server. 2 calendar events LancerLogin created on the previous server are still there.");
+});
+
+test("saved Discord credentials that can't be read say so in the card and can be replaced from it", async ({ page }) => {
+  await useSettingsContext(page);
+  let saved = false; const writes: string[] = [];
+  const discord = () => saved
+    ? { provider: "discord", enabled: true, saved: true, configured: false, state: "verification_required", updatedAt: "2026-11-25T18:00:00.000Z", commandStatus: "unavailable", pendingOperations: 3, failedOperations: 0 }
+    : { provider: "discord", enabled: true, saved: true, configured: false, state: "unreadable", unreadable: true, updatedAt: "2026-10-29T19:47:20.430Z", verifiedAt: "2026-10-29T19:50:00.000Z", commandStatus: "unavailable", pendingOperations: 3, failedOperations: 0 };
+  await page.route("**/admin/integrations", (route) => route.fulfill({ json: { integrations: [{ provider: "google", enabled: false, saved: false, configured: false, state: "disabled" }, { provider: "google_calendar", enabled: false, saved: false, authorized: false, configured: false, state: "disabled" }, { provider: "resend", enabled: false, saved: false, configured: false, state: "disabled" }, discord()] } }));
+  await page.route("**/admin/integrations/discord", (route) => { writes.push(route.request().method()); saved = true; return route.fulfill({ json: { created: false } }); });
+  await page.goto("/settings/integrations");
+  const card = page.locator(".integration-card").filter({ hasText: "Discord bot" });
+  const pill = card.locator(".integration-state");
+  await expect(pill).toHaveText("Saved, but can't be read"); await expect(pill).toHaveAttribute("data-tone", "warning");
+  const status = card.locator(".saved-credentials").getByRole("status");
+  await expect(status).toHaveText("The saved Discord bot credentials can't be read, so nothing that uses them works. Enter them again and save.");
+  await expect(status).toHaveAttribute("data-tone", "warning");
+  // Nothing that needs the credentials is offered until they are saved again.
+  await expect(card.getByRole("button", { name: "Reconcile Discord commands" })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Sync all meetings" })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Send Discord verification" })).toHaveCount(0);
+  if (process.env.LANCERLOGIN_SCREENSHOT_DIR) await card.screenshot({ path: `${process.env.LANCERLOGIN_SCREENSHOT_DIR}/discord-card-unreadable.png` });
+  await expectResponsiveFit(page, responsiveFit);
+  await card.getByRole("button", { name: "Replace credentials", exact: true }).click();
+  for (const [label, value] of [["Bot token", "test-bot-token"], ["Application ID", "323456789012345678"], ["Application public key", "a".repeat(64)], ["Server ID", "123456789012345678"], ["Attendance channel ID", "223456789012345678"]] as const) await card.getByLabel(label, { exact: true }).fill(value);
+  await card.getByRole("button", { name: "Replace saved credentials", exact: true }).click();
+  await expect(pill).toHaveText("Verification required");
+  await expect(card.getByRole("button", { name: "Send Discord verification" })).toBeVisible();
+  await expect(card.locator(".saved-credentials").getByRole("status")).toHaveText(/^Credentials saved on .*2026\.$/);
+  expect(writes).toEqual(["PUT"]);
 });
 
 test("granting local dashboard access sends a salt and K, never the temporary password", async ({ page }) => {

@@ -10,6 +10,12 @@ async function keyFrom(secret: string) {
   return crypto.subtle.importKey("raw", buffer(bytes), "AES-GCM", false, ["encrypt", "decrypt"]);
 }
 
+/** Whether an integration key is the 32 bytes AES-256-GCM needs; one that is not can neither read nor save credentials. */
+export function integrationKeyUsable(secret: string | undefined): secret is string {
+  if (!secret) return false;
+  try { return decode(secret).length === 32; } catch { return false; }
+}
+
 export async function encryptIntegration(value: Record<string, string>, secret: string): Promise<{ ciphertext: string; iv: string }> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await keyFrom(secret), encoder.encode(JSON.stringify(value))));

@@ -7,6 +7,7 @@ import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { ReportDataCache } from "../apps/api/src/report-data-cache.ts";
 import { databaseIdentity, measureD1, usageCategory, type D1Statement } from "../apps/api/src/d1-usage.ts";
 import { applyCoreMigrations } from "./fixtures/d1-database.ts";
+import { referenceInstallationSql, referenceShape } from "./fixtures/reference-installation.ts";
 
 class Database {
   sqlite = new DatabaseSync(":memory:");
@@ -199,20 +200,26 @@ test("correction and contest lookup plans use bounded indexes", () => {
   } finally { database.sqlite.close(); }
 });
 
-test("cache is bounded, coalesces loads, expires, and does not retain failures or changed generations", async () => {
+test("cache is bounded, keeps finished loads only, expires, and does not retain failures or changed generations", async () => {
   let now = 0, generation = 1, loads = 0;
   const database = {}, other = {}, cache = new ReportDataCache<number>(100, 2, () => now);
   const revision = async () => generation, load = async () => ++loads;
-  assert.deepEqual(await Promise.all([cache.read(database, "all", revision, load), cache.read(database, "all", revision, load)]), [1, 1]);
-  assert.equal(await cache.read(other, "all", revision, load), 2);
-  now = 101; assert.equal(await cache.read(database, "all", revision, load), 3);
-  generation++; assert.equal(await cache.read(database, "all", revision, load), 4);
+  // Two reads that miss together each load: a load in progress is never shared between callers.
+  assert.deepEqual(await Promise.all([cache.read(database, "all", revision, load), cache.read(database, "all", revision, load)]), [1, 2]);
+  assert.equal(await cache.read(database, "all", revision, load), 2);
+  assert.equal(await cache.read(other, "all", revision, load), 3);
+  now = 101; assert.equal(await cache.read(database, "all", revision, load), 4);
+  generation++; assert.equal(await cache.read(database, "all", revision, load), 5);
   await cache.read(database, "member1", revision, load); await cache.read(database, "member2", revision, load);
-  assert.equal(await cache.read(database, "all", revision, load), 7);
+  assert.equal(await cache.read(database, "all", revision, load), 8);
   await assert.rejects(cache.read(database, "failed", revision, async () => { throw new Error("failure"); }));
-  assert.equal(await cache.read(database, "failed", revision, load), 8);
+  assert.equal(await cache.read(database, "failed", revision, load), 9);
   await cache.read(database, "changed", revision, async () => { generation++; return ++loads; });
-  assert.equal(await cache.read(database, "changed", revision, load), 10);
+  assert.equal(await cache.read(database, "changed", revision, load), 11);
+  // A load that never finishes leaves nothing behind for the next caller to wait on.
+  void cache.read(database, "stuck", revision, () => new Promise<number>(() => undefined));
+  await new Promise((done) => setImmediate(done));
+  assert.equal(await cache.read(database, "stuck", revision, load), 12);
 });
 
 test("D1 usage wrappers preserve database identity and batch RETURNING semantics", async () => {
@@ -225,5 +232,57 @@ test("D1 usage wrappers preserve database identity and batch RETURNING semantics
     assert.equal(usage.snapshot().measuredQueries, 1);
     assert.equal(usageCategory("/admin/members/private-person"), "/admin/members");
     assert.equal(usageCategory("/unknown/private-person"), "other");
+  } finally { database.sqlite.close(); }
+});
+
+// What the attendance export and the leaderboard trend were before they were rewritten to use less CPU, computed from
+// the full report. The rewritten routes must answer exactly this.
+type FullReport = { meetings: { id: string; title: string; startsAt: string; endsAt: string; required: number; attendanceWeight: number }[]; labels: { id: string; name: string }[]; timeZone: string; members: any[] };
+const exportHeaders = ["meeting", "meetingStart", "meetingEnd", "audience", "required", "attendanceWeight", "memberId", "firstName", "lastName", "memberLabels", "disposition", "eligibility", "regularEligible", "regularWeight", "regularWeightedPresent", "regularRate", "regularAttended", "regularRequired", "regularFrom", "regularTo", "policyEligible", "policyWeight", "policyWeightedPresent", "policyLabel", "policyRuleType", "policyExcusedHandling", "policyStatus", "policyTarget", "policyAttended", "policyRequired", "policyRate", "policyFrom", "policyTo", "policyResults", "policyHistory", "weeklyTarget", "weekStartsOn", "weekSegmentStartsOn", "weekSegmentEndsOn", "checkedInAt", "checkedOutAt", "reason"];
+function exportAsBefore(report: FullReport): string {
+  const cell = (value: unknown) => { const text = value == null ? "" : String(value); const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text; return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe; };
+  const meetings = new Map(report.meetings.map((meeting) => [meeting.id, meeting])); const labels = new Map(report.labels.map((label) => [label.id, label.name]));
+  const rows: Record<string, unknown>[] = report.members.flatMap((item) => item.rows.flatMap((row: any) => {
+    const meeting = meetings.get(row.meetingId); if (!meeting) return []; const date = meeting.startsAt.slice(0, 10); const week = item.weeks.find((week: any) => week.segmentStartsOn <= date && date <= week.segmentEndsOn); const policy = item.currentCompliance;
+    return [{ meeting: meeting.title, meetingStart: meeting.startsAt, meetingEnd: meeting.endsAt, audience: row.audience, required: Boolean(meeting.required), attendanceWeight: meeting.attendanceWeight, memberId: item.member.memberId, firstName: item.member.firstName, lastName: item.member.lastName, memberLabels: row.memberLabelIds.map((id: string) => labels.get(id) ?? "Retired label").join("; "), disposition: row.disposition, eligibility: row.eligibility, regularEligible: row.regularEligible, regularWeight: row.regularWeight, regularWeightedPresent: row.regularEligible && row.attended ? row.regularWeight : 0, regularRate: item.regularAttendance.rate ?? "", regularAttended: item.regularAttendance.attended, regularRequired: item.regularAttendance.required, regularFrom: item.regularAttendance.from ?? "", regularTo: item.regularAttendance.to, policyEligible: row.rateEligible, policyWeight: row.weight, policyWeightedPresent: row.rateEligible && row.attended ? row.weight : 0, policyLabel: policy.labelName ?? "", policyRuleType: policy.ruleType ?? "", policyExcusedHandling: policy.excusedHandling ?? "", policyStatus: policy.status, policyTarget: policy.threshold ?? "", policyAttended: policy.attended, policyRequired: policy.required, policyRate: policy.rate ?? "", policyFrom: policy.status === "no_rule" ? "" : policy.from, policyTo: policy.status === "no_rule" ? "" : policy.to, policyResults: JSON.stringify(item.currentCompliances), policyHistory: JSON.stringify(item.historySummaries), weeklyTarget: week?.target ?? "", weekStartsOn: week?.weekStartsOn ?? "", weekSegmentStartsOn: week?.segmentStartsOn ?? "", weekSegmentEndsOn: week?.segmentEndsOn ?? "", checkedInAt: row.checkedInAt, checkedOutAt: row.checkedOutAt, reason: row.reason }];
+  }));
+  return [exportHeaders.join(","), ...rows.map((row) => exportHeaders.map((header) => cell(row[header])).join(","))].join("\r\n") + "\r\n";
+}
+const trendAsBefore = (report: FullReport) => report.meetings.map((meeting) => { const rows = report.members.flatMap((member) => member.rows.filter((row: any) => row.meetingId === meeting.id && row.regularEligible)); const attended = rows.reduce((sum: number, row: any) => sum + (row.attended ? row.regularWeight : 0), 0); const eligible = rows.reduce((sum: number, row: any) => sum + row.regularWeight, 0); return { meetingId: meeting.id, title: meeting.title, startsAt: meeting.startsAt, rate: eligible > 0 ? Math.round(attended / eligible * 100) : null }; }).filter((point) => point.rate !== null);
+
+test("the export, the leaderboard and summary reports answer as before, and again on the same loaded data", async () => {
+  const database = new Database();
+  try {
+    for (const sql of referenceInstallationSql({ ...referenceShape, members: 25, labels: 3, kiosks: 1, meetingsPerSeason: 14, seasons: 1, attendeesPerMeeting: 5, correctionsPerMeeting: 2, noticeRecipientsPerMeeting: 2, auditEntries: 1, deliveries: 1 })) database.sqlite.exec(sql);
+    // A weekly policy, a percentage policy that counts excused meetings as missed, and a label with none. A title and a
+    // reason that need quoting, and a title that a spreadsheet would read as a formula.
+    database.sqlite.exec(`INSERT INTO label_attendance_rules(id,installation_id,label_id,starts_on,ends_on,rule_type,threshold_percent,meetings_per_week,excused_handling,created_by,created_at,updated_at)
+      SELECT 'test-rule-weekly','primary',id,'2024-09-01','2024-12-31','weekly_count',NULL,2,'exclude','admin','2024-08-15','2024-08-15' FROM member_labels WHERE name='Test Label 1'
+      UNION ALL SELECT 'test-rule-rate','primary',id,NULL,NULL,'weighted_percentage',75,NULL,'count_missed','admin','2024-08-15','2024-08-15' FROM member_labels WHERE name='Test Label 2';
+      UPDATE meetings SET title='Test "quoted", meeting' WHERE id=(SELECT id FROM meetings WHERE id LIKE 'test-meeting-%' ORDER BY starts_at LIMIT 1);
+      UPDATE meetings SET title='=Test formula meeting', attendance_weight=2, required=0 WHERE id=(SELECT id FROM meetings WHERE id LIKE 'test-meeting-%' ORDER BY starts_at LIMIT 1 OFFSET 1);
+      UPDATE attendance_corrections SET reason='Test reason, with a comma' WHERE id=(SELECT id FROM attendance_corrections ORDER BY id LIMIT 1);`);
+    const fetch = await client(database); const json = async (path: string) => { const result = await fetch(path); assert.equal(result.status, 200, path); return result.json() as Promise<any>; };
+    for (const filter of ["", "?roster=all", "?from=2024-09-04&to=2024-09-10", "?meetingType=required&from=2024-09-02", "?meetingType=optional&roster=all"]) {
+      const join = filter ? "&" : "?";
+      for (const round of ["first", "again"]) {
+        const full = await json(`/reports/attendance${filter}`) as FullReport;
+        assert.ok(full.members.length > 5 && full.members.some((member) => member.rows.length > 0), `${filter}: the report has rows`);
+        assert.equal(await (await fetch(`/exports/attendance.csv${filter}`)).text(), exportAsBefore(full), `export ${filter}, ${round}`);
+        const board = await json(`/reports/leaderboard${filter}${join}pageSize=100`);
+        assert.deepEqual(board.insights.trend, trendAsBefore(full), `trend ${filter}, ${round}`);
+        assert.deepEqual([...board.members].sort((a: any, b: any) => a.member.id.localeCompare(b.member.id)), [...full.members].sort((a, b) => a.member.id.localeCompare(b.member.id)), `leaderboard members ${filter}, ${round}`);
+        // Summary detail is the same answer without each member's rows.
+        const summary = await json(`/reports/attendance${filter}${join}detail=summary`);
+        assert.deepEqual(summary, { ...full, members: full.members.map(({ rows: _rows, ...rest }) => rest) }, `summary ${filter}, ${round}`);
+        const summaryBoard = await json(`/reports/leaderboard${filter}${join}pageSize=100&detail=summary`);
+        assert.deepEqual(summaryBoard, { ...board, members: board.members.map(({ rows: _rows, ...rest }: any) => rest) }, `leaderboard summary ${filter}, ${round}`);
+      }
+    }
+    assert.equal((await fetch("/reports/attendance?detail=rows")).status, 400);
+    assert.equal((await fetch("/reports/leaderboard?detail=")).status, 400);
+    // The export is not all header: a weekly cell, a quoted title, a guarded formula and a quoted reason are present.
+    const csv = await (await fetch("/exports/attendance.csv?roster=all")).text();
+    for (const expected of ['"Test ""quoted"", meeting"', "'=Test formula meeting", '"Test reason, with a comma"', "weekly_count", "count_missed"]) assert.ok(csv.includes(expected), expected);
   } finally { database.sqlite.close(); }
 });

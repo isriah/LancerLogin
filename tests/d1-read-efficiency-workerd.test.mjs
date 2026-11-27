@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { createHmac } from "node:crypto";
 import { build } from "esbuild";
 import { applyMigration, coreMigrationNames, createMiniflareD1 } from "./fixtures/miniflare-d1.mjs";
+import { workerSource } from "./fixtures/worker-source.mjs";
 
 test("real D1 indexes, scoped reports and revision cache reduce row reads without changing results", async () => {
   const bundled = await build({ stdin: { contents: `import worker from './apps/api/src/index.ts'; import { measureD1 } from './apps/api/src/d1-usage.ts';
@@ -25,7 +26,7 @@ test("real D1 indexes, scoped reports and revision cache reduce row reads withou
       WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<20) INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,created_by,created_at) SELECT 'meeting'||x,'primary','Synthetic meeting','2026-02-02T12:00:00Z','2026-02-02T13:00:00Z','admin','2026-01-01' FROM n;
       INSERT INTO attendance_events(id,installation_id,member_id,meeting_id,source,occurred_at,action) SELECT m.id||t.id||a.action,'primary',m.id,t.id,'manual',CASE a.action WHEN 'check_in' THEN '2026-02-02T12:00:00Z' ELSE '2026-02-02T13:00:00Z' END,a.action FROM members m CROSS JOIN meetings t CROSS JOIN (SELECT 'check_in' AS action UNION ALL SELECT 'check_out') a;
       INSERT INTO attendance_corrections(id,installation_id,member_id,meeting_id,disposition,reason,created_by,created_at) SELECT m.id||t.id,'primary',m.id,t.id,'present','Synthetic correction','admin','2026-02-03' FROM members m CROSS JOIN meetings t;`.replace(/\n/g, " "));
-    const source = await readFile("apps/api/src/index.ts", "utf8");
+    const source = workerSource();
     const attendanceSql = source.match(/db\.prepare\("(SELECT m\.id AS memberId[^"\n]+)"\)\.bind\(meetingId/)[1];
     const before = await database.prepare(attendanceSql).bind("meeting1", "meeting1", "meeting1", "meeting1", 0).all();
     for (const name of deferred) await applyMigration(database, name);

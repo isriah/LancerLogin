@@ -313,10 +313,13 @@ export function formatReportCellForColumn(column: ReportColumn, cell: ReportCell
 
 export function buildReportRows(input: { definition: ReportDefinition; official: PolicyMemberResult[]; period: PolicyMemberResult[]; meetings: PolicyMeeting[]; labels: PolicyLabel[]; rules: AttendanceRule[]; timeZone: string; from?: string; to?: string }): ReportResultRow[] {
   const official = new Map(input.official.map((item) => [item.member.id, item])); const labelNames = new Map(input.labels.map((label) => [label.id, label.name])); const meetings = new Map(input.meetings.map((meeting) => [meeting.id, meeting])); const rules = new Map(input.rules.map((rule) => [rule.id, rule]));
+  // A meeting's local date is worked out once, not once for each member's row: formatting a date is slow.
+  const meetingDates = new Map<string, string | undefined>();
+  const dateOf = (meetingId: string) => { if (!meetingDates.has(meetingId)) { const meeting = meetings.get(meetingId); meetingDates.set(meetingId, meeting ? localDate(meeting.startsAt, input.timeZone) : undefined); } return meetingDates.get(meetingId); };
   const rows = input.period.map((item) => {
     const full = official.get(item.member.id) ?? item; const memberName = `${item.member.firstName} ${item.member.lastName}`; const dates = { present: [] as string[], absent: [] as string[], excused: [] as string[] };
     for (const row of item.rows) {
-      const meeting = meetings.get(row.meetingId); const date = meeting ? localDate(meeting.startsAt, input.timeZone) : undefined; if (!date) continue;
+      const date = dateOf(row.meetingId); if (!date) continue;
       if (row.disposition === "present" && ["required", "weekly", "optional"].includes(row.eligibility)) dates.present.push(date);
       else if (row.disposition === "absent" && row.rateEligible) dates.absent.push(date);
       else if (row.disposition === "excused" && row.rateEligible) dates.excused.push(date);

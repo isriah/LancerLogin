@@ -13,35 +13,39 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { InstallationSeed, TestD1Database } from "./fixtures/d1-database.ts";
 import { referenceInstallationSql } from "./fixtures/reference-installation.ts";
+import { workerSource } from "../tests/fixtures/worker-source.mjs";
 
 const sources = new Map<string, string>();
-/** The SQL string literal in an API source file that contains `marker`, up to any `${...}` it builds on. */
+/**
+ * The SQL string literal in an API source file that contains `marker`, up to any `${...}` it builds on. The file
+ * "worker" is the Worker's entry point together with its handler files under apps/api/src/worker/.
+ */
 function statement(file: string, marker: string): string {
-  const source = sources.get(file) ?? readFileSync(new URL(`../apps/api/src/${file}`, import.meta.url), "utf8"); sources.set(file, source);
+  const source = sources.get(file) ?? (file === "worker" ? workerSource() : readFileSync(new URL(`../apps/api/src/${file}`, import.meta.url), "utf8")); sources.set(file, source);
   assert.equal(source.split(marker).length, 2, `${file} should contain exactly once: ${marker}`);
   const at = source.indexOf(marker); const quote = source.lastIndexOf("`", at) > source.lastIndexOf('"', at) ? "`" : '"';
   return source.slice(source.lastIndexOf(quote, at) + 1, source.indexOf(quote, at)).replace(/\s+/g, " ");
 }
 const cut = (sql: string) => sql.slice(0, sql.indexOf("${"));
-const policy = statement("index.ts", "SELECT e.meeting_id AS meetingId, e.member_id AS memberId, e.action");
-const contests = statement("index.ts", "AS hasRawCheckIn");
+const policy = statement("worker", "SELECT e.meeting_id AS meetingId, e.member_id AS memberId, e.action");
+const contests = statement("worker", "AS hasRawCheckIn");
 
 const statements: Record<string, string> = {
-  "scan already recorded": statement("index.ts", "SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?\""),
-  "member's scans of a meeting": statement("index.ts", "SELECT id, action, occurred_at AS occurredAt FROM attendance_events"),
-  "record a scan": cut(statement("index.ts", "INSERT OR IGNORE INTO attendance_events")) + "VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)",
-  "meeting attendance": statement("index.ts", "SELECT m.id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id"),
-  "member history": statement("index.ts", "SELECT meeting.id AS meetingId, meeting.title"),
-  "clear a member's attendance at a meeting": statement("index.ts", "DELETE FROM attendance_events WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ? RETURNING id"),
+  "scan already recorded": statement("worker", "SELECT action FROM attendance_events WHERE installation_id = 'primary' AND kiosk_event_id = ?\""),
+  "member's scans of a meeting": statement("worker", "SELECT id, action, occurred_at AS occurredAt FROM attendance_events"),
+  "record a scan": cut(statement("worker", "INSERT OR IGNORE INTO attendance_events")) + "VALUES (?, 'primary', ?, ?, ?, ?, ?, ?, ?)",
+  "meeting attendance": statement("worker", "SELECT m.id AS memberId, m.external_id AS externalId, m.first_name AS firstName, m.last_name AS lastName, m.discord_user_id"),
+  "member history": statement("worker", "SELECT meeting.id AS meetingId, meeting.title"),
+  "clear a member's attendance at a meeting": statement("worker", "DELETE FROM attendance_events WHERE installation_id = 'primary' AND member_id = ? AND meeting_id = ? RETURNING id"),
   "report, everyone": policy,
   "report, one member": policy.replace(" ORDER BY", " AND e.member_id = ? ORDER BY"),
   "report, one meeting": policy.replace(" ORDER BY", " AND e.meeting_id = ? ORDER BY"),
-  "anomaly report": statement("index.ts", "AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = m.installation_id"),
+  "anomaly report": statement("worker", "AS checkedInAt, (SELECT MIN(e.occurred_at) FROM attendance_events e WHERE e.installation_id = m.installation_id"),
   "contests": contests.replace("${where}", ""),
   "contests of a meeting": contests.replace("${where}", "AND c.meeting_id = ?"),
-  "member's references": cut(statement("index.ts", "SELECT (SELECT COUNT(*) FROM attendance_events WHERE member_id = ?)")),
-  "members with history": cut(statement("index.ts", "SELECT COUNT(*) AS count FROM members m WHERE m.installation_id = 'primary' AND (EXISTS (SELECT 1 FROM attendance_events e")) + ")",
-  "schema 1 check-outs": statement("index.ts", "SELECT 'legacy-restore-checkout:'"),
+  "member's references": cut(statement("worker", "SELECT (SELECT COUNT(*) FROM attendance_events WHERE member_id = ?)")),
+  "members with history": cut(statement("worker", "SELECT COUNT(*) AS count FROM members m WHERE m.installation_id = 'primary' AND (EXISTS (SELECT 1 FROM attendance_events e")) + ")",
+  "schema 1 check-outs": statement("worker", "SELECT 'legacy-restore-checkout:'"),
   "scan accepted for a member": statement("scan-integrity.ts", "INSERT OR IGNORE INTO kiosk_accepted_scans"),
   // The foreign key check SQLite runs on attendance_events when a member is removed.
   "delete a member": "DELETE FROM members WHERE id = ?",

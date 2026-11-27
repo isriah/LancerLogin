@@ -1,6 +1,7 @@
 import type { D1Database } from "./d1-usage.ts";
 import { HttpError } from "./http-error.ts";
-import { assertAllowanceChangeKeepsMeetingsApart, attendanceAllowances } from "./attendance-allowances.ts";
+import { assertAllowanceChangeKeepsMeetingsApart, attendanceAllowances, saveAllowancesKeepingMeetingsApart } from "./attendance-allowances.ts";
+import { savedAllowanceGapMsSql } from "./meeting-overlap-guard.ts";
 
 type JsonRecord = Record<string, unknown>;
 type SetupPredicate = { sql: string; bindings: readonly unknown[] };
@@ -72,7 +73,8 @@ async function rules(request: Request, db: D1Database, userId: string) {
   // A longer late scan window must not make meetings that have not closed overlap (the early arrival allowance is kept).
   const current = attendanceAllowances(row as { lateScanMinutes?: number; earlyScanMinutes?: number });
   await assertAllowanceChangeKeepsMeetingsApart(db, current, { ...current, lateScanMinutes: next[0] });
-  const results = await db.batch([
+  // The check is repeated in the batch, so a meeting saved since it, which the longer window would make overlap, refuses the save.
+  const results = await saveAllowancesKeepingMeetingsApart(db, { lateScanMinutes: next[0], earlyScanMinutes: null }, [
     db.prepare(`UPDATE organization_settings SET late_scan_minutes=?,attendance_reporting_starts_on=?,anomaly_late_threshold_minutes=?,anomaly_early_threshold_minutes=?
       WHERE installation_id=? AND late_scan_minutes IS ? AND attendance_reporting_starts_on IS ? AND anomaly_late_threshold_minutes IS ? AND anomaly_early_threshold_minutes IS ?`)
       .bind(...next, installationId, ...expected),
@@ -108,9 +110,9 @@ async function meeting(request: Request, db: D1Database, userId: string) {
   const results = await db.batch([
     db.prepare(`INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,required,notes,created_by,created_at,is_test)
       SELECT ?,?,?,?,?,?,?,?,?,0 WHERE NOT EXISTS(SELECT 1 FROM meetings WHERE installation_id=? AND deleted_at IS NULL
-        AND unixepoch(?,'subsec')-?*60<=unixepoch(ends_at,'subsec')+?*60 AND unixepoch(?,'subsec')+?*60>=unixepoch(starts_at,'subsec')-?*60)`)
+        AND unixepoch(?,'subsec')*1000-${savedAllowanceGapMsSql}<=unixepoch(ends_at,'subsec')*1000 AND unixepoch(?,'subsec')*1000+${savedAllowanceGapMsSql}>=unixepoch(starts_at,'subsec')*1000)`)
       .bind(id, installationId, input.title.trim(), startsAt, endsAt, Number(input.required ?? true), typeof input.notes === "string" ? input.notes : null, userId, now,
-        installationId, startsAt, settings.earlyScanMinutes ?? 15, settings.lateScanMinutes, endsAt, settings.lateScanMinutes, settings.earlyScanMinutes ?? 15),
+        installationId, startsAt, endsAt),
     db.prepare(`INSERT INTO audit_log(id,installation_id,actor_user_id,action,target_type,target_id,created_at)
       SELECT ?,?,?, 'meeting.created','meeting',?,? WHERE changes()=1`).bind(crypto.randomUUID(), installationId, userId, id, now),
   ]);

@@ -25,7 +25,7 @@
       <tr><td>Organization</td><td>Name, subtitle, logo, and colors. A logo of any shape works: on the dashboard and kiosks it is scaled to fit, and its frame narrows to match a square or tall logo.</td></tr>
       <tr><td>Modules</td><td><strong>Manage modules</strong> turns modules on or off and adds, updates, or removes modules. <strong>Attendance</strong> has the tabs Attendance rules, Labels, Meeting configuration, Fingerprint sharing, Fingerprint recovery, and Attendance setup. Each other module with settings has its own page.</td></tr>
       <tr><td>Access</td><td>Admin and Operator accounts, their roster links, and the modules each Operator can use.</td></tr>
-      <tr><td>Integrations</td><td>Google sign-in, Google Calendar, Resend email, FIRST team lookup for FRC, FTC and FLL, and Discord.</td></tr>
+      <tr><td>Integrations</td><td>Google sign-in, Google Calendar, Resend email, FIRST team lookup for FRC, FTC and FLL, Discord, and Notion.</td></tr>
       <tr><td>Data</td><td>Backups, restores, and deletion.</td></tr>
       <tr><td>Updates</td><td>The update track and dashboard updates. See <a href="updates.html">Update LancerLogin</a>.</td></tr>
     </tbody>
@@ -63,6 +63,7 @@
     <article class="task-card"><span>R</span><h3>Resend email</h3><p>Send missed-meeting emails and individual attendance reports to the email on each member's roster entry.</p></article>
     <article class="task-card"><span>F</span><h3>FIRST</h3><p>Look up FRC, FTC and FLL teams by number, for modules such as Guest Visits. See <a href="#first">Set up FIRST team lookup</a>.</p></article>
     <article class="task-card"><span>D</span><h3>Discord</h3><p>Member commands, absence notices with a contest button, meeting events, kiosk sign-in codes, label roles, and a kiosk status message.</p></article>
+    <article class="task-card"><span>N</span><h3>Notion</h3><p>One Notion connection for modules that use Notion, each limited to the databases you choose for it. See the <a href="https://github.com/isriah/LancerLogin/blob/main/docs/INTEGRATIONS.md#notion">Notion setup steps</a>.</p></article>
   </div>
   <figure class="annotated compact-shot"><img src="assets/settings-integrations.png" alt="LancerLogin Settings Integrations page, with the settings tabs Organization, Modules, Access, Integrations, Data and Updates. Google OAuth, Google Calendar and Resend email are each marked Disabled with their switch off. The FIRST card, marked Not connected, has Username and Token fields and a Save button for FRC and for FTC, an FLL row marked Not available yet, and a Test a team area with Team number, Program, Look up and Clear cached answers. Discord bot, below it, is marked Disabled with its switch off."><figcaption>Each integration starts disabled. Turn one on to see its setup steps. The FIRST card has no switch.</figcaption></figure>
 
@@ -77,7 +78,7 @@
     <li>Choose <strong>Authorize Google Calendar</strong>. Sign in with the account that owns or can edit the calendar, and approve both permissions.</li>
     <li>Choose <strong>Load writable calendars</strong>, pick the destination calendar, and choose <strong>Use this calendar</strong>.</li>
   </ol>
-  <p>If authorization fails, the card shows a message that explains the problem. In Testing, Google ends the authorization after 7 days. For ongoing sync, publish the app (<strong>In production</strong>) or use an Internal audience. When the card warns that authorization needs renewing, choose <strong>Re-authorize Google Calendar</strong>.</p>
+  <p>If authorization fails, the card shows a message that explains the problem. In Testing, Google ends the authorization after 7 days. For ongoing sync, publish the app (<strong>In production</strong>) or use an Internal audience. When Google refuses the authorization, or it passes the end date Google gave it, the card shows <strong>Re-authorization required</strong> and warns that authorization needs renewing. Choose <strong>Re-authorize Google Calendar</strong>.</p>
 
   <h2 id="resend-email">Set up Resend email</h2>
   <p>Enter each value in <span class="ui-path">Settings <span>›</span> Integrations <span>›</span> Resend email</span>.</p>

@@ -1,6 +1,6 @@
 // Synthetic, unshipped module definition for composition tests. It declares every contribution point a plugin
-// can use: a job, a Discord command, a report dataset, workspace, public service and setup routes, and an interface other
-// modules call (tests/fixtures/module-plugins/consumer uses it).
+// can use: a job, a Discord command, a report dataset, workspace, public service and setup routes, an interface other
+// modules call (tests/fixtures/module-plugins/consumer uses it), and one Notion database through Core's connection.
 const text = ["contains", "equals", "empty", "not_empty"] as const;
 const number = ["minimum", "equals", "maximum", "between", "empty", "not_empty"] as const;
 
@@ -20,6 +20,8 @@ const manifest = {
       { id: "close", label: "Close Example items", capability: "example.manage", grantable: false },
     ],
   }],
+  // One optional Notion database. It declares no pages.trash, so tests can confirm Core refuses an undeclared operation.
+  notion: { users: ["list"], bindings: [{ id: "items", label: "Example items database", reason: "Example items are copied to this Notion database", required: false, kind: "data_source", operations: ["query", "pages.create", "pages.update"] }] },
   navigation: [{ label: "Example", path: "/example" }],
   settings: [{ label: "Example", path: "/settings/example" }],
   setup: { version: 1, steps: [{ id: "catalog", label: "First Example item", required: true }] },

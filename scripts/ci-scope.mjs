@@ -14,7 +14,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { deviceTests, referenceKeys } from "./check-quick.mjs";
+import { referenceKeys } from "./check-quick.mjs";
+import { kioskOnlyTests } from "./run-web-tests.mjs";
 import { isolatedGitEnv } from "./git-env.mjs";
 
 const rootDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,6 +26,8 @@ const zeroSha = "0000000000000000000000000000000000000000";
 export const documentationPath = /^(?:docs|docs-site)\/[^/]/;
 // Always run: it covers every public docs-site page, its links and its assets, and needs no dependencies.
 export const docsSiteTest = "tests/docs-site.test.mjs";
+// The suites Verify's web scope leaves to verify:kiosk and the complete gate; a documentation-only change skips them too.
+const deviceTests = new Set(kioskOnlyTests);
 
 /**
  * Decide whether a change is documentation-only.

@@ -11,6 +11,10 @@ export type {
   ModuleInterfaceOperationDefinition,
   ModuleInterfaceUse,
   ModuleLifecyclePhase,
+  ModuleNotionBindingDefinition,
+  ModuleNotionDefinition,
+  ModuleNotionOperation,
+  ModuleNotionUserOperation,
   ReportDatasetDefinition,
   ReportDurationUnit,
   ReportFieldDefinition,
@@ -28,6 +32,13 @@ export type { CivilTimeCandidate, CivilTimeErrorCode, CivilTimeFields, CivilTime
 // The CSV import kit's parsers (SDK 1.4.0), for a module Worker that checks imported rows again. The dashboard entry adds the template download.
 export { csvFieldFor, csvText, delimiterFor, formatCsvDate, formatCsvTime, formatCsvTimeRange, mapCsvHeader, normaliseCsvHeader, parseCsvDate, parseCsvDuration, parseCsvTime, parseDelimited } from "../../shared/src/csv-import.ts";
 export type { CsvHeaderMapping, CsvHeaderSpec, CsvValue } from "../../shared/src/csv-import.ts";
+
+// Notion ID and link helpers (SDK 1.8.0), for Worker and dashboard code alike. They call nothing: `parseNotionId` reads the
+// ID out of a Notion link or bare ID, `formatNotionId` and `sameNotionId` normalize and compare IDs, `notionLink` builds a
+// link from an ID, `validNotionUrl` accepts only https links on Notion's hosts, and `decodedNotionPropertyId` compares
+// property IDs that Notion reports encoded in some places and plain in others.
+export { decodedNotionPropertyId, formatNotionId, notionLink, parseNotionId, sameNotionId, validNotionUrl } from "../../shared/src/notion-ids.ts";
+export type { NotionIdResult } from "../../shared/src/notion-ids.ts";
 
 /** Identity helper that type-checks a module manifest. */
 export function defineModuleManifest<const Manifest extends ModuleDefinition>(manifest: Manifest): Manifest {

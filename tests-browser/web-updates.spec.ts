@@ -462,6 +462,28 @@ test("Check again rereads the repository files and refresh run rows, and returni
   await expect(setupPanel(page).getByRole("button", { name: "Check again" })).toHaveCount(0);
 });
 
+test("a status read answered after a check does not bring back the rows from before the check", async ({ page }) => {
+  // Returning to the tab sends a status read and a check together. Here the status read carries the rows from before
+  // the check and is answered after it, as one slow read does on a real installation.
+  const state = await setup(page);
+  const unsettled = readiness({ refreshRun: runFixture({ state: "running", finishedAt: null }), repositoryFiles: filesFixture() });
+  const settled = readiness({ refreshRun: runFixture(), repositoryFiles: filesFixture({ state: "current", outdated: [] }) });
+  state.readiness = unsettled;
+  await page.route("**/admin/web-updates/setup/recheck", (route) => { state.readiness = settled; return route.fulfill({ json: { setup: settled } }); });
+  await page.goto("/settings/updates");
+  const run = setupRow(page, "Latest credential refresh");
+  await expect(run.locator(".update-setup-badge")).toHaveText("Running");
+  let answer = () => {}; const held = new Promise<void>((resolve) => { answer = resolve; });
+  // The queued request is how the test sees that the page has taken this late answer.
+  await page.route("**/admin/web-updates/status", async (route) => { await held; await route.fulfill({ json: { releaseVersion: bundledVersion, workflowUrl, request: pinned({ state: "queued", stage: "health" }), setup: unsettled } }); });
+  for (const hidden of [true, false]) await page.evaluate((value) => { Object.defineProperty(document, "hidden", { configurable: true, get: () => value }); document.dispatchEvent(new Event("visibilitychange")); }, hidden);
+  await expect(run.locator(".update-setup-badge")).toHaveText("Succeeded");
+  answer();
+  await expect(webStatus(page)).toContainText("Update queued");
+  await expect(run.locator(".update-setup-badge")).toHaveText("Succeeded");
+  await expect(setupRow(page, "Repository workflow files").locator(".update-setup-badge")).toHaveText("Up to date");
+});
+
 test("the latest credential refresh failure is explained in plain words with a link to the run", async ({ page }, testInfo) => {
   const state = await setup(page);
   state.readiness = readiness({ refreshRun: runFixture({ state: "failed", code: "dispatch_credential_access_denied", reason: "coded" }), repositoryFiles: filesFixture() });

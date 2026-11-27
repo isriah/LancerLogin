@@ -662,6 +662,9 @@ test("integration setup distinguishes saved credentials from verified connection
   const meetings = await readFile("apps/dashboard/src/meetings-page.tsx", "utf8");
   const attendance = await readFile("apps/dashboard/src/attendance-workspace.tsx", "utf8");
   assert.match(source, /Verification required/);
+  // Saved credentials the installation cannot decrypt show in the card's own pill and saved-credentials line.
+  assert.match(source, /status\.unreadable \? "Saved, but can't be read"/);
+  assert.match(source, /status\.unreadable \? unreadableCredentialsText\(metadata\[provider\]\.title\)/);
   assert.match(source, /result\.created \?/);
   assert.match(source, /credentials saved\. Complete verification below/);
   assert.match(source, /resend\/verify\/start/);

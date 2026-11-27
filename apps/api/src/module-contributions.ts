@@ -5,6 +5,7 @@ import type { ModuleCredentials } from "./integration-crypto.ts";
 import type { CleanupStep } from "./module-cleanup.ts";
 import type { DiscordModuleInteractionHandler } from "./module-discord.ts";
 import type { FirstDataService } from "./first-data.ts";
+import type { NotionService } from "./module-notion.ts";
 import type { ModuleEmailMessage } from "./module-email.ts";
 import type { ReportProjectionHandler } from "./module-reporting.ts";
 
@@ -48,6 +49,12 @@ export type CoreModuleServices = {
    * by Core; lookups from public routes also count per visitor. Needs no manifest declaration.
    */
   readonly first: FirstDataService;
+  /**
+   * Notion through Core's one connection (SDK 1.8.0). Declare the databases and operations in the manifest's `notion`
+   * field; an Admin chooses each database. The token never reaches module code, there is no raw request, and Core
+   * refuses anything the manifest did not declare. Counted by the scheduler like Discord requests.
+   */
+  readonly notion: NotionService;
   /** Encrypt module-owned credentials with Core's integration key. */
   readonly credentials: ModuleCredentials;
   /** Other modules' interfaces this module declares in `uses` (SDK 1.1.0). */

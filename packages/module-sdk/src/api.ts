@@ -29,6 +29,9 @@ export type { CleanupStep } from "../../../apps/api/src/module-cleanup.ts";
 export type { ModuleCredentials } from "../../../apps/api/src/integration-crypto.ts";
 export type { ModuleEmailMessage } from "../../../apps/api/src/module-email.ts";
 export type { FirstDataService, FirstLegacyCredential, FirstLookup, FirstProgram, FirstProgramStatus, FirstSearchResult, FirstTeam, FirstUnavailableReason } from "../../../apps/api/src/first-data.ts";
+// From SDK 1.8.0: Notion through Core's one connection (`services.notion`). Declare databases in the manifest's `notion` field.
+export type { NotionBinding, NotionCapabilities, NotionCapability, NotionCapabilityState, NotionLegacyConnection, NotionQuery, NotionService, NotionServiceStatus, NotionUser } from "../../../apps/api/src/module-notion.ts";
+export type { NotionJson } from "../../../apps/api/src/notion-client.ts";
 export type { DiscordModuleInteraction, DiscordModuleInteractionHandler } from "../../../apps/api/src/module-discord.ts";
 export type { ReportProjectionContext, ReportProjectionHandler, ReportRosterMember } from "../../../apps/api/src/module-reporting.ts";
 
@@ -40,7 +43,9 @@ export { filterAndSortReportRows, reportFilterSelection } from "../../../apps/ap
 export type { NormalizedReportDefinition, ReportCell, ReportResultRow } from "../../../apps/api/src/report-builder.ts";
 
 // Permission-scoped Core projections. Pass the module's captured database from the request or job context.
-export { activeRosterIdentity, listActiveRosterIdentities } from "../../../apps/api/src/core-roster-projection.ts";
+export { activeRosterIdentity, listActiveRosterIdentities, listActiveRosterWithLabels, type ActiveRosterMemberWithLabels } from "../../../apps/api/src/core-roster-projection.ts";
+// From SDK 1.7.0: one organization-local day of Attendance, read-only; each returns undefined while Attendance is unavailable.
+export { expectedMembersForDay, meetingsOnLocalDate, presentMembersForDay, type AttendanceDayOptions, type DayExpectation, type DayExpectationReason, type DayMeeting, type DayPresence } from "../../../apps/api/src/attendance-day-projection.ts";
 export { installationTimeZone } from "../../../apps/api/src/core-installation-projection.ts";
 export { createMeetingReferenceAccess, type MeetingReference, type MeetingReferenceAccess } from "../../../apps/api/src/attendance-meeting-reference.ts";
 

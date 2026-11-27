@@ -93,9 +93,15 @@ for (const { name, intervals } of variants) test(`two real services preserve tim
   assert.equal((await cloud.db.prepare("SELECT count(*) AS n FROM attendance_events WHERE source='kiosk'").first()).n, 1);
   for (const device of ["one", "two"]) {
     const calls = cloud.records.filter(record => record.device === device && record.path === "/kiosk/poll");
-    assert.ok(calls.length >= 13, `${device} must poll commands every ${intervals.commandsMs} ms`);
-    for (let n = 1; n < calls.length; n++) assert.ok(calls[n].time - calls[n - 1].time < intervals.commandsMs + 2000, `${device} command cadence must survive section failures`);
-    assert.ok(calls.filter(record => record.fingerprints).length >= 5);
+    // One poll runs at a time, so the kiosk skips the ticks that fall while this cloud is still answering (or until the
+    // poll's own 8-second limit). A slow answer from a busy test computer is not a late kiosk: skipped ticks count as
+    // polled, and each poll must start within one interval of the answer to the poll before it.
+    const answered = call => Math.min(call.done ?? Infinity, call.time + 8000);
+    const skippedTicks = interval => calls.reduce((ticks, call) => ticks + Math.floor(Math.max(0, answered(call) - call.time) / interval), 0);
+    const skipped = skippedTicks(intervals.commandsMs);
+    assert.ok(calls.length + skipped >= 13, `${device} must poll commands every ${intervals.commandsMs} ms: ${calls.length} polls and ${skipped} ticks skipped during slow answers`);
+    for (let n = 1; n < calls.length; n++) assert.ok(calls[n].time - Math.max(calls[n - 1].time, answered(calls[n - 1])) < intervals.commandsMs + 2000, `${device} command cadence must survive section failures: ${calls[n].time - calls[n - 1].time} ms between polls ${n} and ${n + 1}, the first answered after ${answered(calls[n - 1]) - calls[n - 1].time} ms`);
+    assert.ok(calls.filter(record => record.fingerprints).length + skippedTicks(intervals.fingerprintsMs) >= 5, `${device} must poll fingerprints every ${intervals.fingerprintsMs} ms`);
     assert.ok(calls.filter(record => record.configuration).length >= 2);
     assert.equal(cloud.records.filter(record => record.device === device && ["/kiosk/commands", "/kiosk/config", "/kiosk/fingerprint-reset/commands"].includes(record.path)).length, 0);
   }

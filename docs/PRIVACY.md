@@ -70,6 +70,10 @@ The installation allows up to 60 public ID checks per minute across all visitors
 
 The optional **FIRST** connection looks up a team's name from its number. LancerLogin sends FIRST the team number, the program and season it is asking about and, for FRC and FTC, the Events API username and token an Admin saved. It sends no roster, member, guest or attendance information. FIRST's answers are cached in D1 (a team for seven days, "no such team" for one day). The token is stored encrypted like other integration credentials.
 
+### Notion
+
+The optional **Notion** connection lets a module read and write the Notion databases an Admin chose for it. LancerLogin sends Notion the integration token an Admin saved and whatever that module writes, for example a part request's fields. What a module sends is described with that module. Core itself sends no roster, member or attendance information. Notion user names can reach a module that reads workspace users or rows that name people. Email addresses reach only a module that declared it needs them: for every other module Core removes them from the users it lists and from every person named in the rows, pages and databases it returns, including who created or last edited a row. The token is stored encrypted like other integration credentials, and logs record only the module, the kind of operation and the result.
+
 The dashboard stores local-password hashes, encrypted optional-integration credentials, roster and attendance records, and audit history. Saved integration values are not displayed in the browser. An entire-installation backup can contain password hashes, member PIN hashes, encrypted integration ciphertext, kiosk credential hashes, and audit history. Protect it like an Administrator credential.
 
 ## No usage reporting

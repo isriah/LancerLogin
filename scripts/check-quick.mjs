@@ -17,7 +17,6 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { kioskOnlyTests } from "./run-web-tests.mjs";
 import { isolatedGitEnv } from "./git-env.mjs";
 
 const rootDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -43,7 +42,7 @@ const rootBuildFiles = new Set(["package.json", "package-lock.json", "tsconfig.j
 const codeExtensions = new Set([".ts", ".tsx", ".mts", ".mjs", ".js", ".cjs", ".json", ".css", ".sql", ".yml", ".yaml", ".sh", ".html"]);
 
 // Suites too slow for an edit loop (each over 10 seconds alone) are left to npm test, verify:all and Verify unless the
-// suite itself changed. Physical kiosk suites never run here; verify:kiosk owns them.
+// suite itself changed.
 export const slowTests = new Set([
   "tests/kiosk-poll-service.test.mjs",
   "tests/kiosk-operator-service.test.mjs",
@@ -51,7 +50,10 @@ export const slowTests = new Set([
   "tests-ts/module-composition.test.ts",
   "tests-ts/fingerprint-vault.test.ts",
 ]);
-export const deviceTests = new Set(kioskOnlyTests);
+// The one suite that needs a kiosk's file system (root-owned release files, run with sudo in Verify) never runs here;
+// verify:kiosk owns it. tests/kiosk-runtime.test.mjs is not device-bound: it takes seconds on any computer and is the
+// kiosk service's main test, so a kiosk change runs it here like any other fast test.
+export const deviceTests = new Set(["tests/kiosk-artifacts.test.mjs"]);
 // Plugin pins and composition: a change here also runs `verify:module -- fast <id>` for each affected plugin (which
 // requires the plugin, failing instead of skipping when it can't be fetched) and runs the composition suite.
 const compositionTest = "tests-ts/module-composition.test.ts";
@@ -89,6 +91,10 @@ export function referenceKeys(path) {
   const testHelper = /^(?:tests|tests-ts|tests-browser)\/(.+)$/.exec(path)?.[1];
   if (testHelper && testHelper.includes("/")) keys.push(withoutExtension(testHelper));
   else if (testHelper && basename(testHelper, extname(testHelper)).length >= 6) keys.push(`./${withoutExtension(testHelper)}`);
+  // The Worker's handler files are reached only through its entry point, and tests that pin a line of them read them
+  // through tests/fixtures/worker-source.mjs. So a change to one selects every test that names the entry point or that
+  // helper, as a change to the entry point does.
+  if (path.startsWith("apps/api/src/worker/")) keys.push("apps/api/src/index", "fixtures/worker-source");
   return keys;
 }
 
@@ -441,7 +447,7 @@ function printPlan(plan, base, changes) {
   section("Node tests", plan.javascript);
   section("TypeScript tests", plan.typescript);
   if (plan.modules?.length) section("Module gates: verify:module -- fast <id>, plugins required", plan.modules);
-  if (plan.skipped.length) section("Not run here: slow or physical-kiosk suites (npm test and verify:kiosk run them)", plan.skipped);
+  if (plan.skipped.length) section("Not run here: slow suites and the kiosk release-file suite (npm test and verify:kiosk run them)", plan.skipped);
   if (plan.notes.length) console.log(`\n${plan.notes.map((note) => `Note: ${note}`).join("\n")}`);
   if (plan.fallback) console.log("\nNo changed file mapped to a fast test, so the default set runs.");
 }

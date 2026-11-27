@@ -9,6 +9,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { workerSourceFiles } from "../tests/fixtures/worker-source.mjs";
 import { defaultGeneratedContent, generatedFiles, moduleDataContent, moduleDataFile, parseSelectionFile, CompositionError } from "../scripts/compose-modules.mjs";
 import { composeUpdateModules } from "../scripts/run-web-upgrade.mjs";
 import {
@@ -87,7 +88,7 @@ test("installation builds, web updates and dashboard plugin management cannot us
   const installationFiles = [
     ...readdirSync(join(coreRoot, ".github/workflows")).map((name) => `.github/workflows/${name}`),
     "scripts/compose-modules.mjs", "scripts/run-web-upgrade.mjs", "scripts/prepare-cloudflare-provision.mjs", "scripts/test-plugin-sources.mjs",
-    "apps/api/src/plugin-selection.ts", "apps/api/src/index.ts", "packages/shared/src/module-selection.ts",
+    "apps/api/src/plugin-selection.ts", ...workerSourceFiles(), "packages/shared/src/module-selection.ts",
   ];
   for (const path of installationFiles) assert.doesNotMatch(readFileSync(join(coreRoot, path), "utf8"), /plugin-dev|plugins:dev/, path);
 });

@@ -16,7 +16,7 @@ import { ReleaseNotes } from "./release-notes-markdown";
  * only; mode "modules" is Apply changes on Settings > Modules and handles module-changes requests only. Each card leaves
  * the other's request to it and only points there, since one active request blocks preparing another.
  */
-export function WebUpdateCard({ current, served, running, converged, reloadAvailable, available, workflowUrl, latestTag, releaseUrl, releaseNotes, mode = "release", onStatus }: { current: string; served: string; running: string; converged: boolean; reloadAvailable: boolean; available: boolean; workflowUrl: string; latestTag?: string; releaseUrl?: string; releaseNotes?: string; mode?: "release" | "modules"; onStatus?: (status: WebUpdateResponse) => void }) {
+export function WebUpdateCard({ current, served, running, converged, reloadAvailable, available, workflowUrl, latestTag, releaseUrl, releaseNotes, mode = "release", onStatus }: { current: string; served: string; running: string; converged: boolean; reloadAvailable: boolean; available: boolean; workflowUrl: string; latestTag?: string; releaseUrl?: string; releaseNotes?: string; mode?: "release" | "modules"; onStatus?: (status: WebUpdateResponse & { sentAt: number }) => void }) {
   const [status, setStatus] = useState<WebUpdateResponse>();
   const [error, setError] = useState(""); const [errorCode, setErrorCode] = useState(""); const [busy, setBusy] = useState(false);
   // Prepare and start responses carry no setup readiness; keep the last one status reported.
@@ -34,12 +34,14 @@ export function WebUpdateCard({ current, served, running, converged, reloadAvail
   const previousRequest = own(completedRequest) ? completedRequest : undefined;
   // The other card's request: shown only as a pointer to where it is followed.
   const foreign = activeRequest && !request ? activeRequest : undefined;
-  async function read(path: string, body?: object): Promise<WebUpdateResponse> {
+  // sentAt (performance.now()) lets the page tell which of two answers is the older one.
+  async function read(path: string, body?: object): Promise<WebUpdateResponse & { sentAt: number }> {
+    const sentAt = performance.now();
     const response = await fetch(`${apiBaseUrl}${path}`, { credentials: "include", cache: "no-store", ...(body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
     const result = await response.json() as WebUpdateResponse & { code?: string; error?: string };
     if (!response.ok) throw Object.assign(new Error(webUpdateError(result.code, result.error ?? "Unable to read web update status.")), { code: result.code ?? "" });
     if (result.setup) setSetup(result.setup);
-    return result;
+    return { ...result, sentAt };
   }
   function fail(cause: unknown, message = (cause as Error).message) { setError(message); setErrorCode((cause as { code?: string }).code ?? ""); }
   async function refresh() {

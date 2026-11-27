@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useId, useRef, useState } from "react";
 import { isFirstPartyModule, recommendedModuleIds, type ModulePlatformSnapshot, type ModuleSnapshotItem } from "../../../packages/shared/src/module-platform.ts";
+import { attendanceDisableCalendarText, readAttendanceDisableCalendar } from "./attendance-disable-calendar";
 import { api } from "./dashboard-api";
 import { ModuleAccessGrants } from "./module-access-grants";
 import { AddModuleButton, ModuleChangeDialog, ModuleRepositoryActions, ModuleRepositoryStatus, ModuleSourceDetails, ModuleUpdateFailureNotice, NotDeployedBadge, PendingModuleChanges, UpdateFailureBadge, moduleRepositoryRows, moduleRowAttributes, useModulePackages, type ModulePackages } from "./plugin-management";
@@ -49,6 +50,20 @@ export function ModuleSettings({ snapshot, onChanged, selection = false }: { sna
     if (pending && snapshot) setNotice({ tone: "error", text: "Module settings changed elsewhere. Your unsaved changes were cleared; review the current configuration before saving." });
   }, [snapshot]);
   useEffect(() => { if (review.length) window.requestAnimationFrame(() => reviewPanel.current?.focus()); }, [review.length]);
+  // Reviewing an Attendance disable asks the Worker what it would leave on Google Calendar and Discord. Confirm waits for
+  // the answer; if it fails, the confirmation reads as it does with nothing left behind.
+  const reviewingAttendance = review.some((module) => module.id === "attendance");
+  const [calendarText, setCalendarText] = useState<string[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  useEffect(() => {
+    setCalendarText([]);
+    if (!reviewingAttendance) { setCalendarLoading(false); return; }
+    let current = true; setCalendarLoading(true);
+    api<unknown>("/platform/modules?disable=attendance")
+      .then((value) => { if (current) setCalendarText(attendanceDisableCalendarText(readAttendanceDisableCalendar(value))); }, () => undefined)
+      .finally(() => { if (current) setCalendarLoading(false); });
+    return () => { current = false; };
+  }, [reviewingAttendance]);
   const emptyPanel = useRef<HTMLElement>(null);
   useEffect(() => { if (confirmEmpty) window.requestAnimationFrame(() => emptyPanel.current?.focus()); }, [confirmEmpty]);
   const invalid = Boolean(stored?.modules.some((module) => draft.includes(module.id) && module.dependencies.some((dependency) => !draft.includes(dependency))));
@@ -85,7 +100,7 @@ export function ModuleSettings({ snapshot, onChanged, selection = false }: { sna
         {selection ? stored.modules.map(choice) : <>{stored.modules.map((module) => <div className="module-row" key={module.id} data-module={module.id} {...moduleRowAttributes(packages, module.id)}>{choice(module)}<ModuleUpdateFailureNotice packages={packages} id={module.id}/><ModuleRepositoryActions packages={packages} id={module.id} label={module.label}/></div>)}{undeployed.map((moduleId) => <RepositoryOnlyModuleRow key={moduleId} packages={packages} id={moduleId}/>)}</>}
       </fieldset>
       {invalid && <p className="ui-status" data-tone="error" role="alert">Enable every required dependency for the selected modules.</p>}
-      {review.length > 0 && <section ref={reviewPanel} className="settings-callout module-disable-review" role="region" tabIndex={-1} aria-labelledby={`${id}-review-title`}><div><h2 id={`${id}-review-title`}>Confirm module disable</h2><p>Access, device input, submissions, and scheduled work stop immediately. Module data is retained for 7 days before it becomes eligible for deletion.</p>{review.map((module) => <div key={module.id}><h3>{module.label}</h3><ul>{module.deletion.data.map((item) => <li key={item}>{item}</li>)}</ul></div>)}</div><div className="module-actions"><button className="primary-button" type="button" disabled={busy} onClick={() => void apply(review)}>Confirm disable</button><button type="button" disabled={busy} onClick={() => setReview([])}>Cancel</button></div></section>}
+      {review.length > 0 && <section ref={reviewPanel} className="settings-callout module-disable-review" role="region" tabIndex={-1} aria-labelledby={`${id}-review-title`}><div><h2 id={`${id}-review-title`}>Confirm module disable</h2><p>Access, device input, submissions, and scheduled work stop immediately. Module data is retained for 7 days before it becomes eligible for deletion.</p>{review.map((module) => <div key={module.id}><h3>{module.label}</h3><ul>{module.deletion.data.map((item) => <li key={item}>{item}</li>)}</ul>{module.id === "attendance" && calendarText.map((sentence) => <p key={sentence}>{sentence}</p>)}</div>)}</div><div className="module-actions"><button className="primary-button" type="button" disabled={busy || calendarLoading} onClick={() => void apply(review)}>Confirm disable</button><button type="button" disabled={busy} onClick={() => setReview([])}>Cancel</button></div></section>}
       {confirmEmpty && <section ref={emptyPanel} className="settings-callout module-empty-review" role="region" tabIndex={-1} aria-labelledby={`${id}-empty-title`}><div><h2 id={`${id}-empty-title`}>Continue without modules?</h2><p>Only Core features will be available: roster, labels, reports, branding, integrations, backups, and updates. Meetings, check-ins, and kiosks need the Attendance module. You can turn modules on later in Settings &gt; Modules.</p></div><div className="module-actions"><button className="primary-button" type="button" disabled={busy} onClick={() => void apply()}>Continue without modules</button><button type="button" disabled={busy} onClick={() => setConfirmEmpty(false)}>Choose modules</button></div></section>}
       <div className="module-actions"><button className="primary-button" type="submit" disabled={busy || invalid || !changed || review.length > 0 || confirmEmpty}>{busy ? "Saving..." : stored.modules.some((module) => module.enabled && !draft.includes(module.id)) ? "Review module disable" : selection ? "Continue" : "Save modules"}</button></div>
       {!selection && <PendingModuleChanges packages={packages}/>}

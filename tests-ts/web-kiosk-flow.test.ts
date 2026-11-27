@@ -136,9 +136,9 @@ test("attendance answers map to the Pi kiosk's result states", () => {
 });
 
 test("only the Worker's own answer to a revoked credential forgets the pairing; any other 401 is a passing failure", async () => {
-  // What kioskFor in apps/api/src/index.ts sends for a retired or replaced kiosk's token: a 401, JSON, this message, no code.
+  // What kioskFor in apps/api/src/worker/kiosks.ts sends for a retired or replaced kiosk's token: a 401, JSON, this message, no code.
   assert.equal(revokedCredentialMessage, "Kiosk credential is invalid");
-  assert.match(await readFile(new URL("../apps/api/src/index.ts", import.meta.url), "utf8"), /if \(!kiosk\) throw new HttpError\(401, "Kiosk credential is invalid"\);/);
+  assert.match(await readFile(new URL("../apps/api/src/worker/kiosks.ts", import.meta.url), "utf8"), /if \(!kiosk\) throw new HttpError\(401, "Kiosk credential is invalid"\);/);
   assert.equal(credentialRevoked(401, { error: revokedCredentialMessage }), true);
   assert.equal(credentialRevoked(403, { error: revokedCredentialMessage }), false);
   for (const body of [undefined, null, {}, "Kiosk credential is invalid", { error: "Kiosk authentication required" }, { error: "Sign in required" }]) assert.equal(credentialRevoked(401, body), false);

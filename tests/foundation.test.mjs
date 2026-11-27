@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { can } from "../packages/shared/src/policy.mjs";
 import { createApiHarness } from "../apps/api/src/test-harness.mjs";
+import { workerSource, workerSourceFiles } from "./fixtures/worker-source.mjs";
 
 test("foundation documents state standalone constraints", async () => {
   const readme = await readFile("README.md", "utf8");
@@ -111,10 +112,21 @@ test("attendance lifecycle migration adds complete sessions and durable Discord 
   assert.doesNotMatch(migration, /fingerprint_template|raw_fingerprint|biometric_template/i);
 });
 
+// apps/api/src/index.ts is the Worker's entry point and route table. Handlers live under apps/api/src/worker/, one area
+// per file, so that a change to one area does not mean reading or editing a single very large file.
+test("the Worker's entry point holds the route table, and handlers stay in their own files", async () => {
+  const entry = await readFile("apps/api/src/index.ts", "utf8");
+  assert.doesNotMatch(entry, /^(?:export )?(?:async )?function /m, "declare handlers under apps/api/src/worker/, not in index.ts");
+  const handlerFiles = workerSourceFiles().filter((file) => file !== "apps/api/src/index.ts");
+  assert.ok(handlerFiles.length > 20);
+  // The entry point imports the handler files, never the other way round, so no file can depend on the whole Worker.
+  for (const file of handlerFiles) assert.equal((await readFile(file, "utf8")).includes('from "../index.ts"'), false, file);
+});
+
 test("dashboard restore accepts and normalizes earlier backup schemas", async () => {
-  const source = await readFile("apps/api/src/index.ts", "utf8");
-  assert.match(source, /const backupSchemaVersion = 52;/);
-  assert.match(source, /backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49, module_report_baselines: 50 }/);
+  const source = workerSource();
+  assert.match(source, /const backupSchemaVersion = 53;/);
+  assert.match(source, /backupTablesAddedAt: Partial<Record<BackupTable, number>> = { member_pins: 47, first_credentials: 49, module_report_baselines: 50, notion_connection: 53, notion_bindings: 53 }/);
   assert.match(source, /simulated_kiosk_sessions: { schema: 48, owner: "attendance" }/);
   assert.match(source, /tables\.simulated_kiosk_sessions = \[\];/);
   assert.match(source, /legacyTableColumns:[\s\S]*organization_settings: tableColumns\.organization_settings\.slice\(0, -17\)/);
@@ -136,7 +148,7 @@ test("dashboard restore accepts and normalizes earlier backup schemas", async ()
 
 test("Google Calendar migration and worker keep delivery scoped and retryable", async () => {
   const migration = await readFile("apps/api/migrations/0026_google_calendar_sync.sql", "utf8");
-  const source = await readFile("apps/api/src/index.ts", "utf8");
+  const source = workerSource();
   assert.match(migration, /google_calendar_authorizations/);
   assert.match(migration, /google_calendar_event_mappings/);
   assert.match(migration, /google_calendar_operations/);
@@ -168,7 +180,7 @@ test("Discord absence recipient history preserves every sent notice", async () =
 
 test("Discord contest notices have a bounded organization-wide expiry", async () => {
   const migration = await readFile("apps/api/migrations/0012_discord_contest_window.sql", "utf8");
-  const source = await readFile("apps/api/src/index.ts", "utf8");
+  const source = workerSource();
   assert.match(migration, /DEFAULT 24 CHECK \(discord_contest_window_hours BETWEEN 1 AND 168\)/);
   assert.match(source, /Date\.parse\(recipient\.deliveredAt\).+discordContestWindowHours/);
 });
@@ -251,7 +263,7 @@ test("integration enablement migration preserves configured providers and defaul
 });
 
 test("entire-installation restore inserts roster members before linked dashboard users", async () => {
-  const source = await readFile("apps/api/src/index.ts", "utf8");
+  const source = workerSource();
   const order = source.match(/const installationTables: BackupTable\[\] = \[([\s\S]*?)\];/)?.[1] ?? "";
   assert.ok(order.indexOf('"members"') >= 0);
   assert.ok(order.indexOf('"users"') > order.indexOf('"members"'));

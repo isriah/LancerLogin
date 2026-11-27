@@ -48,6 +48,12 @@ export { SettingsSectionNavigation, settingsSectionHref } from "../../../apps/da
  * module's report datasets use it for the Operational baseline period. Since module SDK 1.5.0.
  */
 export { ReportingStartDateField } from "../../../apps/dashboard/src/reporting-start-date-field.tsx";
+/**
+ * The picker for one Notion database a module declared in its manifest `notion.bindings`, for an Admin-only setup or
+ * settings page. The Admin pastes the database's link; Core checks that its Notion connection can read it and stores the
+ * choice. `onChanged` reports whether the binding has a database. Since module SDK 1.8.0.
+ */
+export { NotionBindingField } from "../../../apps/dashboard/src/notion-binding-field.tsx";
 
 /**
  * The CSV import kit Core's roster and meeting imports use (SDK 1.4.0): delimited parsing (comma or tab, quotes, byte order

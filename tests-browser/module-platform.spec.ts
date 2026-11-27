@@ -122,3 +122,29 @@ test("an unavailable plugin keeps the workspace usable and explains itself in Se
   await expect(page.getByText("Cleanup needs recovery attention and will retry.")).toHaveCount(0);
   await expect(page.getByRole("switch", { name: /Attendance/ })).toBeDisabled();
 });
+
+test("the Attendance disable confirmation says which calendar events stay, and reads as before when none do", async ({ page }) => {
+  const state = snapshot({ enabled: true, selected: true });
+  let calendar: unknown = { google_calendar: { waitingRemovals: 3, upcomingEvents: 0 }, discord: { waitingRemovals: 2, upcomingEvents: 0 } };
+  const asked: string[] = [];
+  await page.route((url) => url.pathname === "/platform/modules", (route) => {
+    const disable = new URL(route.request().url()).searchParams.get("disable"); if (disable) asked.push(disable);
+    return route.fulfill({ json: disable === "attendance" ? { ...state, attendanceDisableCalendar: calendar } : state });
+  });
+  await page.goto("/settings/modules");
+  await page.getByRole("switch", { name: "Attendance", exact: true }).uncheck();
+  await page.getByRole("button", { name: "Review module disable" }).click();
+  const review = page.getByRole("region", { name: "Confirm module disable" });
+  await expect(review).toContainText("3 Google Calendar events and 2 Discord events are waiting to be removed. They are removed if Attendance is enabled again within 7 days; after that they must be deleted by hand.");
+  await expect(review.getByRole("button", { name: "Confirm disable" })).toBeEnabled();
+  expect(asked).toEqual(["attendance"]);
+
+  // Nothing left behind: the confirmation is the one it has always been, with its single paragraph.
+  calendar = { google_calendar: { waitingRemovals: 0, upcomingEvents: 0 }, discord: { waitingRemovals: 0, upcomingEvents: 0 } };
+  await review.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Review module disable" }).click();
+  await expect(review.getByRole("button", { name: "Confirm disable" })).toBeEnabled();
+  await expect.poll(() => asked.length).toBe(2);
+  await expect(review.locator("p")).toHaveCount(1);
+  await expect(review.locator("p")).toHaveText("Access, device input, submissions, and scheduled work stop immediately. Module data is retained for 7 days before it becomes eligible for deletion.");
+});

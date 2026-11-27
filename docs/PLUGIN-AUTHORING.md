@@ -98,6 +98,23 @@ uses: [{ interface: "example.items", version: 1, operations: ["list"], required:
 
 A required use behaves like a dependency: composition refuses the plugin without a provider that offers that version and every listed operation, and it can be enabled only with the provider. An optional use may be missing. Calls are available only while both modules are enabled and the provider is set up, and only with the signed-in user's own access to the provider or a grant an Admin gives the consumer in **Settings > Modules**. See [cross-module calls](MODULE-AUTHORING.md#cross-module-calls) for the full rules.
 
+### Notion databases
+
+From SDK 1.8.0 (declare `@lancerlogin/module-sdk` `^1.8.0`), a plugin uses Notion through Core's one connection instead of keeping its own token. Declare the databases it needs in the manifest:
+
+```ts
+notion: {
+  users: ["list"],
+  bindings: [
+    { id: "orders", label: "Ordering database", reason: "Part requests are added to this database", required: true, kind: "data_source", operations: ["query", "pages.create"] },
+  ],
+},
+```
+
+`operations` is any of `retrieve`, `query`, `pages.create`, `pages.retrieve`, `pages.update`, `pages.trash` and `comments.create`; `users` is any of `list`, `retrieve` and `email`. Ask only for what the plugin calls: an Admin sees each binding's label and reason when choosing its database, and Core refuses everything else. In the Worker, call `services.notion` with the binding's `id`; see **Notion** in [Module authoring](MODULE-AUTHORING.md) for the calls, the page check, failures and limits. On the dashboard, `<NotionBindingField moduleId="..." bindingId="orders" />` from `@lancerlogin/module-sdk/dashboard` is the picker for an Admin-only setup or settings page. `@lancerlogin/module-sdk` also exports helpers that call nothing: `parseNotionId`, `formatNotionId`, `sameNotionId`, `notionLink`, `validNotionUrl` and `decodedNotionPropertyId`.
+
+The scoping keeps one plugin's bug out of another plugin's database. It is not a sandbox: a plugin is trusted code, as the trust model above says. In the README, tell Admins which of Notion's five capabilities the plugin needs (Read content, Insert content, Update content, Insert comments, Read user information).
+
 ### Permissions and navigation
 
 - **Routes.** A plugin's API routes are exact or prefix routes under its own name: `/admin/<module>` with `workspace` access (signed-in users), `/public/<module>` with `service` access (no sign-in; the module must be enabled) and `/module-setup/<module>` with `setup` access. The name is the module ID, or the table prefix without its final `_` and with hyphens for underscores.
@@ -137,7 +154,7 @@ export default defineApiModule({
 });
 ```
 
-Provide exactly one handler for every declared route, setup step, job, report dataset, Discord command and interface operation, and nothing undeclared; Core refuses the contribution otherwise. A route handler returns `undefined` for requests in its family that it does not handle. Handlers receive `request`, `url`, the module-scoped `db`, Core `services` (shared Google Calendar, Discord and email connections, module credentials, and `services.modules` for other modules' interfaces), `requireRole`, `json`, `body`, `respond`, `requireDashboardOrigin` and `dashboardOrigin`. The database rechecks the module's lifecycle and the user's authority with every statement. Read Core data only through the SDK's projections (`listActiveRosterIdentities`, `activeRosterIdentity`, `installationTimeZone`, `createMeetingReferenceAccess`), never another module's tables. Jobs run on Core's scheduler while the module is enabled; persist retry state and keep provider operations idempotent. Optional fields such as `freshEnable` (idempotent default rows on first enablement), `reportFilters`, `rosterReferences` and `privateResponseRoutes` are covered in [module authoring](MODULE-AUTHORING.md#worker-contribution).
+Provide exactly one handler for every declared route, setup step, job, report dataset, Discord command and interface operation, and nothing undeclared; Core refuses the contribution otherwise. A route handler returns `undefined` for requests in its family that it does not handle. Handlers receive `request`, `url`, the module-scoped `db`, Core `services` (shared Google Calendar, Discord and email connections, FIRST team data, Notion through declared databases, module credentials, and `services.modules` for other modules' interfaces), `requireRole`, `json`, `body`, `respond`, `requireDashboardOrigin` and `dashboardOrigin`. The database rechecks the module's lifecycle and the user's authority with every statement. Read Core data only through the SDK's projections (`listActiveRosterIdentities`, `activeRosterIdentity`, `listActiveRosterWithLabels`, `installationTimeZone`, `createMeetingReferenceAccess`, and from SDK 1.7.0 the Attendance day projections `meetingsOnLocalDate`, `presentMembersForDay` and `expectedMembersForDay`, which return nothing while Attendance is unavailable), never another module's tables. Who checked in and who was expected are visible to any enabled module that reads them, so name that in the capability label of the work that uses them. Jobs run on Core's scheduler while the module is enabled; persist retry state and keep provider operations idempotent. Optional fields such as `freshEnable` (idempotent default rows on first enablement), `reportFilters`, `rosterReferences` and `privateResponseRoutes` are covered in [module authoring](MODULE-AUTHORING.md#worker-contribution).
 
 A provider implements its interfaces under `interfaces`, one handler per declared operation. Each handler receives the provider's own scoped `db` and `services`, the `caller` (calling module, with the signed-in `userId` or the `grantId`) and the JSON input, validates the input and returns a JSON result or throws `HttpError`, which the caller receives with the same status and message. A consumer calls `services.modules.interface(id, version)`, which returns nothing when the interface is unavailable, then `call(operation, input)`. Input and result are plain JSON of at most 64 KB. A call is not atomic with the consumer's own writes, so keep operations idempotent and call them from a job with retry state:
 

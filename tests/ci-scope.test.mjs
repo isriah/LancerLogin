@@ -132,12 +132,13 @@ test("Verify keeps its required jobs and runs only documentation checks for a do
 
 // The private workflow that runs the virtual kiosk scenarios on pull requests that touch kiosk-facing code
 // (.github/workflows/virtual-kiosk-pr.yml). It is excluded from public exports, so this checks it only where it exists.
+// Only kiosk-facing paths: catch-alls such as apps/api/src/index.ts and package-lock.json started it on most pull
+// requests, so they are left to the nightly run, which runs the same scenarios on main (checked below).
 const virtualKioskWorkflow = ".github/workflows/virtual-kiosk-pr.yml";
 const virtualKioskPaths = [
   "apps/kiosk/**",
   "apps/dashboard/src/web-kiosk/**",
   "apps/dashboard/src/kiosks-page.tsx",
-  "apps/api/src/index.ts",
   "apps/api/src/attendance-lifecycle.ts",
   "apps/api/src/discord-kiosk-codes.ts",
   "apps/api/src/fingerprint-*.ts",
@@ -145,6 +146,8 @@ const virtualKioskPaths = [
   "apps/api/src/member-pins.ts",
   "apps/api/src/pairing-service.mjs",
   "apps/api/src/scan-*.ts",
+  "apps/api/src/worker/attendance.ts",
+  "apps/api/src/worker/kiosks.ts",
   "packages/shared/src/member-lookup.mjs",
   "packages/shared/src/pairing-code.mjs",
   "packages/shared/src/password-key.mjs",
@@ -153,7 +156,6 @@ const virtualKioskPaths = [
   "scripts/virtual-kiosk/**",
   "tests-virtual-kiosk/**",
   "playwright.virtual-kiosk.config.ts",
-  "package-lock.json",
   virtualKioskWorkflow,
 ];
 // GitHub's path filter for the patterns used here: * stays inside one folder, ** crosses folders.
@@ -173,26 +175,35 @@ test("the virtual kiosk scenarios run on private pull requests that touch kiosk-
   // Every pattern still names something in the repository, so a renamed file cannot quietly leave the filter.
   const tracked = execFileSync("git", ["ls-files"], { encoding: "utf8" }).split("\n").filter(Boolean);
   for (const pattern of paths) assert.ok(tracked.some((file) => pathFilter(pattern).test(file)), `${pattern} matches no tracked file`);
-  // Every file the harness and the scenarios import from the applications is in the filter.
+  // Every file the harness and the scenarios import from the applications is in the filter, except the Worker's entry:
+  // the stack's Worker (scripts/virtual-kiosk/worker-entry.mjs) re-exports apps/api/src/index.ts, which nearly every API
+  // change touches, so the nightly run covers it instead (checked in the nightly test below).
+  const nightlyOnly = new Set(["apps/api/src/index.ts"]);
   const sources = tracked.filter((file) => /^(?:scripts\/virtual-kiosk(?:\.mjs|\/.+\.mjs)|tests-virtual-kiosk\/.+\.ts)$/.test(file));
   assert.ok(sources.length > 5);
+  const importedFiles = new Set();
   for (const source of sources) {
     for (const [, specifier] of readFileSync(source, "utf8").matchAll(/from "((?:\.\.\/)+(?:apps|packages)\/[^"]+)"/g)) {
       const imported = join(dirname(source), specifier).replaceAll("\\", "/");
+      importedFiles.add(imported);
+      if (nightlyOnly.has(imported)) continue;
       assert.ok(startsVirtualKiosk([imported], paths), `${source} imports ${imported}, which is not in the path filter`);
     }
   }
+  for (const file of nightlyOnly) assert.ok(importedFiles.has(file) && !startsVirtualKiosk([file], paths), `${file} is still imported and left to the nightly run`);
 
   for (const files of [
     ["apps/kiosk/src/service.mjs"], ["apps/kiosk/systemd/lancerlogin-kiosk.service"], ["apps/dashboard/src/web-kiosk/member-pin.ts"], ["apps/dashboard/src/kiosks-page.tsx"],
-    ["apps/api/src/index.ts"], ["apps/api/src/member-pins.ts"], ["apps/api/src/discord-kiosk-codes.ts"], ["apps/api/src/scan-refusal.ts"], ["apps/api/src/kiosk-poll.ts"],
-    ["scripts/virtual-kiosk.mjs"], ["scripts/virtual-kiosk/fakes.mjs"], ["tests-virtual-kiosk/pi-discord-code.spec.ts"], ["playwright.virtual-kiosk.config.ts"],
-    ["docs/EXAMPLE-GUIDE.md", "apps/kiosk/package.json"], [virtualKioskWorkflow],
+    ["apps/api/src/member-pins.ts"], ["apps/api/src/discord-kiosk-codes.ts"], ["apps/api/src/scan-refusal.ts"], ["apps/api/src/kiosk-poll.ts"], ["apps/api/src/worker/kiosks.ts"], ["apps/api/src/worker/attendance.ts"],
+    ["scripts/virtual-kiosk.mjs"], ["scripts/virtual-kiosk/fakes.mjs"], ["scripts/virtual-kiosk/test-stack.mjs"], ["tests-virtual-kiosk/pi-discord-code.spec.ts"],
+    ["tests-virtual-kiosk/global-setup.ts"], ["playwright.virtual-kiosk.config.ts"], ["docs/EXAMPLE-GUIDE.md", "apps/kiosk/package.json"], [virtualKioskWorkflow],
   ]) assert.equal(startsVirtualKiosk(files, paths), true, files.join());
   for (const files of [
-    ["apps/dashboard/src/reports-page.tsx"], ["apps/dashboard/src/styles.css"], ["apps/api/src/report-builder.ts"], ["apps/api/src/web-updates.ts"], ["apps/api/src/kiosk/nested.ts"],
+    ["apps/dashboard/src/reports-page.tsx"], ["apps/dashboard/src/styles.css"], ["apps/api/src/report-builder.ts"], ["apps/api/src/web-updates.ts"], ["apps/api/src/kiosk/nested.ts"], ["apps/api/src/worker/reports.ts"],
     ["docs/EXAMPLE-GUIDE.md"], ["private/WORKFLOW.md"], ["tests/kiosk-discord-code.test.mjs"], ["tests-browser/kiosk-pins-admin.spec.ts"], ["scripts/check-quick.mjs"],
     [".github/workflows/quick-check.yml"], [".github/workflows/ci.yml"], ["playwright.config.ts"], ["package.json"],
+    // Catch-alls that most pull requests touch; the nightly run covers them on main.
+    ["apps/api/src/index.ts"], ["package-lock.json"], ["apps/api/src/index.ts", "package-lock.json", "docs/EXAMPLE-GUIDE.md"],
   ]) assert.equal(startsVirtualKiosk(files, paths), false, files.join());
 
   // One private-only job, cancelled when the pull request is pushed again.
@@ -231,7 +242,7 @@ test("the nightly browser run repeats Verify's browser shards on main, privately
   assert.match(workflow, /^env:\n(?: {2}#[^\n]*\n)* {2}LANCERLOGIN_PLUGIN_FREE_BUILD: "1"$/m);
 
   const jobs = jobsOf(workflow);
-  assert.deepEqual(Object.keys(jobs), ["changes", "core-browser-shard", "plugin-browser-shard", "integration-browser-shard", "passed"]);
+  assert.deepEqual(Object.keys(jobs), ["changes", "core-browser-shard", "plugin-browser-shard", "integration-browser-shard", "virtual-kiosk-browser", "passed"]);
   // Only the private repository runs it; every other job needs that one.
   assert.match(jobs.changes, /^    if: github\.event\.repository\.private && github\.repository == '[\w.-]+\/[\w.-]+'$/m);
   // A scheduled run skips the browsers when this commit already passed; a passing run on main leaves that marker.
@@ -239,7 +250,7 @@ test("the nightly browser run repeats Verify's browser shards on main, privately
   assert.ok(restore);
   assert.match(jobs.changes, /if: github\.event_name == 'schedule'\n\s+uses: actions\/cache\/restore@v4/);
   assert.match(jobs.changes, /"\$GITHUB_EVENT_NAME" == "schedule" && "\$PASSED" == "true"[\s\S]*run=false[\s\S]*else[\s\S]*run=true/);
-  assert.match(jobs.passed, /^    needs: \[core-browser-shard, plugin-browser-shard, integration-browser-shard\]\n    if: github\.ref == 'refs\/heads\/main'$/m);
+  assert.match(jobs.passed, /^    needs: \[core-browser-shard, plugin-browser-shard, integration-browser-shard, virtual-kiosk-browser\]\n    if: github\.ref == 'refs\/heads\/main'$/m);
   assert.ok(jobs.passed.includes(`uses: actions/cache/save@v4\n        with:\n          path: ${restore[1]}\n          key: ${restore[2]}\n`));
   assert.equal(restore[2], "nightly-browser-passed-${{ github.sha }}");
 
@@ -260,6 +271,16 @@ test("the nightly browser run repeats Verify's browser shards on main, privately
   const core = jobs["core-browser-shard"];
   assert.ok(core.indexOf("name: browser-failure-core-${{ matrix.shard }}\n") < core.indexOf("--server dev"));
   assert.match(core, /if: \$\{\{ failure\(\) && steps\.dev-server-smoke\.outcome == 'failure' \}\}\n\s+uses: actions\/upload-artifact@v4\n\s+with:\n\s+name: browser-failure-core-\$\{\{ matrix\.shard \}\}-dev-server\n\s+path: test-results\//);
+
+  // Every virtual kiosk scenario runs too, so what the pull request workflow's path filter leaves out shows on main
+  // within a day: Verify's Virtual kiosk browser job from runs-on down, the same steps and time limits.
+  const kiosk = jobs["virtual-kiosk-browser"];
+  assert.match(kiosk, /^    name: Virtual kiosk browser\n    needs: changes\n    if: needs\.changes\.outputs\.run == 'true'\n    runs-on:/m);
+  const fromRunner = (job) => job.slice(job.indexOf("    runs-on:")).trimEnd();
+  assert.ok(verify["virtual-kiosk-browser"]);
+  assert.equal(fromRunner(kiosk), fromRunner(verify["virtual-kiosk-browser"]));
+  assert.match(kiosk, /timeout-minutes: 25\n        run: npm run test:kiosk-virtual\n/);
+  assert.doesNotMatch(kiosk, /continue-on-error|--grep|--project|retries/);
 });
 
 test("every private-only workflow is excluded from the public export in the release runbooks", { skip: !existsSync("private/BETA-RELEASE.md") && "public export" }, async () => {

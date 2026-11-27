@@ -9,7 +9,8 @@
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import worker, { runSchedulerSlice } from "../apps/api/src/index.ts";
+import { workerSourceFiles } from "../tests/fixtures/worker-source.mjs";
+import worker, { registeredCoreSchedulerJobs, registeredModuleSchedulerJobs, runSchedulerSlice } from "../apps/api/src/index.ts";
 import { encryptIntegration } from "../apps/api/src/integration-crypto.ts";
 import { createSessionCodec } from "../apps/api/src/runtime-security.ts";
 import { pruneStaleRows } from "../apps/api/src/stale-row-pruning.ts";
@@ -98,7 +99,7 @@ async function fixture(context: TestContext, integrations: Integrations, databas
   }
   const rows = <T = Record<string, any>>(sql: string, ...values: unknown[]) => db.sqlite.prepare(sql).all(...values as never[]).map((row) => ({ ...row })) as T[];
   const count = (sql: string, ...values: unknown[]) => Number((db.sqlite.prepare(sql).get(...values as never[]) as { n: number }).n);
-  return { db, remote, counted, prepared, env, request, deliver, rows, count };
+  return { db, remote, counted, prepared, env, cookie, request, deliver, rows, count };
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 
@@ -154,8 +155,8 @@ for (const [state, integrations] of Object.entries(integrationStates)) {
     costs["DELETE /meetings/:id"] = deletedOne.subrequests;
     const deletedSeries = await measured("delete a series", () => app.request("DELETE", `/meetings/${seriesIds[0]}`, { scope: "future" }));
     assert.equal(deletedSeries.body.deleted, 20); same("DELETE /meetings/:id (series)", deletedOne.subrequests, deletedSeries.subrequests);
-    // Nothing was delivered yet, so Discord has no event to delete; Google's pending upserts become deletes.
-    expectQueued(deletedSeries.body.calendarDelivery, 20, 0, "delete a series");
+    // Nothing was delivered yet, so neither calendar has an event to delete: no delete is queued, and the pending creates are dropped.
+    expectQueued(deletedSeries.body.calendarDelivery, 0, 0, "delete a series");
     const restoredOne = await measured("restore one", () => app.request("POST", `/meetings/${meetingId}/restore`, { scope: "occurrence", deletion: deletedOne.body.deletion }));
     const restoredSeries = await measured("restore a series", () => app.request("POST", `/meetings/${seriesIds[0]}/restore`, { scope: "future", deletion: deletedSeries.body.deletion }));
     assert.equal(restoredSeries.body.restored, 20); same("POST /meetings/:id/restore", restoredOne.subrequests, restoredSeries.subrequests);
@@ -223,13 +224,13 @@ test("superseded operations collapse, and the scheduler delivers what is left", 
   const app = await fixture(context, { google: true, discord: true });
   const calendarRequests = () => app.remote.requests.splice(0).map((request) => request.replace(/ (ll[0-9a-f]+|\d+)$/, ""));
 
-  // Created and deleted before any delivery: Google gets one delete (the event was never made), Discord nothing.
+  // Created and deleted before any delivery: neither calendar is sent anything (the events were never made).
   const brief = await app.request("POST", "/meetings", meetingBody(0), 201);
   await app.request("DELETE", `/meetings/${brief.body.meeting.id}`, { scope: "occurrence" });
-  assert.deepEqual(app.rows("SELECT action, status FROM google_calendar_operations"), [{ action: "delete", status: "pending" }]);
+  assert.deepEqual(app.rows("SELECT action, status FROM google_calendar_operations"), [{ action: "upsert", status: "delivered" }]);
   assert.deepEqual(app.rows("SELECT action, status FROM discord_calendar_operations"), [{ action: "upsert", status: "delivered" }]);
   await app.deliver();
-  assert.deepEqual(calendarRequests(), ["google DELETE"]); assert.equal(app.remote.google.size + app.remote.discord.size, 0);
+  assert.deepEqual(calendarRequests(), []); assert.equal(app.remote.google.size + app.remote.discord.size, 0);
 
   // Created, then edited three times before delivery: one operation each, delivered once with the last title.
   const edited = await app.request("POST", "/meetings", meetingBody(1), 201); const editedId = edited.body.meeting.id as string;
@@ -454,10 +455,14 @@ test("an event removal the provider refuses is retried over days, then set aside
   assert.deepEqual(refused.map((row) => [row.provider, row.n, row.attempts]), [["discord", 6, 1], ["google_calendar", 6, 1]], "a refusal keeps the removal, tried once so far");
   assert.ok(refused.every((row) => row.soonest! >= new Date(Date.now() + 14 * 60_000).toISOString()), "the next attempt is at least a quarter of an hour away");
   assert.deepEqual([app.remote.google.size, app.remote.discord.size, app.count("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'calendar.event_removal_abandoned'")], [6, 6, 0]);
+  // Discord's refusal holds its other removals for a quarter of an hour (they were not sent); the passes below stand for
+  // the rounds after each hold has ended, so every removal reaches the attempt under test.
+  const afterEachHold = async (attempts: number) => { for (let slot = 0; slot < 9; slot += 1) { app.db.sqlite.prepare("UPDATE calendar_event_removals SET next_attempt_at = '2026-01-01T00:00:00.000Z' WHERE provider = 'discord' AND attempts = ? AND next_attempt_at IS NOT NULL").run(attempts); await cronPass(app, slot); } };
   // The ninth refusal still leaves an attempt; the tenth sets the removal aside, with its error and an audit entry.
-  app.db.sqlite.exec("UPDATE calendar_event_removals SET attempts = 8, next_attempt_at = '2026-01-01T00:00:00.000Z'"); for (let slot = 0; slot < 9; slot += 1) await cronPass(app, slot);
+  app.db.sqlite.exec("UPDATE calendar_event_removals SET attempts = 8, next_attempt_at = '2026-01-01T00:00:00.000Z'"); await afterEachHold(8);
   assert.deepEqual(removals().map((row) => [row.n, row.attempts, row.soonest === null]), [[6, 9, false], [6, 9, false]]);
-  app.db.sqlite.exec("UPDATE calendar_event_removals SET next_attempt_at = '2026-01-01T00:00:00.000Z'"); for (let slot = 0; slot < 9; slot += 1) await cronPass(app, slot);
+  assert.equal(app.count("SELECT COUNT(*) AS n FROM calendar_event_removals WHERE attempts != 9"), 0);
+  app.db.sqlite.exec("UPDATE calendar_event_removals SET next_attempt_at = '2026-01-01T00:00:00.000Z'"); await afterEachHold(9);
   assert.deepEqual(removals().map((row) => [row.n, row.attempts, row.soonest]), [[6, 10, null], [6, 10, null]]);
   assert.equal(app.count("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'calendar.event_removal_abandoned'"), 12);
   // The integration cards count them as needing another attempt and say why.
@@ -646,6 +651,92 @@ test("restoring a meetings backup records the events of the meetings it removes"
   assert.equal(app.count("SELECT COUNT(*) AS n FROM google_calendar_event_mappings WHERE meeting_id = ? AND active = 1", kept.body.meeting.id), 1);
 });
 
+test("deleting meetings whose Google events were never created queues no deletes, so nothing waits on an Admin's retry", async (context) => {
+  const app = await fixture(context, { google: true, discord: true }); context.mock.method(console, "error", () => {});
+  // Google refuses the stored refresh token (an expired authorization); Discord works.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => String(input) === "https://oauth2.googleapis.com/token" ? Response.json({ error: "invalid_grant" }, { status: 400 }) : realFetch(input, init);
+  const ids = seedMeetings(app, 3); await app.request("POST", "/admin/integrations/discord/calendar/sync-all"); await app.request("POST", "/admin/integrations/google-calendar/sync-all");
+  await app.deliver();
+  assert.deepEqual(app.rows("SELECT action, status FROM google_calendar_operations GROUP BY action, status"), [{ action: "upsert", status: "failed" }]);
+  assert.equal(app.remote.discord.size, 3);
+
+  // Two are deleted while their creates have failed, one while its create is still waiting: no Google delete is queued.
+  app.db.sqlite.prepare("UPDATE google_calendar_operations SET status = 'pending', next_attempt_at = ? WHERE meeting_id = ?").run(new Date(Date.now() + day).toISOString(), ids[2]);
+  const deleted = await app.request("POST", "/meetings/bulk-delete", { meetingIds: ids, confirmation: "DELETE SELECTED MEETINGS" });
+  assert.deepEqual([deleted.body.calendarDelivery.google_calendar.queued, deleted.body.calendarDelivery.discord.queued], [0, 3]);
+  assert.deepEqual(app.rows("SELECT action, status, next_attempt_at AS due FROM google_calendar_operations GROUP BY action, status, next_attempt_at"), [{ action: "upsert", status: "delivered", due: null }], "the creates are dropped, not left to run for deleted meetings");
+  assert.equal(app.count("SELECT COUNT(*) AS n FROM google_calendar_event_mappings WHERE active = 1"), 0);
+  const card = (await app.request<{ integrations: Record<string, any>[] }>("GET", "/admin/integrations")).body.integrations.find((item) => item.provider === "google_calendar")!;
+  assert.deepEqual([card.failedOperations, card.pendingOperations], [0, 0], "nothing is left failed or waiting for the deleted meetings");
+
+  // Once Google works again nothing is sent for them; Discord's events are removed as usual.
+  globalThis.fetch = realFetch; app.remote.requests.length = 0; await app.deliver();
+  assert.deepEqual(app.remote.requests.filter((request) => request.startsWith("google")), []);
+  assert.equal(app.remote.discord.size, 0);
+});
+
+/** Every scheduler job not due for an hour, so a slice runs only the job a test pokes. */
+function quietJobs(app: Fixture, now = Date.now()) {
+  const jobs = Object.fromEntries([...registeredCoreSchedulerJobs, ...registeredModuleSchedulerJobs].map((job) => [job.id, { next: now + 3_600_000, last: now - 60_000, outcome: "ok" }]));
+  app.db.sqlite.prepare("INSERT INTO platform_scheduler_state(installation_id,jobs_json,updated_at) VALUES ('primary',?,?) ON CONFLICT(installation_id) DO UPDATE SET jobs_json = excluded.jobs_json").run(JSON.stringify(jobs), new Date(now).toISOString());
+}
+const googleUnavailable = () => Response.json({ error: { code: 503, message: "Synthetic outage" } }, { status: 503 });
+
+for (const outcome of ["succeeds", "fails with an error that is retried"] as const) for (const undo of [false, true]) {
+  test(`a Google create still being sent when its meeting is deleted${undo ? " and restored" : ""}, which then ${outcome}, leaves ${undo ? "only the new event" : "no event"}`, async (context) => {
+    const app = await fixture(context, { google: true }); context.mock.method(console, "error", () => {});
+    const id = (await app.request("POST", "/meetings", meetingBody(2), 201)).body.meeting.id as string;
+    // Google makes the event; before the delivery records the answer, the meeting is deleted (and restored). What the
+    // routes return and queue is recorded here and checked afterwards: an assertion thrown inside this fetch would be
+    // caught by the delivery as a provider failure.
+    const realFetch = globalThis.fetch; const seen: { deleted?: number; restored?: number; deletesQueued?: number } = {};
+    globalThis.fetch = async (input, init) => {
+      const response = await realFetch(input, init);
+      if (seen.deleted === undefined && init?.method === "POST" && String(input).includes("/events")) {
+        const deleted = await worker.fetch(new Request(`https://api.example.test/meetings/${id}`, { method: "DELETE", headers: { cookie: app.cookie, origin, "content-type": "application/json" }, body: JSON.stringify({ scope: "occurrence" }) }), app.env);
+        seen.deleted = deleted.status; seen.deletesQueued = app.count("SELECT COUNT(*) AS n FROM google_calendar_operations WHERE action = 'delete'");
+        if (undo) seen.restored = (await worker.fetch(new Request(`https://api.example.test/meetings/${id}/restore`, { method: "POST", headers: { cookie: app.cookie, origin, "content-type": "application/json" }, body: JSON.stringify({ scope: "occurrence", deletion: ((await deleted.json()) as { deletion: unknown }).deletion }) }), app.env)).status;
+        if (outcome !== "succeeds") return googleUnavailable();
+      }
+      return response;
+    };
+    const now = Date.now(); quietJobs(app, now);
+    const report = await runSchedulerSlice(app.env as never, { "attendance.google-calendar": now }, now); globalThis.fetch = realFetch;
+    assert.deepEqual(seen, { deleted: 200, deletesQueued: 0, ...(undo ? { restored: 200 } : {}) }, "the delete queued nothing for an event Google had not confirmed");
+    assert.equal(app.count("SELECT COUNT(*) AS n FROM google_calendar_operations WHERE action = 'delete' AND status = 'pending'"), 1, "the create queues the delete itself once Google has answered");
+    assert.equal(report.more, true, "the job asks to run again for that delete rather than wait for its next interval");
+    await app.deliver();
+    assert.equal(app.remote.google.size, undo ? 1 : 0);
+    if (undo) assert.deepEqual([...app.remote.google.keys()], app.rows<{ eventId: string }>("SELECT event_id AS eventId FROM google_calendar_event_mappings WHERE active = 1").map((row) => row.eventId), "the event left is the restored meeting's");
+    assert.equal(app.count("SELECT COUNT(*) AS n FROM google_calendar_operations WHERE status != 'delivered'"), 0);
+  });
+}
+
+const createOutcomes = [
+  { name: "Google made the event but answered 503", queued: 1, made: true, answer: async (send: () => Promise<Response>) => { await send(); return googleUnavailable(); } },
+  { name: "Google answered 503 without making it", queued: 1, made: false, answer: async () => googleUnavailable() },
+  { name: "Google refused it for good (400)", queued: 0, made: false, answer: async () => Response.json({ error: { code: 400, message: "Synthetic bad request" } }, { status: 400 }) },
+];
+for (const create of createOutcomes) {
+  test(`deleting a meeting after its Google create failed (${create.name}) ${create.queued ? "queues a delete, which leaves no event" : "queues nothing and sends nothing"}`, async (context) => {
+    const app = await fixture(context, { google: true }); context.mock.method(console, "error", () => {});
+    const id = (await app.request("POST", "/meetings", meetingBody(2), 201)).body.meeting.id as string;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => init?.method === "POST" && String(input).includes("/events") ? create.answer(() => realFetch(input, init)) : realFetch(input, init);
+    await cronPass(app); globalThis.fetch = realFetch;
+    assert.equal(app.remote.google.size, create.made ? 1 : 0);
+    assert.deepEqual(app.rows("SELECT action, status, next_attempt_at IS NOT NULL AS retried FROM google_calendar_operations"), [{ action: "upsert", status: "failed", retried: create.queued }]);
+    const deleted = await app.request("DELETE", `/meetings/${id}`, { scope: "occurrence" });
+    assert.equal(deleted.body.calendarDelivery.google_calendar.queued, create.queued);
+    app.remote.requests.length = 0; await app.deliver();
+    // A delete of an event Google never made gets 404, which counts as done.
+    assert.deepEqual(app.remote.requests.map((request) => request.replace(/ ll[0-9a-f]+$/, "")), create.queued ? ["google DELETE"] : []);
+    assert.equal(app.remote.google.size, 0);
+    assert.equal(app.count("SELECT COUNT(*) AS n FROM google_calendar_operations WHERE status != 'delivered'"), 0, "nothing is left failed or waiting");
+  });
+}
+
 test("Retry failed delivery only makes failed work due again, and the scheduler sends it", async (context) => {
   const app = await fixture(context, { google: true });
   seedMeetings(app, 5); await app.request("POST", "/admin/integrations/google-calendar/sync-all");
@@ -682,7 +773,7 @@ test("a Discord create whose closing write never ran is found again, even after 
 });
 
 test("migration 0103 is required: no code path tolerates a schema without it, and the architecture note says so", () => {
-  for (const file of ["apps/api/src/calendar-queue.ts", "apps/api/src/index.ts", "apps/api/src/module-platform.ts"]) {
+  for (const file of ["apps/api/src/calendar-queue.ts", ...workerSourceFiles(), "apps/api/src/module-platform.ts"]) {
     const source = readFileSync(file, "utf8");
     assert.doesNotMatch(source, /missingRemovalsTable|no such table: calendar_event_removals|schema from before migration 0103|schema before 0103/, file);
   }
@@ -760,4 +851,286 @@ test("disconnecting a provider sets its waiting removals aside, with one audit e
   assert.deepEqual([card.pendingOperations, card.failedOperations], [0, 1]);
   await app.request("DELETE", "/admin/integrations/google-calendar");
   assert.equal(app.count("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'calendar.event_removal_abandoned'"), 1, "a second disconnect has nothing left to set aside");
+});
+
+// Pre-stable ledger N7: the limits PR 238 left in the Discord half of the queue.
+
+test("a Discord event created while Delete attendance data runs is recorded for removal, not left on the server", async (context) => {
+  const app = await fixture(context, { discord: true });
+  seedMeetings(app, 1); await app.request("POST", "/admin/integrations/discord/calendar/sync-all");
+  // The data is deleted while Discord is answering the create: the meeting, its mapping and its operation are gone
+  // before there is an event id that the deletion could have recorded.
+  const realFetch = globalThis.fetch; let raced = false;
+  globalThis.fetch = async (input, init) => {
+    const response = await realFetch(input, init);
+    if (!raced && String(input).endsWith("/scheduled-events") && init?.method === "POST") {
+      raced = true; const deleted = await app.request("DELETE", "/admin/data", { scope: "attendance", confirmation: "DELETE ATTENDANCE" });
+      assert.equal(deleted.body.calendarEventRemovalsQueued, 0, "the deletion has no event to record yet");
+    }
+    return response;
+  };
+  await cronPass(app);
+  assert.ok(raced); assert.equal(app.count("SELECT (SELECT COUNT(*) FROM meetings) + (SELECT COUNT(*) FROM discord_calendar_operations) + (SELECT COUNT(*) FROM discord_calendar_event_mappings) AS n"), 0);
+  const [eventId] = [...app.remote.discord.keys()]; assert.ok(eventId, "Discord created the event");
+  assert.deepEqual(app.rows("SELECT provider, event_id AS eventId, target, attempts FROM calendar_event_removals"), [{ provider: "discord", eventId, target: guildId, attempts: 0 }], "the delivery records the event it can no longer link");
+  globalThis.fetch = realFetch; await app.deliver();
+  assert.deepEqual([app.remote.discord.size, app.count("SELECT COUNT(*) AS n FROM calendar_event_removals")], [0, 0], "and the scheduler removes it");
+});
+
+test("a Discord event delivered normally, or to a meeting deleted in flight, records no removal", async (context) => {
+  const app = await fixture(context, { discord: true });
+  const [kept, deleted] = seedMeetings(app, 2); await app.request("POST", "/admin/integrations/discord/calendar/sync-all");
+  const realFetch = globalThis.fetch; let raced = false;
+  globalThis.fetch = async (input, init) => {
+    const response = await realFetch(input, init);
+    if (!raced && String(input).endsWith("/scheduled-events") && init?.method === "POST" && String(init.body).includes(`Test Meeting ${deleted}`)) { raced = true; await app.request("DELETE", `/meetings/${deleted}`, { scope: "occurrence" }); }
+    return response;
+  };
+  await app.deliver(); globalThis.fetch = realFetch; await app.deliver();
+  assert.ok(raced); assert.equal(app.count("SELECT COUNT(*) AS n FROM calendar_event_removals"), 0, "a soft-deleted meeting keeps its operation row, which queues the delete itself");
+  assert.deepEqual([...app.remote.discord.values()], [{ name: `Test Meeting ${kept}` }]);
+});
+
+// `probes`: the requests that find the refusal out. A missing permission is found out once for creating events and once
+// for removing them, since Discord grants the two separately; the other refusals cover every request.
+const discordRefusals: { name: string; response: () => Response; failed: { status: string; retries: boolean }; holdMinutes: [number, number]; probes: number }[] = [
+  { name: "a missing permission", response: () => Response.json({ message: "Missing Permissions", code: 50013 }, { status: 403 }), failed: { status: "failed", retries: true }, holdMinutes: [14, 16], probes: 2 },
+  { name: "a rejected bot token", response: () => Response.json({ message: "401: Unauthorized", code: 0 }, { status: 401 }), failed: { status: "failed", retries: true }, holdMinutes: [14, 16], probes: 1 },
+  { name: "a server the bot is no longer in", response: () => Response.json({ message: "Unknown Guild", code: 10004 }, { status: 404 }), failed: { status: "failed", retries: true }, holdMinutes: [14, 16], probes: 1 },
+  { name: "a rate limit", response: () => Response.json({ message: "You are being rate limited.", retry_after: 1800, global: false }, { status: 429 }), failed: { status: "failed", retries: true }, holdMinutes: [29, 31], probes: 1 },
+];
+for (const refusal of discordRefusals) {
+  test(`after ${refusal.name} the rest of Discord's queue is held, not sent to be refused one by one`, async (context) => {
+    const app = await fixture(context, { discord: true });
+    seedMeetings(app, 8); await app.request("POST", "/admin/integrations/discord/calendar/sync-all");
+    app.db.sqlite.exec("INSERT INTO calendar_event_removals(installation_id,provider,event_id,target,attempts,next_attempt_at,updated_at) VALUES('primary','discord','900000000000000881',NULL,0,'2026-01-01','2026-01-01')");
+    const realFetch = globalThis.fetch; context.mock.method(console, "error", () => {}); let refusedRequests = 0;
+    globalThis.fetch = async (input, init) => { if (String(input).includes("/scheduled-events")) { refusedRequests += 1; return refusal.response(); } return realFetch(input, init); };
+    const before = Date.now();
+    for (let slot = 0; slot < 6; slot += 1) await cronPass(app, slot);
+    assert.equal(refusedRequests, refusal.probes, "the refusal was found out once; six scheduler rounds sent nothing more");
+    const minutes = (due: string | null) => due === null ? null : (Date.parse(due) - before) / 60_000;
+    const operations = app.rows<{ status: string; attempts: number; due: string | null }>("SELECT status, attempts, next_attempt_at AS due FROM discord_calendar_operations ORDER BY status, next_attempt_at");
+    const failed = operations.filter((operation) => operation.status === "failed"); const held = operations.filter((operation) => operation.status === "pending");
+    assert.deepEqual([failed.length, held.length], [1, 7]); assert.equal(failed[0]!.due !== null, refusal.failed.retries, "the refused operation is not failed for good: it waits out the hold too");
+    assert.ok(minutes(failed[0]!.due)! > refusal.holdMinutes[0], "and is not sent again before the hold ends");
+    for (const operation of held) { assert.equal(operation.attempts, 0, "held operations were never sent, so they spend no attempt"); assert.ok(minutes(operation.due)! > refusal.holdMinutes[0] && minutes(operation.due)! < refusal.holdMinutes[1], `held for ${minutes(operation.due)} minutes`); }
+    const [removal] = app.rows<{ attempts: number; error: string | null; due: string }>("SELECT attempts, last_error AS error, next_attempt_at AS due FROM calendar_event_removals");
+    assert.deepEqual([removal!.attempts, removal!.error === null], [refusal.probes - 1, refusal.probes === 1], "a removal that was not sent spends no attempt"); assert.ok(minutes(removal!.due)! > refusal.holdMinutes[0], "the removal waits as well");
+    const card = ((await app.request("GET", "/admin/integrations")).body.integrations as { provider: string; pendingOperations?: number; failedOperations?: number; lastError?: string }[]).find((item) => item.provider === "discord")!;
+    assert.deepEqual([card.pendingOperations, card.failedOperations], [8, 1]); assert.match(String(card.lastError), /Discord/);
+
+    // An Admin fixes the cause and chooses Retry failed delivery: the hold ends, and everything goes out.
+    globalThis.fetch = realFetch;
+    const retried = await app.request("POST", "/admin/integrations/discord/calendar/retry", {});
+    assert.equal(retried.outbound, 0, "nothing is sent to Discord by the request"); assert.ok(retried.subrequests <= routeBudget, `Retry costs ${retried.subrequests} subrequests`);
+    assert.deepEqual(retried.body, { synced: 0, queued: 9, failed: 0, waiting: 8, scheduler: "cron", perPass: 3 }, "queued counts the refused operation, the seven held ones and the removal; waiting counts the operations now due");
+    assert.equal(app.rows<{ queued: number }>("SELECT json_extract(metadata_json, '$.queued') AS queued FROM audit_log WHERE action = 'discord.calendar_retry_requested'")[0]!.queued, 9, "and the audit entry says the same");
+    await app.deliver();
+    assert.deepEqual([app.remote.discord.size, app.count("SELECT COUNT(*) AS n FROM discord_calendar_operations WHERE status != 'delivered'"), app.count("SELECT COUNT(*) AS n FROM calendar_event_removals")], [8, 0, 0]);
+  });
+}
+
+test("while Discord's configuration cannot be read its due work is held, not read again on every round", async (context) => {
+  const app = await fixture(context, { discord: true });
+  seedMeetings(app, 4); await app.request("POST", "/admin/integrations/discord/calendar/sync-all");
+  app.db.sqlite.exec("INSERT INTO calendar_event_removals(installation_id,provider,event_id,target,attempts,next_attempt_at,updated_at) VALUES('primary','discord','900000000000000881',NULL,0,'2026-01-01','2026-01-01')");
+  // The stored credentials no longer decrypt (the integration key was replaced, say); the record still says verified.
+  const stored = app.rows<{ ciphertext: string }>("SELECT ciphertext FROM encrypted_integrations WHERE provider = 'discord'")[0]!.ciphertext;
+  app.db.sqlite.prepare("UPDATE encrypted_integrations SET ciphertext = ? WHERE provider = 'discord'").run(stored.slice(0, -8) + "AAAAAAA=");
+  context.mock.method(console, "error", () => {}); const before = Date.now();
+  await cronPass(app);
+  const due = () => [...app.rows<{ due: string }>("SELECT next_attempt_at AS due FROM discord_calendar_operations"), ...app.rows<{ due: string }>("SELECT next_attempt_at AS due FROM calendar_event_removals")].map((row) => row.due);
+  const held = due(); assert.equal(held.length, 5);
+  for (const time of held) assert.ok(Date.parse(time) - before > 14 * 60_000 && Date.parse(time) - before < 16 * 60_000, `held until ${time}`);
+  assert.deepEqual(app.rows("SELECT DISTINCT status, attempts, last_error AS error FROM discord_calendar_operations"), [{ status: "pending", attempts: 0, error: null }], "nothing was sent, so nothing counts as an attempt");
+  await cronPass(app, 1); await cronPass(app, 2);
+  assert.deepEqual(due(), held, "later rounds find nothing due and leave the hold as it is");
+  assert.equal(app.remote.requests.filter((request) => request.startsWith("discord")).length, 0);
+  // With the credentials back, Retry failed delivery ends the hold.
+  app.db.sqlite.prepare("UPDATE encrypted_integrations SET ciphertext = ? WHERE provider = 'discord'").run(stored);
+  const retried = await app.request("POST", "/admin/integrations/discord/calendar/retry", {});
+  assert.deepEqual([retried.body.queued, retried.body.waiting], [5, 4], "the four held operations and the held removal are reported as queued again, not as nothing to retry");
+  await app.deliver();
+  assert.deepEqual([app.remote.discord.size, app.count("SELECT COUNT(*) AS n FROM calendar_event_removals")], [4, 0]);
+});
+
+test("a Discord operation's own failure holds nothing back, and ending a hold keeps the 60-day horizon", async (context) => {
+  const app = await fixture(context, { discord: true });
+  seedMeetings(app, 4); app.db.sqlite.prepare("UPDATE meetings SET title = ? WHERE id = 'seed-000'").run("Test Meeting ".padEnd(120, "x"));
+  // One meeting beyond the horizon: its upsert waits until the meeting comes within 60 days.
+  seedMeetings(app, 1, 90, "far"); await app.request("POST", "/admin/integrations/discord/calendar/sync-all");
+  context.mock.method(console, "error", () => {});
+  for (let slot = 0; slot < 6; slot += 1) await cronPass(app, slot);
+  assert.equal(app.remote.discord.size, 3, "the three meetings Discord accepts are delivered past the one it cannot take");
+  assert.deepEqual(app.rows("SELECT status, next_attempt_at AS due FROM discord_calendar_operations WHERE meeting_id = 'seed-000'"), [{ status: "failed", due: null }]);
+  const far = () => app.rows<{ status: string; due: string }>("SELECT status, next_attempt_at AS due FROM discord_calendar_operations WHERE meeting_id = 'far-000'")[0]!;
+  const waiting = far(); assert.equal(waiting.status, "pending"); assert.ok(Date.parse(waiting.due) > Date.now() + 20 * day);
+  const retried = await app.request("POST", "/admin/integrations/discord/calendar/retry", {});
+  assert.deepEqual(far(), waiting, "Retry failed delivery leaves an upsert that is waiting for the horizon where it was");
+  assert.equal(retried.body.queued, 1, "and counts only the failed operation, not the one that is waiting for its meeting to come within range");
+});
+
+test("a permission Discord refuses for removing events holds deletes and removals, and upserts still go out", async (context) => {
+  const app = await fixture(context, { discord: true });
+  const ids = seedMeetings(app, 4); await app.request("POST", "/admin/integrations/discord/calendar/sync-all"); await app.deliver();
+  // Two meetings are deleted and four more are added; an older removal is waiting too.
+  await app.request("DELETE", `/meetings/${ids[0]}`, { scope: "occurrence" }); await app.request("DELETE", `/meetings/${ids[1]}`, { scope: "occurrence" });
+  seedMeetings(app, 4, 10, "new"); await app.request("POST", "/admin/integrations/discord/calendar/sync-all");
+  app.db.sqlite.exec("INSERT INTO calendar_event_removals(installation_id,provider,event_id,target,attempts,next_attempt_at,updated_at) VALUES('primary','discord','900000000000000881',NULL,0,'2026-01-01','2026-01-01')");
+  // The bot may create events but no longer remove them.
+  const allow = refuseDeletes(context, 403); let deletes = 0; const refusing = globalThis.fetch;
+  globalThis.fetch = async (input, init) => { if (init?.method === "DELETE" && String(input).includes("/scheduled-events/")) deletes += 1; return refusing(input, init); };
+  for (let slot = 0; slot < 9; slot += 1) await cronPass(app, slot);
+  assert.equal(deletes, 1, "one delete found out; the other delete and the removal were not sent");
+  assert.equal(app.remote.discord.size, 8, "the four new meetings have their events, and the two deleted ones still do");
+  assert.deepEqual(app.rows("SELECT action, status, COUNT(*) AS n FROM discord_calendar_operations WHERE status != 'delivered' GROUP BY action, status ORDER BY status"), [{ action: "delete", status: "failed", n: 1 }, { action: "delete", status: "pending", n: 1 }]);
+  assert.deepEqual(app.rows("SELECT attempts, next_attempt_at > ? AS held FROM calendar_event_removals", new Date(Date.now() + 10 * 60_000).toISOString()), [{ attempts: 0, held: 1 }]);
+  globalThis.fetch = refusing; allow(); await app.request("POST", "/admin/integrations/discord/calendar/retry", {}); await app.deliver();
+  assert.deepEqual([app.remote.discord.size, app.count("SELECT COUNT(*) AS n FROM calendar_event_removals")], [6, 0]);
+});
+
+/** `minutes` pass: Discord work whose time falls within them is due. Stands for the clock, which the tests cannot move. */
+const elapse = (app: Fixture, minutes: number) => { const until = new Date(Date.now() + minutes * 60_000).toISOString(); const now = new Date().toISOString();
+  for (const table of ["discord_calendar_operations", "calendar_event_removals"]) app.db.sqlite.prepare(`UPDATE ${table} SET next_attempt_at = '2026-01-01T00:00:00.000Z' WHERE next_attempt_at > ? AND next_attempt_at <= ?`).run(now, until); };
+const unknownGuild = () => Response.json({ message: "Unknown Guild", code: 10004 }, { status: 404 });
+
+for (const kind of ["a delete operation", "a removal"] as const) {
+  test(`Unknown Guild answered to ${kind} is not taken for an event that is already gone`, async (context) => {
+    const app = await fixture(context, { discord: true });
+    const [id] = seedMeetings(app, 1); await app.request("POST", "/admin/integrations/discord/calendar/sync-all"); await app.deliver();
+    const [eventId] = [...app.remote.discord.keys()]; assert.ok(eventId);
+    // The meeting is deleted (a delete operation), or its data is (a removal). Either way the event is still on Discord.
+    if (kind === "a delete operation") await app.request("DELETE", `/meetings/${id}`, { scope: "occurrence" });
+    else await app.request("DELETE", "/admin/data", { scope: "attendance", confirmation: "DELETE ATTENDANCE" });
+    const realFetch = globalThis.fetch; context.mock.method(console, "error", () => {}); let requests = 0;
+    globalThis.fetch = async (input, init) => { if (String(input).includes("/scheduled-events")) { requests += 1; return unknownGuild(); } return realFetch(input, init); };
+    const before = Date.now();
+    for (let slot = 0; slot < 6; slot += 1) await cronPass(app, slot);
+    assert.equal(requests, 1, "one request found out, and the hold kept the rest back");
+    const held = (due: string | null) => due !== null && Date.parse(due) - before > 14 * 60_000;
+    if (kind === "a delete operation") {
+      const [operation] = app.rows<{ status: string; due: string | null; error: string }>("SELECT status, next_attempt_at AS due, last_error AS error FROM discord_calendar_operations WHERE action = 'delete'");
+      assert.equal(operation!.status, "failed", "the delete is not marked delivered"); assert.ok(held(operation!.due), "and waits out the hold"); assert.match(operation!.error, /Unknown Guild/);
+      assert.deepEqual(app.rows("SELECT event_id AS eventId FROM discord_calendar_event_mappings"), [{ eventId }], "the mapping keeps the event id");
+    } else {
+      const [removal] = app.rows<{ eventId: string; attempts: number; due: string | null; error: string }>("SELECT event_id AS eventId, attempts, next_attempt_at AS due, last_error AS error FROM calendar_event_removals");
+      assert.deepEqual([removal!.eventId, removal!.attempts], [eventId, 1], "the removal is kept, with the attempt it made"); assert.ok(held(removal!.due)); assert.match(removal!.error, /Unknown Guild/);
+    }
+    // The bot is back in the server and the hold ends by itself: the event is removed then.
+    globalThis.fetch = realFetch; elapse(app, 20); await app.deliver();
+    assert.deepEqual([app.remote.discord.size, app.count("SELECT COUNT(*) AS n FROM calendar_event_removals"), app.count("SELECT COUNT(*) AS n FROM discord_calendar_operations WHERE status != 'delivered'")], [0, 0, 0]);
+  });
+}
+
+test("a Discord event created while the connection is removed is remembered with its meeting, and its removal is set aside", async (context) => {
+  const app = await fixture(context, { discord: true });
+  seedMeetings(app, 1); await app.request("POST", "/admin/integrations/discord/calendar/sync-all");
+  // Removing the connection deletes the calendar operations while Discord is answering.
+  const realFetch = globalThis.fetch; let raced = false;
+  globalThis.fetch = async (input, init) => {
+    const response = await realFetch(input, init);
+    if (!raced && String(input).endsWith("/scheduled-events") && init?.method === "POST") { raced = true; await app.request("DELETE", "/admin/integrations/discord"); }
+    return response;
+  };
+  await cronPass(app);
+  assert.ok(raced); assert.equal(app.count("SELECT COUNT(*) AS n FROM discord_calendar_operations"), 0, "the operation went with the connection");
+  assert.equal(app.remote.discord.size, 1, "Discord created the event"); assert.equal(app.count("SELECT COUNT(*) AS n FROM meetings WHERE deleted_at IS NULL"), 1);
+  // Nothing is connected, so the event stays on Discord. It is recorded under its server with the removal set aside and
+  // remembered with its meeting: the same server set up again links it, another server removes it (ledger N15).
+  const [eventId] = [...app.remote.discord.keys()];
+  assert.deepEqual(app.rows("SELECT event_id AS eventId, target, next_attempt_at AS due, last_error AS error FROM calendar_event_removals"), [{ eventId, target: guildId, due: null, error: "Discord was disconnected before these events could be removed." }]);
+  assert.deepEqual(app.rows("SELECT state_key AS key, external_id AS eventId FROM integration_state WHERE state_key LIKE 'calendar-left:%'"), [{ key: `calendar-left:${guildId}:seed-000`, eventId }]);
+});
+
+// Pre-stable ledger N15: replacing the credentials for the same server keeps the operation, so the delivery in flight
+// links its event as usual (tests-ts/discord-credentials-calendar.test.ts covers the save itself and a change of server).
+test("a Discord event created while the credentials are replaced for the same server stays linked to its meeting", async (context) => {
+  const app = await fixture(context, { discord: true });
+  const [meeting] = seedMeetings(app, 1); await app.request("POST", "/admin/integrations/discord/calendar/sync-all");
+  const realFetch = globalThis.fetch; let raced = false;
+  globalThis.fetch = async (input, init) => {
+    const response = await realFetch(input, init);
+    if (!raced && String(input).endsWith("/scheduled-events") && init?.method === "POST") { raced = true; await app.request("PUT", "/admin/integrations/discord", { botToken: "test-bot-token-2", guildId, channelId: "223456789012345678", publicKey: "b".repeat(64), applicationId: "323456789012345678" }); }
+    return response;
+  };
+  await cronPass(app);
+  assert.ok(raced); assert.equal(app.remote.discord.size, 1, "Discord created the event");
+  const [eventId] = [...app.remote.discord.keys()];
+  assert.deepEqual(app.rows("SELECT meeting_id AS meeting, event_id AS eventId, active FROM discord_calendar_event_mappings"), [{ meeting, eventId, active: 1 }], "the mapping the save kept holds the event");
+  assert.deepEqual(app.rows("SELECT action, status FROM discord_calendar_operations"), [{ action: "upsert", status: "delivered" }]);
+  assert.equal(app.count("SELECT COUNT(*) AS n FROM calendar_event_removals"), 0, "a linked event is not queued for deletion");
+});
+
+test("under a missing permission no operation is failed for good, and the hold ends by itself once the permission is back", async (context) => {
+  const app = await fixture(context, { discord: true });
+  seedMeetings(app, 8); await app.request("POST", "/admin/integrations/discord/calendar/sync-all");
+  const realFetch = globalThis.fetch; context.mock.method(console, "error", () => {}); let refused = 0;
+  globalThis.fetch = async (input, init) => { if (String(input).includes("/scheduled-events")) { refused += 1; return Response.json({ message: "Missing Permissions", code: 50013 }, { status: 403 }); } return realFetch(input, init); };
+  // Twelve holds run out, one after another, with the permission still missing: one probe each.
+  for (let round = 0; round < 12; round += 1) { if (round) elapse(app, 20); await cronPass(app, round); }
+  assert.equal(refused, 12, "one request for each hold that ended");
+  assert.equal(app.count("SELECT COUNT(*) AS n FROM discord_calendar_operations WHERE next_attempt_at IS NULL"), 0, "every operation still has a time to be sent");
+  assert.equal(app.count("SELECT COUNT(*) AS n FROM discord_calendar_operations WHERE status = 'failed'"), 1, "only the one sent last carries the refusal, for the card to show");
+  // The Admin grants the permission and does nothing else. No Retry: the hold runs out and everything is delivered.
+  globalThis.fetch = realFetch; await cronPass(app, 12);
+  assert.equal(app.remote.discord.size, 0, "nothing is sent while the hold lasts");
+  elapse(app, 20); await app.deliver();
+  assert.deepEqual([app.remote.discord.size, app.count("SELECT COUNT(*) AS n FROM discord_calendar_operations WHERE status != 'delivered'")], [8, 0]);
+  assert.equal(app.count("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'discord.calendar_retry_requested'"), 0);
+});
+
+// Pre-stable ledger N7, part 3: while Attendance is disabled nothing is sent, so the confirmation in Settings > Modules says
+// what disabling would leave on the calendars. GET /platform/modules?disable=attendance counts it for an Admin.
+
+type DisableCalendar = Partial<Record<"google_calendar" | "discord", { waitingRemovals: number; upcomingEvents: number }>>;
+const disableCalendar = async (app: Fixture) => {
+  const plain = await app.request("GET", "/platform/modules"); const asked = await app.request("GET", "/platform/modules?disable=attendance");
+  assert.equal(plain.body.attendanceDisableCalendar, undefined, "the module refresh every dashboard repeats carries no count");
+  assert.equal(asked.subrequests, plain.subrequests + 1, "the count is one more D1 read and nothing else"); assert.equal(asked.outbound, 0);
+  return asked.body.attendanceDisableCalendar as DisableCalendar | undefined;
+};
+const disableAttendance = async (app: Fixture) => {
+  const modules = (await app.request("GET", "/platform/modules")).body; const attendance = modules.modules.find((module: { id: string }) => module.id === "attendance");
+  return app.request("PUT", "/admin/modules", { enabled: modules.modules.filter((module: { id: string; phase: string }) => module.phase === "enabled" && module.id !== "attendance").map((module: { id: string }) => module.id), revision: modules.revision, confirmDisable: [{ moduleId: "attendance", generation: attendance.generation }] });
+};
+
+for (const [state, integrations] of Object.entries(integrationStates)) {
+  test(`the Attendance disable confirmation counts each connected provider's waiting removals and upcoming events (${state})`, async (context) => {
+    const app = await fixture(context, integrations);
+    // One upcoming meeting keeps its events; one is deleted, so its events wait to be removed; one has already ended.
+    const kept = await app.request("POST", "/meetings", meetingBody(3), 201); const gone = await app.request("POST", "/meetings", meetingBody(4), 201);
+    const ended = await app.request("POST", "/meetings", meetingBody(5), 201); await app.deliver();
+    app.db.sqlite.prepare("UPDATE meetings SET starts_at = ?, ends_at = ? WHERE id = ?").run(new Date(Date.now() - 3 * 3_600_000).toISOString(), new Date(Date.now() - 3_600_000).toISOString(), ended.body.meeting.id);
+    await app.request("DELETE", `/meetings/${gone.body.meeting.id}`, { scope: "occurrence" });
+    assert.ok(kept.body.meeting.id);
+    const expected: DisableCalendar = { ...(integrations.google ? { google_calendar: { waitingRemovals: 1, upcomingEvents: 1 } } : {}), ...(integrations.discord ? { discord: { waitingRemovals: 1, upcomingEvents: 1 } } : {}) };
+    assert.deepEqual(await disableCalendar(app), expected);
+    // Disabling records exactly the removals the confirmation counted.
+    await disableAttendance(app);
+    assert.deepEqual(app.rows("SELECT provider, COUNT(*) AS n FROM calendar_event_removals WHERE next_attempt_at IS NOT NULL GROUP BY provider ORDER BY provider"), Object.entries(expected).sort(([left], [right]) => left.localeCompare(right)).map(([provider, counts]) => ({ provider, n: counts!.waitingRemovals })));
+    assert.equal((await app.request("GET", "/platform/modules?disable=attendance")).body.attendanceDisableCalendar, undefined, "nothing to count once Attendance is disabled");
+  });
+}
+
+test("the Attendance disable confirmation leaves out removals already delivered or set aside, and counts each event once", async (context) => {
+  const app = await fixture(context, { google: true, discord: true });
+  const gone = await app.request("POST", "/meetings", meetingBody(4), 201); await app.deliver();
+  await app.request("DELETE", `/meetings/${gone.body.meeting.id}`, { scope: "occurrence" });
+  assert.deepEqual(await disableCalendar(app), { google_calendar: { waitingRemovals: 1, upcomingEvents: 0 }, discord: { waitingRemovals: 1, upcomingEvents: 0 } });
+  // Delivered: the deletes went out.
+  await app.deliver();
+  assert.deepEqual(await disableCalendar(app), { google_calendar: { waitingRemovals: 0, upcomingEvents: 0 }, discord: { waitingRemovals: 0, upcomingEvents: 0 } });
+  // Removals of deleted data: one waiting for each provider, one set aside after its last attempt, one abandoned (its row
+  // is deleted, as for a calendar that is no longer the one configured, so there is nothing to insert).
+  const removal = app.db.sqlite.prepare("INSERT INTO calendar_event_removals (installation_id, provider, event_id, target, attempts, next_attempt_at, last_error, updated_at) VALUES ('primary', ?, ?, NULL, ?, ?, ?, '2026-01-01')");
+  removal.run("google_calendar", "lltestwaiting", 0, "2099-01-01T00:00:00.000Z", null); removal.run("discord", "800000000000000001", 2, "2099-01-01T00:00:00.000Z", "Test refusal");
+  removal.run("google_calendar", "lltestsetaside", 10, null, "Test refusal"); removal.run("discord", "800000000000000002", 10, null, "Test refusal");
+  // An undelivered delete of an event whose removal is already waiting counts once; one whose removal is set aside not at all.
+  const mapping = app.rows<{ meetingId: string; generation: number }>("SELECT meeting_id AS meetingId, generation FROM discord_calendar_event_mappings")[0]!;
+  app.db.sqlite.prepare("INSERT INTO google_calendar_operations (installation_id, meeting_id, event_id, action, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, 'lltestwaiting', 'delete', 'failed', 3, NULL, '2026-01-01')").run(gone.body.meeting.id);
+  app.db.sqlite.prepare("INSERT INTO discord_calendar_operations (installation_id, meeting_id, generation, action, event_id, status, attempts, next_attempt_at, updated_at) VALUES ('primary', ?, ?, 'delete', '800000000000000002', 'failed', 3, NULL, '2026-01-01') ON CONFLICT(installation_id, meeting_id, generation, action) DO UPDATE SET event_id = excluded.event_id, status = 'failed', next_attempt_at = NULL").run(mapping.meetingId, mapping.generation);
+  assert.deepEqual(await disableCalendar(app), { google_calendar: { waitingRemovals: 1, upcomingEvents: 0 }, discord: { waitingRemovals: 1, upcomingEvents: 0 } });
+  await disableAttendance(app);
+  assert.deepEqual(app.rows("SELECT provider, COUNT(*) AS n FROM calendar_event_removals WHERE next_attempt_at IS NOT NULL GROUP BY provider ORDER BY provider"), [{ provider: "discord", n: 1 }, { provider: "google_calendar", n: 1 }], "disabling recorded what was counted");
 });

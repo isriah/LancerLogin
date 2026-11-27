@@ -1,0 +1,29 @@
+/* Settings > Integrations > Notion: the shared Notion connection card, what its token allows and each module's databases.
+   The binding control is also placed on plugin setup pages by NotionBindingField. */
+.notion-integration { display: grid; align-content: start; }
+.notion-integration-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-3); padding: 1rem; }
+.notion-integration-heading h2 { margin: 0; color: var(--ink); font-size: 1.1rem; }
+.notion-integration-body { display: grid; gap: var(--space-4); padding: 0 1rem 1rem; min-width: 0; }
+.notion-note { margin: 0; color: var(--ui-text-muted); font-size: var(--text-small); font-weight: 400; overflow-wrap: anywhere; }
+.notion-section { display: grid; gap: var(--space-3); min-width: 0; padding-top: var(--space-4); border-top: 1px solid var(--ui-border); }
+.notion-section-heading,.notion-binding-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
+.notion-section h3,.notion-binding h4,.notion-binding-card h2 { margin: 0; color: var(--ui-text); font-family: var(--font-body); font-size: var(--text-body); }
+.notion-section > p,.notion-binding > p { margin: 0; }
+.notion-section > label,.notion-binding-fields label { display: grid; gap: var(--space-1); min-width: 0; margin: 0; }
+.notion-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.notion-capabilities,.notion-bindings { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.notion-capabilities li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-1) var(--space-3); min-width: 0; }
+.notion-capability-label { min-width: 0; overflow-wrap: anywhere; }
+.notion-bindings { gap: var(--space-4); }
+.notion-bindings li { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: 1px solid var(--ui-border); border-radius: var(--radius-card); background: var(--ui-surface-subtle); }
+.notion-binding-module { margin: 0; color: var(--ui-text-muted); font-size: var(--text-caption); font-weight: 800; }
+.notion-binding { display: grid; gap: var(--space-3); min-width: 0; }
+.notion-binding-optional { color: var(--ui-text-muted); font-weight: 400; }
+.notion-binding-current { overflow-wrap: anywhere; }
+.notion-binding-fields { display: grid; grid-template-columns: repeat(auto-fit,minmax(12rem,1fr)); gap: var(--space-3); min-width: 0; }
+.notion-binding-card { display: grid; gap: var(--space-3); }
+/* Notices and pills match the dashboard's rounded, outlined style (as on module setup cards). */
+.notion-integration p.ui-status,.notion-binding p.ui-status,.notion-binding-card p.ui-status { margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid currentColor; border-radius: var(--radius-control); font-size: var(--text-small); }
+.notion-integration p.ui-status:not([data-tone]),.notion-binding-card p.ui-status:not([data-tone]) { border-color: var(--ui-border); color: var(--ui-text-muted); }
+.notion-integration .status-pill,.notion-binding .status-pill { border: 1px solid currentColor; }
+.notion-capabilities .status-pill { min-width: 9.5rem; justify-content: center; }

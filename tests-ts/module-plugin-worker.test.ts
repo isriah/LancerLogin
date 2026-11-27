@@ -129,9 +129,17 @@ test("a composed plugin is migrated, registered, enabled, served, scheduled, bac
   assert.equal((await call("/public/example/requests", { body: { id: "request-1", itemId: "first" }, signedIn: false })).status, 202);
   assert.deepEqual((await call("/admin/example/environment")).body, { environmentKeys: [], credentials: true });
 
-  // The scheduler runs the plugin's job inside its module-scoped database.
+  // The scheduler runs the plugin's job inside its module-scoped database, where it reads today's Attendance day
+  // projections (the installation keeps UTC): one required meeting with a check-in, one optional and one test meeting.
+  const today = new Date().toISOString().slice(0, 10);
+  db.raw.exec(`INSERT INTO meetings(id,installation_id,title,starts_at,ends_at,required,is_test,created_by,created_at) VALUES
+    ('day-required','primary','Test required meeting','${today}T00:00:01.000Z','${today}T23:59:00.000Z',1,0,'admin','2026-01-01'),
+    ('day-optional','primary','Test optional meeting','${today}T00:00:02.000Z','${today}T23:59:00.000Z',0,0,'admin','2026-01-01'),
+    ('day-test','primary','Test setup meeting','${today}T00:00:03.000Z','${today}T23:59:00.000Z',1,1,'admin','2026-01-01');
+    INSERT INTO attendance_events(id,installation_id,member_id,meeting_id,source,occurred_at,action) VALUES ('day-event','primary','member','day-required','kiosk','${today}T00:00:05.000Z','check_in')`);
   await worker.scheduled({ cron: "*/5 * * * *" } as never, env as never);
   assert.deepEqual(db.rows("SELECT id, digest_count FROM example_items ORDER BY id"), [{ id: "first", digest_count: 1 }, { id: "second", digest_count: 1 }]);
+  assert.deepEqual(db.rows("SELECT item_id, note FROM example_requests WHERE id='attendance-day'"), [{ item_id: "first", note: `${today}: 1 meetings, 1 present, 1 expected, 1 on the roster` }]);
 
   // Backups carry the plugin's portable rows in its own section with its pinned source.
   const backup = await call("/admin/data/backup?scope=installation");
@@ -140,7 +148,11 @@ test("a composed plugin is migrated, registered, enabled, served, scheduled, bac
   assert.deepEqual(section.tables.example_items.map((row: any) => row.id).sort(), ["first", "second"]);
   assert.equal("example_requests" in section.tables, false);
 
-  // Disabling retains the data; after the deadline, cleanup deletes only the plugin's rows.
+  // Disabling retains the data; after the deadline, cleanup deletes only the plugin's rows, with the Notion database an
+  // Admin chose for it. Another module's choice stays.
+  db.raw.exec(`INSERT INTO notion_bindings(installation_id,module_id,binding_id,database_id,data_source_id,name,updated_at) VALUES
+    ('primary','example','items','dddddddd-dddd-dddd-dddd-dddddddddd01','55555555-5555-5555-5555-555555555501','Test Items','2026-11-26T00:00:00.000Z'),
+    ('primary','attendance','other','dddddddd-dddd-dddd-dddd-dddddddddd02','55555555-5555-5555-5555-555555555502','Test Other','2026-11-26T00:00:00.000Z')`);
   modules = await call("/platform/modules");
   modules = await call("/admin/modules", { method: "PUT", body: { enabled: ["attendance"], revision: modules.body.revision, confirmDisable: [{ moduleId: "example", generation }] } });
   assert.equal(modules.body.modules.find((module: any) => module.id === "example")?.phase, "retained");
@@ -149,6 +161,7 @@ test("a composed plugin is migrated, registered, enabled, served, scheduled, bac
   for (let pass = 0; pass < 10 && db.count("SELECT COUNT(*) AS n FROM platform_modules WHERE module_id='example' AND phase='deleted'") === 0; pass += 1) await runModuleCleanup(db as never);
   assert.equal(db.count("SELECT COUNT(*) AS n FROM example_items") + db.count("SELECT COUNT(*) AS n FROM example_requests"), 0);
   assert.equal(db.count("SELECT COUNT(*) AS n FROM platform_modules WHERE module_id='example' AND phase='deleted'"), 1);
+  assert.deepEqual(db.rows("SELECT module_id, binding_id FROM notion_bindings"), [{ module_id: "attendance", binding_id: "other" }], "deleting a module's data removes its Notion database choices only");
   assert.equal(db.count("SELECT COUNT(*) AS n FROM members"), 1);
 });
 
@@ -214,6 +227,114 @@ test("a composed plugin looks up FIRST teams through Core, counted per visitor o
   await call("/public/example/first", { body: { number: "321" }, signedIn: false });
   assert.equal(visitorRows(), 1, "a cache hit counts toward nothing");
   assert.ok(asked.every((url) => url.startsWith("https://frc-api.firstinspires.org/")));
+});
+
+test("a composed plugin uses Notion through Core: an Admin chooses its database and Core keeps it to that database", async (t) => {
+  const { db, call } = installation();
+  let modules = await call("/platform/modules");
+  modules = await call("/admin/modules", { method: "PUT", body: { enabled: ["attendance", "example"], revision: modules.body.revision } });
+  db.raw.exec("INSERT INTO example_items(installation_id,id,title,created_at) VALUES ('primary','first','First item','2026-10-26T00:00:00.000Z')");
+  const generation = modules.body.modules.find((module: any) => module.id === "example").generation;
+  assert.equal((await call("/admin/modules/example/setup", { method: "PUT", body: { generation, stepId: "catalog", outcome: "completed" } })).status, 200);
+
+  // A synthetic Notion: one database the connection was added to, with one data source, and a page of another database.
+  const token = "ntn_synthetic_token_0001";
+  const database = "dddddddd-dddd-dddd-dddd-dddddddddd01", source = "55555555-5555-5555-5555-555555555501", otherSource = "55555555-5555-5555-5555-555555555502";
+  const listedPage = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01", createdPage = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02", otherPage = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa09";
+  const pageIn = (id: string, dataSourceId: string) => ({ object: "page", id, url: `https://www.notion.so/${id.replaceAll("-", "")}`, parent: { type: "data_source_id", data_source_id: dataSourceId }, properties: {} });
+  const realFetch = globalThis.fetch; const sent: { method: string; path: string; body: any }[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = new URL(String(input instanceof Request ? input.url : input));
+    if (url.origin !== "https://api.notion.com") throw new Error(`Unexpected provider request ${url}`);
+    const method = init.method ?? "GET", path = url.pathname.slice(3) + url.search;
+    sent.push({ method, path, body: init.body === undefined ? undefined : JSON.parse(String(init.body)) });
+    if (new Headers(init.headers).get("authorization") !== `Bearer ${token}`) return new Response("", { status: 401 });
+    if (path === "/users/me") return Response.json({ object: "user", name: "Test Bot", bot: { workspace_name: "Test Workspace" } });
+    if (path.startsWith("/users?")) return Response.json({ results: [{ id: "cccccccc-cccc-cccc-cccc-cccccccccc01", type: "person", name: "Test Student A", person: { email: "test.student.a@example.test" } }] });
+    if (path === `/databases/${database}`) return Response.json({ object: "database", id: database, data_sources: [{ id: source, name: "Test Items" }] });
+    if (path === `/data_sources/${source}`) return Response.json({ object: "data_source", id: source, properties: {} });
+    if (path === `/data_sources/${source}/query`) return Response.json({ results: [pageIn(listedPage, source)], has_more: false });
+    if (method === "POST" && path === "/pages") return Response.json(pageIn(createdPage, source));
+    if (method === "PATCH" && path === `/pages/${createdPage}`) return Response.json(pageIn(createdPage, source));
+    if (method === "GET" && path === `/pages/${otherPage}`) return Response.json(pageIn(otherPage, otherSource));
+    return new Response("", { status: 404 });
+  }) as typeof fetch;
+  t.after(() => { globalThis.fetch = realFetch; });
+  t.mock.method(console, "log", () => {});
+  const seen: unknown[] = [];
+  const admin = async (path: string, init: Parameters<typeof call>[1] = {}) => { const result = await call(path, init); seen.push(result.body); return result; };
+  const bindingPath = "/admin/integrations/notion/bindings/example/items";
+
+  // Settings > Integrations > Notion is Admin only, and changes need the dashboard origin.
+  for (const [path, method, body] of [["/admin/integrations/notion", "GET"], ["/admin/integrations/notion", "PUT", { token }], ["/admin/integrations/notion", "DELETE"], [bindingPath, "PUT", { database }], [bindingPath, "DELETE"]] as const) {
+    assert.equal((await call(path, { method, body, signedIn: false, dashboard: true })).status, 401, `${method} ${path} needs a session`);
+    if (method !== "GET") assert.equal((await call(path, { method, body })).status, 403, `${method} ${path} needs the dashboard origin`);
+  }
+  assert.equal(sent.length, 0);
+  const empty = await admin("/admin/integrations/notion");
+  assert.equal(empty.body.saved, false);
+  assert.deepEqual(empty.body.bindings.filter((binding: any) => binding.moduleId === "example"), [{ moduleId: "example", moduleLabel: "Example", id: "items", label: "Example items database", reason: "Example items are copied to this Notion database", required: false, operations: ["query", "pages.create", "pages.update"], bound: false, databaseId: null, dataSourceId: null, name: "", link: null }]);
+  const exampleBinding = (body: any) => body.bindings.find((binding: any) => binding.moduleId === "example" && binding.id === "items");
+
+  // Before an Admin connects Notion, every call the plugin makes is refused without a request.
+  let result = await admin("/admin/example/notion", { body: {} });
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.ready, false); assert.equal(result.body.status.saved, false);
+  assert.deepEqual(result.body.status.bindings, [{ id: "items", required: false, bound: false }]);
+  assert.deepEqual([result.body.rows.code, result.body.created.code, result.body.trashed.code, result.body.users.code], ["notion_unbound", "notion_unbound", "notion_not_declared", "notion_not_configured"]);
+  assert.equal(result.body.imported.status, 403, "only Part Requests may import a legacy connection");
+  assert.equal(sent.length, 0);
+
+  // The Admin saves the token (checked with Notion) and chooses the plugin's database by its link.
+  assert.equal((await admin("/admin/integrations/notion", { method: "PUT", body: { token: "ntn_wrong_token_0009", revision: 0 }, dashboard: true })).status, 400);
+  assert.equal((await admin("/admin/integrations/notion", { method: "PUT", body: { token }, dashboard: true })).status, 400, "a change names the revision the page loaded");
+  const saved = await admin("/admin/integrations/notion", { method: "PUT", body: { token, revision: 0 }, dashboard: true });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.deepEqual({ saved: saved.body.saved, enabled: saved.body.enabled, readable: saved.body.readable, botName: saved.body.botName, workspaceName: saved.body.workspaceName, users: saved.body.capabilities.users, email: saved.body.capabilities.email }, { saved: true, enabled: true, readable: true, botName: "Test Bot", workspaceName: "Test Workspace", users: "ok", email: "ok" });
+  assert.equal((await admin("/admin/integrations/notion/bindings/example/missing", { method: "PUT", body: { database }, dashboard: true })).status, 404);
+  assert.equal((await admin("/admin/integrations/notion/bindings/attendance/items", { method: "PUT", body: { database }, dashboard: true })).status, 404);
+  const chosen = await admin(bindingPath, { method: "PUT", body: { database: `https://www.notion.so/test-workspace/Items-${database.replaceAll("-", "")}?v=1` }, dashboard: true });
+  assert.equal(chosen.status, 200, JSON.stringify(chosen.body));
+  assert.equal(chosen.body.bound, true);
+  const bound = exampleBinding(chosen.body.integration);
+  assert.deepEqual({ bound: bound.bound, databaseId: bound.databaseId, dataSourceId: bound.dataSourceId, name: bound.name }, { bound: true, databaseId: database, dataSourceId: source, name: "Test Items" });
+  assert.deepEqual(db.rows("SELECT action, target_id FROM audit_log WHERE action LIKE 'integration.%' ORDER BY rowid"), [{ action: "integration.saved", target_id: "notion" }, { action: "integration.notion_binding_set", target_id: "notion:example:items" }]);
+
+  // The plugin now works in its database: it lists a row, creates one and updates the row Core just returned with no
+  // extra request. A page of another database costs one read and is refused; an undeclared operation is refused
+  // before any request; users come back without email because the plugin did not declare it.
+  sent.length = 0;
+  result = await admin("/admin/example/notion", { body: { pageId: otherPage } });
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.equal(result.body.ready, true);
+  assert.deepEqual(result.body.binding, { ok: { id: "items", databaseId: database, dataSourceId: source, name: "Test Items" } });
+  assert.deepEqual(result.body.rows, { ok: [listedPage] });
+  assert.deepEqual(result.body.created, { ok: createdPage }); assert.deepEqual(result.body.updatedOwn, { ok: createdPage });
+  assert.deepEqual(result.body.updatedOther, { code: "notion_out_of_scope", status: 403, providerStatus: null, retryAfterMs: null, uncertain: false });
+  assert.equal(result.body.trashed.code, "notion_not_declared");
+  assert.deepEqual(result.body.users, { ok: [{ id: "cccccccc-cccc-cccc-cccc-cccccccccc01", type: "person", name: "Test Student A" }] });
+  assert.deepEqual(sent.map((request) => `${request.method} ${request.path}`), [`POST /data_sources/${source}/query`, "POST /pages", `PATCH /pages/${createdPage}`, `GET /pages/${otherPage}`, "GET /users?page_size=100"]);
+  assert.deepEqual(sent[1]!.body.parent, { type: "data_source_id", data_source_id: source });
+  assert.deepEqual(db.rows("SELECT metadata_json FROM audit_log WHERE action='integration.notion_refused'").map((row: any) => JSON.parse(row.metadata_json)), [{ moduleId: "example", binding: "items", operation: "pages.update", reason: "page-outside-binding" }]);
+  const status = await admin("/admin/integrations/notion");
+  assert.deepEqual(status.body.capabilities, { read: "ok", insert: "ok", update: "ok", comment: "unknown", users: "ok", email: "ok" });
+
+  // Turned off, the token is kept and every call is refused; the database choice can be cleared and the token removed.
+  assert.equal((await admin("/admin/integrations/notion", { method: "PUT", body: { enabled: false, revision: 1 }, dashboard: true })).body.enabled, false);
+  const stale = await admin("/admin/integrations/notion", { method: "PUT", body: { enabled: true, revision: 1 }, dashboard: true });
+  assert.equal(stale.status, 409, "a page that loaded an older revision cannot undo the turn-off"); assert.equal(stale.body.code, "notion_connection_changed");
+  sent.length = 0;
+  result = await admin("/admin/example/notion", { body: {} });
+  assert.equal(result.body.ready, false); assert.deepEqual([result.body.rows.code, result.body.users.code], ["notion_disabled", "notion_disabled"]); assert.equal(sent.length, 0);
+  assert.equal((await admin("/admin/integrations/notion", { method: "PUT", body: { enabled: true, revision: 2 }, dashboard: true })).body.enabled, true);
+  const removed = await admin("/admin/integrations/notion", { method: "DELETE", dashboard: true });
+  assert.equal(removed.body.saved, false); assert.equal(exampleBinding(removed.body).bound, true, "removing the token keeps the chosen database");
+  const cleared = await admin(bindingPath, { method: "DELETE", dashboard: true });
+  assert.equal(exampleBinding(cleared.body.integration).bound, false);
+  assert.deepEqual(db.rows("SELECT action FROM audit_log WHERE action LIKE 'integration.%' AND action<>'integration.notion_refused' ORDER BY rowid").map((row: any) => row.action).slice(2), ["integration.notion_disabled", "integration.notion_enabled", "integration.removed", "integration.notion_binding_removed"]);
+  // The token appears in no response and no stored row.
+  assert.equal(JSON.stringify(seen).includes("ntn_"), false);
+  assert.equal(JSON.stringify(db.rows("SELECT * FROM audit_log")).includes("ntn_"), false);
 });
 
 test("a composed plugin sends email through Core's Resend connection and reads the installation time zone", async (t) => {

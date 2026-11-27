@@ -266,6 +266,11 @@
       "area": "Module navigation and slots",
       "seconds": 3
     },
+    "notion-integration.spec.ts": {
+      "group": "core",
+      "area": "Settings, modules, backup and restore",
+      "seconds": 15
+    },
     "onboarding-first-meeting.spec.ts": {
       "group": "integration",
       "area": "Module setup workspaces",

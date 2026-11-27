@@ -49,6 +49,8 @@ export async function createKioskPollCloud() {
         record.status = result.status; record.reads = Number(result.headers.get("x-test-reads")); record.writes = Number(result.headers.get("x-test-writes"));
         response.writeHead(result.status, Object.fromEntries(result.headers)); response.end(Buffer.from(await result.arrayBuffer()));
       } catch { response.writeHead(500); response.end('{"error":"Synthetic Worker request failed"}'); }
+      // When this cloud finished answering. Under load an answer can take seconds, which a test must not mistake for a late kiosk.
+      finally { record.done = Date.now(); }
     });
     await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
     return { db, records, offline, apiUrl: `http://127.0.0.1:${server.address().port}`,

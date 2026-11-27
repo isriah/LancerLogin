@@ -535,6 +535,11 @@
       "name": "0107_participation_start_correction.sql",
       "sha256": "8a1d0a2481ccdab291199e97625ec8fea0289d0e501bfaaa4445966a4e9435df",
       "forwardCompatible": true
+    },
+    {
+      "name": "0108_notion_connection.sql",
+      "sha256": "21687a0455c25c6a88f90543c9f1ff1f02e279d77eb46b2393b0c4a755fe30b2",
+      "forwardCompatible": true
     }
   ]
 }

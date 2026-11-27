@@ -176,13 +176,14 @@ test("integration enablement is accessible, sorted, and compact when disabled", 
   await page.setViewportSize({ width: 700, height: 900 });
   await page.goto("/settings/integrations");
   const cards = page.locator(".integration-card");
-  // The FIRST card has no enable switch and always sits just before Discord.
-  await expect(cards).toHaveCount(5);
+  // The FIRST card has no enable switch and always sits just before Discord; the Notion card follows Discord.
+  await expect(cards).toHaveCount(6);
   await expect(cards.nth(0)).toContainText("Google OAuth");
   await expect(cards.nth(1)).toContainText("Google Calendar");
   await expect(cards.nth(2)).toContainText("Resend email");
   await expect(cards.nth(3)).toContainText("FIRST");
   await expect(cards.nth(4)).toContainText("Discord bot");
+  await expect(cards.nth(5)).toHaveClass(/notion-integration/);
   await expect(page.getByRole("switch", { name: "Enable Discord bot" })).not.toBeChecked();
   await expect(cards.nth(4).locator(".integration-details")).toHaveCount(0);
   const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));

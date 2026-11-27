@@ -1,5 +1,6 @@
 import type { ModuleDefinition } from "../../../packages/shared/src/module-platform.ts";
 import type { D1Database } from "./d1-usage.ts";
+import { foldMemberLabels } from "./core-roster-projection.ts";
 import { filterAndSortReportRows, formatReportCellForColumn, reportColumnId, type NormalizedReportDefinition, type ReportCell, type ReportResultRow } from "./report-builder.ts";
 
 export type ReportProjectionContext = { from?: string; to: string; today: string };
@@ -35,13 +36,7 @@ export async function reportRosterData(db: D1Database, today: string) {
     db.prepare("SELECT id, external_id AS memberId, first_name AS firstName, last_name AS lastName, email, discord_user_id AS discordUserId, active FROM members WHERE installation_id = 'primary' ORDER BY last_name COLLATE NOCASE, first_name COLLATE NOCASE, external_id").all<ReportRosterMember>(),
     db.prepare("SELECT c.member_id AS memberId, c.label_id AS labelId, l.name AS labelName, c.action, c.effective_date AS effectiveDate FROM member_label_changes c JOIN member_labels l ON l.installation_id=c.installation_id AND l.id=c.label_id WHERE c.installation_id='primary' AND c.effective_date<=? ORDER BY c.effective_date,c.created_at,c.id").bind(today).all<LabelChange>(),
   ]);
-  const labels = new Map<string, Map<string, string>>();
-  for (const change of changesResult.results ?? []) {
-    const current = labels.get(change.memberId) ?? new Map<string, string>();
-    if (change.action === "add") current.set(change.labelId, change.labelName); else current.delete(change.labelId);
-    labels.set(change.memberId, current);
-  }
-  return { members: membersResult.results ?? [], labels };
+  return { members: membersResult.results ?? [], labels: foldMemberLabels(changesResult.results ?? []) };
 }
 
 /** Cells of the shared roster fields (`coreMemberReportFields`) for one member. */

@@ -160,6 +160,10 @@ async function finish(db: D1Database, state: DueState, token: string, now: Date,
     db.prepare(`DELETE FROM module_report_baselines WHERE installation_id=? AND module_id=?
       AND EXISTS(SELECT 1 FROM audit_log WHERE id=? AND installation_id=?)`)
       .bind(state.installationId, state.moduleId, auditId, state.installationId),
+    // Its chosen Notion databases go with its data; enabling it again asks an Admin to choose them again.
+    db.prepare(`DELETE FROM notion_bindings WHERE installation_id=? AND module_id=?
+      AND EXISTS(SELECT 1 FROM audit_log WHERE id=? AND installation_id=?)`)
+      .bind(state.installationId, state.moduleId, auditId, state.installationId),
   ]);
   if (results.slice(0, 4).some((result) => result.meta?.changes !== 1)) return { status: "retry-required" };
   return { status: "deleted" };

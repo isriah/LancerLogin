@@ -224,6 +224,40 @@ test("a refused Calendar refresh token requires re-authorization, which keeps th
   assert.deepEqual({ refreshToken: saved.refreshToken, calendarId: saved.calendarId, clientId: saved.clientId }, { refreshToken: "renewed-refresh", calendarId: "test-calendar@example.test", clientId: "calendar-client" });
 });
 
+test("a Calendar refresh token past the lifetime Google gave it shows as needing re-authorization before any delivery tries it", async (context) => {
+  const day = 86_400_000; const stored = async (db: Database) => { const row = db.value<{ ciphertext: string; iv: string }>("SELECT ciphertext, iv FROM google_calendar_authorizations")!; return await decryptIntegration(row.ciphertext, row.iv, secret) as Record<string, string>; };
+  // Google gives an OAuth app in Testing a seven-day grant: the callback keeps its end in the encrypted authorization.
+  const db = new Database(); const env = environment(db);
+  await saveCalendar(db, { clientId: "calendar-client", clientSecret: "calendar-secret", calendarId: "test-calendar@example.test", calendarLabel: "Test Calendar A" });
+  const authorized = await authorizeCalendar(context, env, { access_token: "synthetic-access", refresh_token: "testing-refresh", refresh_token_expires_in: 604_799, scope: bothScopes }, { accessRole: "owner", summary: "Test Calendar A" });
+  assert.equal(authorized.headers.get("location"), `${origin}/settings/integrations?verified=google-calendar`);
+  const expiresAt = Date.parse((await stored(db)).refreshTokenExpiresAt!);
+  assert.ok(Math.abs(expiresAt - (Date.now() + 604_799_000)) < 60_000, "the end Google gave is stored");
+  context.mock.restoreAll(); let googleRequests = 0; context.mock.method(globalThis, "fetch", async () => { googleRequests += 1; return Response.json({}, { status: 500 }); });
+  const live = (await status(env)).google_calendar!;
+  assert.deepEqual([live.configured, live.authorized, live.reauthorizationRequired], [true, true, false]);
+
+  // Once that end has passed, the card says so at once, without asking Google, and keeps the chosen calendar.
+  for (const [label, end, required] of [["past", new Date(Date.now() - day).toISOString(), true], ["future", new Date(Date.now() + day).toISOString(), false]] as const) {
+    const expiredDb = new Database(); const expiredEnv = environment(expiredDb);
+    await saveCalendar(expiredDb, { clientId: "calendar-client", clientSecret: "calendar-secret", refreshToken: "testing-refresh", refreshTokenExpiresAt: end, calendarId: "test-calendar@example.test", calendarLabel: "Test Calendar A" }, true, true);
+    const card = (await status(expiredEnv)).google_calendar!;
+    assert.deepEqual([card.configured, card.authorized, card.reauthorizationRequired, card.calendarName], [true, !required, required, "Test Calendar A"], `${label} end`);
+  }
+  assert.equal(googleRequests, 0, "status never calls Google");
+
+  // Re-authorizing an expired grant needs a new refresh token; one Google gives without a lifetime clears the stored end.
+  const expiredDb = new Database(); const expiredEnv = environment(expiredDb);
+  await saveCalendar(expiredDb, { clientId: "calendar-client", clientSecret: "calendar-secret", refreshToken: "testing-refresh", refreshTokenExpiresAt: new Date(Date.now() - day).toISOString(), calendarId: "test-calendar@example.test" }, true, true);
+  const noRefresh = await authorizeCalendar(context, expiredEnv, { access_token: "synthetic-access", scope: bothScopes });
+  assert.equal(noRefresh.headers.get("location"), errorLocation(origin, "google_calendar", "Google did not return durable Calendar access. Try authorizing again and approve Calendar access."));
+  const renewed = await authorizeCalendar(context, expiredEnv, { access_token: "synthetic-access", refresh_token: "production-refresh", scope: bothScopes }, { accessRole: "owner", summary: "Test Calendar A" });
+  assert.equal(renewed.headers.get("location"), `${origin}/settings/integrations?verified=google-calendar`);
+  assert.deepEqual([(await stored(expiredDb)).refreshToken, (await stored(expiredDb)).refreshTokenExpiresAt], ["production-refresh", undefined]);
+  context.mock.restoreAll();
+  assert.equal((await status(expiredEnv)).google_calendar!.reauthorizationRequired, false);
+});
+
 test("Resend errors carry Resend's status and a sanitised one-line message", async (context) => {
   quietErrors(context);
   const db = new Database(); const env = environment(db); await saveIntegration(db, "resend", { apiKey: "re_synthetic", fromEmail: "attendance@example.test" });

@@ -53,12 +53,36 @@ test("changed tests run directly, while slow and device-bound suites are only re
   assert.deepEqual(names(plan.javascript), ["tests/foundation.test.mjs"]);
   assert.deepEqual(names(plan.skipped), ["tests/kiosk-artifacts.test.mjs", "tests/kiosk-poll-service.test.mjs"]);
   assert.deepEqual(names(plan.typecheck), ["@lancerlogin/kiosk"]);
-  // A slow suite still runs when it is the file being edited; a physical kiosk suite never does.
+  // A slow suite still runs when it is the file being edited; the kiosk release-file suite never does.
   const edited = selectQuickChecks({ changes: ["tests/kiosk-poll-service.test.mjs", "tests/kiosk-artifacts.test.mjs"], tests });
   assert.deepEqual(names(edited.javascript), ["tests/kiosk-poll-service.test.mjs"]);
   assert.deepEqual(names(edited.skipped), ["tests/kiosk-artifacts.test.mjs"]);
   assert.ok(slowTests.has("tests/kiosk-poll-service.test.mjs"));
-  assert.ok(deviceTests.has("tests/kiosk-artifacts.test.mjs") && deviceTests.has("tests/kiosk-runtime.test.mjs"));
+  assert.deepEqual([...deviceTests], ["tests/kiosk-artifacts.test.mjs"]);
+});
+
+test("a kiosk service change runs the kiosk service's main test", () => {
+  const kioskTests = new Map([...tests, ["tests/kiosk-runtime.test.mjs", 'import { createKioskService } from "../apps/kiosk/src/service.mjs";']]);
+  const plan = selectQuickChecks({ changes: ["apps/kiosk/src/service.mjs"], tests: kioskTests });
+  assert.deepEqual(names(plan.javascript), ["tests/kiosk-runtime.test.mjs"]);
+  assert.deepEqual(names(plan.skipped), []);
+  // Editing the suite runs it, and so does --all.
+  assert.deepEqual(names(selectQuickChecks({ changes: ["tests/kiosk-runtime.test.mjs"], tests: kioskTests }).javascript), ["tests/kiosk-runtime.test.mjs"]);
+  assert.ok(names(selectQuickChecks({ changes: [], tests: kioskTests, all: true }).javascript).includes("tests/kiosk-runtime.test.mjs"));
+});
+
+test("a change to one of the Worker's handler files selects the tests that reach the Worker", () => {
+  assert.deepEqual(referenceKeys("apps/api/src/worker/auth.ts"), ["apps/api/src/worker/auth", "apps/api/src/index", "fixtures/worker-source"]);
+  assert.deepEqual(referenceKeys("apps/api/src/auth-protection.ts"), ["apps/api/src/auth-protection"]);
+  const workerTests = new Map([
+    ["tests-ts/sign-in.test.ts", 'const { default: worker } = await import("../apps/api/src/index.ts");'],
+    ["tests-ts/pinned-sql.test.ts", 'import { workerSource } from "../tests/fixtures/worker-source.mjs";'],
+    ["tests-ts/dashboard-only.test.ts", 'import "../apps/dashboard/src/router.tsx";'],
+  ]);
+  for (const selection of ["text", "full"]) {
+    const plan = selectQuickChecks({ changes: ["apps/api/src/worker/auth.ts"], tests: workerTests, selection });
+    assert.deepEqual(names(plan.typescript), ["tests-ts/pinned-sql.test.ts", "tests-ts/sign-in.test.ts"], selection);
+  }
 });
 
 test("test helpers match the relative imports tests use", () => {
@@ -97,7 +121,7 @@ test("deleted files still select the tests that referenced them, deleted tests a
   assert.deepEqual(names(plan.javascript), ["tests/attendance-service.test.mjs"]);
 });
 
-test("--all selects every workspace and every fast test, never physical kiosk suites", () => {
+test("--all selects every workspace and every fast test, never the kiosk release-file suite", () => {
   const plan = selectQuickChecks({ changes: [], tests, all: true });
   assert.equal(plan.typecheck.length, 5);
   assert.equal(plan.fallback, false);
